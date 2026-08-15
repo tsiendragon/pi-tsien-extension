@@ -4,6 +4,14 @@
 
 ## Extensions
 
+### `effort.ts`
+
+使用 `/effort [level]` 直接调整当前模型的 thinking level。
+
+- 例如：`/effort high`
+- 支持：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`
+- 不带参数时打开级别选择；实际级别会按当前模型能力自动限制。
+
 ### `btw.ts`
 
 使用 `/btw` 打开一个与主任务隔离的临时侧聊浮窗。
@@ -33,6 +41,19 @@
 
 在 Pi footer 中显示当前上下文使用量、自动压缩阈值和模型上下文窗口。
 
+### `usage-analytics.ts`
+
+在本地统计 Tool 与 Skill 的使用频率，不上传提示词、参数或输出，也不会自动卸载任何能力。
+
+- `/usage`：查看摘要
+- `/usage tools`：查看 Tool 调用、成功失败和累计耗时
+- `/usage skills`：查看 Skill 的显式调用、自动加载推断和曝光次数
+- `/usage unused [天数]`：列出保守的卸载候选，默认 30 天
+- `/usage export [路径]`：导出 JSON
+- `/usage reset`：确认后清空统计
+
+数据默认保存在 `~/.pi/agent/usage-analytics.json`；如果设置了 `PI_CODING_AGENT_DIR`，则保存在该目录。详细口径和限制见 [`docs/usage-analytics-prd.md`](docs/usage-analytics-prd.md)。
+
 ## 本地安装
 
 ```bash
@@ -49,7 +70,7 @@ pi -e /mnt/workspace/lilong/repos/pi-tsien-extension
 
 ## 避免重复加载
 
-这三个 extension 当前仍保留在：
+以下三个 extension 当前仍保留独立副本：
 
 ```text
 ~/.pi/agent/extensions/git-graph.ts
