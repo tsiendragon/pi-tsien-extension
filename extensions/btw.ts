@@ -63,8 +63,8 @@ export default function btwExtension(pi: ExtensionAPI): void {
             overlay: true,
             overlayOptions: {
               anchor: "right-center",
-              width: "52%",
-              minWidth: 44,
+              width: "70%",
+              minWidth: 52,
               maxHeight: "88%",
               margin: 1,
             },

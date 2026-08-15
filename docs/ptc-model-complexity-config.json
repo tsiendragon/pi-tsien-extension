@@ -1,0 +1,126 @@
+{
+  "schema": "pi.ptc-model-complexity-config/v1",
+  "generatedAt": "2026-08-14T18:58:25.855Z",
+  "advisoryOnly": false,
+  "partiallyEnforced": true,
+  "enforcement": {
+    "enforced": [
+      "perProgramSubCallHardLimit",
+      "maxTotalSubCalls",
+      "maxOuterRunCodeCalls",
+      "maxWallTimeMs",
+      "maxTotalTokens",
+      "normalizeJsonFence"
+    ],
+    "advisory": [
+      "maxShardFiles",
+      "maxRecords",
+      "maxEstimatedSubCalls"
+    ],
+    "tokenBoundary": "Checked between assistant turns and before run_code/nested calls; an in-flight provider response cannot be interrupted at an exact token."
+  },
+  "common": {
+    "perProgramSubCallHardLimit": 32,
+    "requireExactResultValidation": true,
+    "retryOnToolPathError": true,
+    "note": "Runtime budgets are enforced by model ID. maxEstimatedSubCalls describes expected work; maxTotalSubCalls is the hard limit with correction headroom. Workload-size fields remain advisory because the extension cannot infer record/shard counts from arbitrary code."
+  },
+  "models": {
+    "openai-codex/gpt-5.6-sol": {
+      "capabilityMaxTested": {
+        "level": "C6",
+        "shardFiles": 80,
+        "totalRecords": 2560,
+        "semanticSuccess": "2/2"
+      },
+      "recommended": {
+        "maxShardFiles": 80,
+        "maxRecords": 2560,
+        "maxEstimatedSubCalls": 83,
+        "maxTotalSubCalls": 96,
+        "maxOuterRunCodeCalls": 4,
+        "maxWallTimeMs": 90000,
+        "maxTotalTokens": 55000,
+        "normalizeJsonFence": false
+      },
+      "rationale": "C4 was clean 3/3 and C6 was correct 2/2 with roughly 41k tokens. Most stable PTC model in this benchmark."
+    },
+    "openai-codex/gpt-5.6-terra": {
+      "capabilityMaxTested": {
+        "level": "C6",
+        "shardFiles": 80,
+        "totalRecords": 2560,
+        "semanticSuccess": "2/2"
+      },
+      "recommended": {
+        "maxShardFiles": 80,
+        "maxRecords": 2560,
+        "maxEstimatedSubCalls": 83,
+        "maxTotalSubCalls": 96,
+        "maxOuterRunCodeCalls": 4,
+        "maxWallTimeMs": 100000,
+        "maxTotalTokens": 65000,
+        "normalizeJsonFence": false
+      },
+      "rationale": "C4 was clean 3/3 and C6 was clean 2/2. Occasional path retry was observed below the boundary."
+    },
+    "openai-codex/gpt-5.6-luna": {
+      "capabilityMaxTested": {
+        "level": "C6",
+        "shardFiles": 80,
+        "totalRecords": 2560,
+        "semanticSuccess": "2/2"
+      },
+      "recommended": {
+        "maxShardFiles": 80,
+        "maxRecords": 2560,
+        "maxEstimatedSubCalls": 83,
+        "maxTotalSubCalls": 96,
+        "maxOuterRunCodeCalls": 5,
+        "maxWallTimeMs": 110000,
+        "maxTotalTokens": 85000,
+        "normalizeJsonFence": false
+      },
+      "rationale": "C6 was clean 2/2 after the stdin race fix. Lower levels showed more self-correction and path retries than Sol/Terra."
+    },
+    "dashscope/deepseek-v4-flash": {
+      "capabilityMaxTested": {
+        "level": "C6",
+        "shardFiles": 80,
+        "totalRecords": 2560,
+        "semanticSuccess": "1/1",
+        "practical": false
+      },
+      "recommended": {
+        "maxShardFiles": 28,
+        "maxRecords": 896,
+        "maxEstimatedSubCalls": 31,
+        "maxTotalSubCalls": 40,
+        "maxOuterRunCodeCalls": 5,
+        "maxWallTimeMs": 120000,
+        "maxTotalTokens": 60000,
+        "normalizeJsonFence": true
+      },
+      "rationale": "C4 was semantically correct 3/3 historically. Monitored policy runs needed provider/final-formatting time, one extra merge program, and up to nine discovery/re-read calls beyond the 31-call estimate; the 40-call hard cap covers that bounded correction headroom. C5/C6 remained correct but consumed about 1.10M/1.49M tokens, so multi-program complexity is not economical."
+    },
+    "dashscope/deepseek-v4-pro": {
+      "capabilityMaxTested": {
+        "level": "C5",
+        "shardFiles": 48,
+        "totalRecords": 1536,
+        "semanticSuccess": "1/1"
+      },
+      "recommended": {
+        "maxShardFiles": 28,
+        "maxRecords": 896,
+        "maxEstimatedSubCalls": 31,
+        "maxTotalSubCalls": 40,
+        "maxOuterRunCodeCalls": 4,
+        "maxWallTimeMs": 120000,
+        "maxTotalTokens": 150000,
+        "normalizeJsonFence": true
+      },
+      "rationale": "C4 is the conservative unattended limit. The 120-second wall budget leaves provider/final-formatting headroom without increasing shard, sub-call, or token limits; C5 passed but was slow and expensive, while C6 failed 0/2."
+    }
+  }
+}

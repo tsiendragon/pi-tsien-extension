@@ -1,0 +1,5256 @@
+{
+  "schema": "pi.ptc-tool-benchmark/v2",
+  "generatedAt": "2026-08-15T04:01:53.116Z",
+  "phase1ReadOnly": {
+    "source": "docs/ptc-model-complexity-results.json",
+    "description": "Deterministic read/filter/aggregate benchmark using equal read/find/grep/ls capability.",
+    "aggregate": [
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C1",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 53448,
+        "averageTokensOnCorrect": 18047,
+        "averageOuterCallsOnCorrect": 5,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C1",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 21613,
+        "averageTokensOnCorrect": 10409,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C2",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 89462,
+        "averageTokensOnCorrect": 27376,
+        "averageOuterCallsOnCorrect": 9,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C2",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 24432,
+        "averageTokensOnCorrect": 10273,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 9
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C3",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C3",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 21497,
+        "averageTokensOnCorrect": 10394,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 17
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C4",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C4",
+        "mode": "ptc",
+        "runs": 3,
+        "semanticCorrect": 3,
+        "semanticRate": 100,
+        "cleanRuns": 3,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 21590,
+        "averageTokensOnCorrect": 10472,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 31
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C5",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 50702,
+        "averageTokensOnCorrect": 24533,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 53
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "C6",
+        "mode": "ptc",
+        "runs": 2,
+        "semanticCorrect": 2,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 50,
+        "averageElapsedMsOnCorrect": 67905,
+        "averageTokensOnCorrect": 41146,
+        "averageOuterCallsOnCorrect": 3,
+        "averagePtcSubCallsOnCorrect": 87
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C1",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 37697,
+        "averageTokensOnCorrect": 17201,
+        "averageOuterCallsOnCorrect": 5,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C1",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 18520,
+        "averageTokensOnCorrect": 10269,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C2",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C2",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 34457,
+        "averageTokensOnCorrect": 22208,
+        "averageOuterCallsOnCorrect": 3,
+        "averagePtcSubCallsOnCorrect": 11
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C3",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C3",
+        "mode": "ptc",
+        "runs": 2,
+        "semanticCorrect": 2,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 50,
+        "averageElapsedMsOnCorrect": 37063,
+        "averageTokensOnCorrect": 13979,
+        "averageOuterCallsOnCorrect": 1.5,
+        "averagePtcSubCallsOnCorrect": 17
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C4",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C4",
+        "mode": "ptc",
+        "runs": 3,
+        "semanticCorrect": 3,
+        "semanticRate": 100,
+        "cleanRuns": 3,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 32773,
+        "averageTokensOnCorrect": 14350,
+        "averageOuterCallsOnCorrect": 1.3,
+        "averagePtcSubCallsOnCorrect": 31.7
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C5",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 38604,
+        "averageTokensOnCorrect": 19194,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 53
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "C6",
+        "mode": "ptc",
+        "runs": 2,
+        "semanticCorrect": 2,
+        "semanticRate": 100,
+        "cleanRuns": 2,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 62148,
+        "averageTokensOnCorrect": 50279,
+        "averageOuterCallsOnCorrect": 4,
+        "averagePtcSubCallsOnCorrect": 87.5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C1",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C1",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 47739,
+        "averageTokensOnCorrect": 22800,
+        "averageOuterCallsOnCorrect": 3,
+        "averagePtcSubCallsOnCorrect": 6
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C2",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C2",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 24942,
+        "averageTokensOnCorrect": 10920,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 9
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C3",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C3",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 34415,
+        "averageTokensOnCorrect": 19276,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 21
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C4",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C4",
+        "mode": "ptc",
+        "runs": 4,
+        "semanticCorrect": 4,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 25,
+        "averageElapsedMsOnCorrect": 37438,
+        "averageTokensOnCorrect": 20254,
+        "averageOuterCallsOnCorrect": 2.5,
+        "averagePtcSubCallsOnCorrect": 32.5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C5",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 46038,
+        "averageTokensOnCorrect": 19173,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 54
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "C6",
+        "mode": "ptc",
+        "runs": 2,
+        "semanticCorrect": 2,
+        "semanticRate": 100,
+        "cleanRuns": 2,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 73900,
+        "averageTokensOnCorrect": 70156,
+        "averageOuterCallsOnCorrect": 5,
+        "averagePtcSubCallsOnCorrect": 88.5
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C1",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 55919,
+        "averageTokensOnCorrect": 22450,
+        "averageOuterCallsOnCorrect": 5,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C1",
+        "mode": "ptc",
+        "runs": 2,
+        "semanticCorrect": 1,
+        "semanticRate": 50,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 45482,
+        "averageTokensOnCorrect": 32959,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 5
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C2",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 139018,
+        "averageTokensOnCorrect": 42123,
+        "averageOuterCallsOnCorrect": 9,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C2",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 9407,
+        "averageTokensOnCorrect": 11005,
+        "averageOuterCallsOnCorrect": 1,
+        "averagePtcSubCallsOnCorrect": 9
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C3",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C3",
+        "mode": "ptc",
+        "runs": 3,
+        "semanticCorrect": 3,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 85418,
+        "averageTokensOnCorrect": 52756,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 27.7
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C4",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C4",
+        "mode": "ptc",
+        "runs": 3,
+        "semanticCorrect": 3,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 33.3,
+        "averageElapsedMsOnCorrect": 23374,
+        "averageTokensOnCorrect": 31029,
+        "averageOuterCallsOnCorrect": 3,
+        "averagePtcSubCallsOnCorrect": 70.3
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C5",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 138450,
+        "averageTokensOnCorrect": 1101957,
+        "averageOuterCallsOnCorrect": 10,
+        "averagePtcSubCallsOnCorrect": 147
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "C6",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 294214,
+        "averageTokensOnCorrect": 1490996,
+        "averageOuterCallsOnCorrect": 11,
+        "averagePtcSubCallsOnCorrect": 163
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C1",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 67955,
+        "averageTokensOnCorrect": 21424,
+        "averageOuterCallsOnCorrect": 5,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C1",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 62569,
+        "averageTokensOnCorrect": 26615,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 10
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C2",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 1,
+        "cleanRate": 100,
+        "averageElapsedMsOnCorrect": 205750,
+        "averageTokensOnCorrect": 39337,
+        "averageOuterCallsOnCorrect": 9,
+        "averagePtcSubCallsOnCorrect": 0
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C2",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 40051,
+        "averageTokensOnCorrect": 46835,
+        "averageOuterCallsOnCorrect": 3,
+        "averagePtcSubCallsOnCorrect": 15
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C3",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C3",
+        "mode": "ptc",
+        "runs": 4,
+        "semanticCorrect": 3,
+        "semanticRate": 75,
+        "cleanRuns": 1,
+        "cleanRate": 25,
+        "averageElapsedMsOnCorrect": 26250,
+        "averageTokensOnCorrect": 15631,
+        "averageOuterCallsOnCorrect": 1.7,
+        "averagePtcSubCallsOnCorrect": 17.3
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C4",
+        "mode": "native",
+        "runs": 1,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C4",
+        "mode": "ptc",
+        "runs": 3,
+        "semanticCorrect": 3,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 36234,
+        "averageTokensOnCorrect": 56418,
+        "averageOuterCallsOnCorrect": 2,
+        "averagePtcSubCallsOnCorrect": 49.7
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C5",
+        "mode": "ptc",
+        "runs": 1,
+        "semanticCorrect": 1,
+        "semanticRate": 100,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": 204175,
+        "averageTokensOnCorrect": 155310,
+        "averageOuterCallsOnCorrect": 9,
+        "averagePtcSubCallsOnCorrect": 111
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "C6",
+        "mode": "ptc",
+        "runs": 2,
+        "semanticCorrect": 0,
+        "semanticRate": 0,
+        "cleanRuns": 0,
+        "cleanRate": 0,
+        "averageElapsedMsOnCorrect": null,
+        "averageTokensOnCorrect": null,
+        "averageOuterCallsOnCorrect": null,
+        "averagePtcSubCallsOnCorrect": null
+      }
+    ],
+    "savings": [
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "comparableLevels": [
+          "C1",
+          "C2"
+        ],
+        "timeSavingPercent": 67.8,
+        "tokenSavingPercent": 54.5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "comparableLevels": [
+          "C1"
+        ],
+        "timeSavingPercent": 50.9,
+        "tokenSavingPercent": 40.3
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "comparableLevels": [],
+        "timeSavingPercent": null,
+        "tokenSavingPercent": null
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "comparableLevels": [
+          "C2"
+        ],
+        "timeSavingPercent": 93.2,
+        "tokenSavingPercent": 73.9
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "comparableLevels": [
+          "C1",
+          "C2"
+        ],
+        "timeSavingPercent": 62.5,
+        "tokenSavingPercent": -20.9
+      }
+    ]
+  },
+  "phase2ReadWriteRun": {
+    "methodology": {
+      "pairedLevels": [
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ],
+      "capabilityLevels": [
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5",
+        "F6",
+        "F7"
+      ],
+      "nativeTools": [
+        "read",
+        "find",
+        "grep",
+        "ls",
+        "write",
+        "bash (node tests/run.mjs only)"
+      ],
+      "ptcTools": [
+        "run_code",
+        "nested read/find/grep/ls/write/run"
+      ],
+      "semanticSuccess": "Independent tests pass, manifest/tests remain unchanged, observed writes cover every module, and a test run occurred.",
+      "cleanRun": "Semantic success plus strict raw JSON, tool compliance, and no tool error.",
+      "savings": "Computed only from same-level pairs where native and PTC are both semantically successful; positive means PTC saves."
+    },
+    "pairedSavings": [
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "comparableLevels": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "nativeSemantic": 4,
+        "nativeRuns": 4,
+        "ptcSemantic": 4,
+        "ptcRuns": 4,
+        "nativeClean": 4,
+        "ptcClean": 3,
+        "timeSavingPercent": 32.5,
+        "tokenSavingPercent": 26.6,
+        "totals": {
+          "nativeElapsedMs": 233647,
+          "ptcElapsedMs": 157683,
+          "nativeTokens": 139525,
+          "ptcTokens": 102481
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "comparableLevels": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "nativeSemantic": 4,
+        "nativeRuns": 4,
+        "ptcSemantic": 4,
+        "ptcRuns": 4,
+        "nativeClean": 4,
+        "ptcClean": 1,
+        "timeSavingPercent": 14.1,
+        "tokenSavingPercent": 48.8,
+        "totals": {
+          "nativeElapsedMs": 193455,
+          "ptcElapsedMs": 166128,
+          "nativeTokens": 235139,
+          "ptcTokens": 120408
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "comparableLevels": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "nativeSemantic": 4,
+        "nativeRuns": 4,
+        "ptcSemantic": 4,
+        "ptcRuns": 4,
+        "nativeClean": 4,
+        "ptcClean": 3,
+        "timeSavingPercent": 51.1,
+        "tokenSavingPercent": 42.9,
+        "totals": {
+          "nativeElapsedMs": 244030,
+          "ptcElapsedMs": 119314,
+          "nativeTokens": 172589,
+          "ptcTokens": 98506
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "comparableLevels": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "nativeSemantic": 4,
+        "nativeRuns": 4,
+        "ptcSemantic": 4,
+        "ptcRuns": 4,
+        "nativeClean": 0,
+        "ptcClean": 0,
+        "timeSavingPercent": 43.5,
+        "tokenSavingPercent": 19.8,
+        "totals": {
+          "nativeElapsedMs": 113271,
+          "ptcElapsedMs": 64044,
+          "nativeTokens": 185400,
+          "ptcTokens": 148604
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "comparableLevels": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "nativeSemantic": 4,
+        "nativeRuns": 4,
+        "ptcSemantic": 4,
+        "ptcRuns": 4,
+        "nativeClean": 1,
+        "ptcClean": 1,
+        "timeSavingPercent": 53.7,
+        "tokenSavingPercent": 37.3,
+        "totals": {
+          "nativeElapsedMs": 222360,
+          "ptcElapsedMs": 102998,
+          "nativeTokens": 212553,
+          "ptcTokens": 133204
+        }
+      }
+    ],
+    "pairs": [
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F1",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 27492,
+        "ptcElapsedMs": 27633,
+        "nativeTokens": 29791,
+        "ptcTokens": 23609,
+        "timeSavingPercent": -0.5,
+        "tokenSavingPercent": 20.8
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F2",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": false,
+        "nativeElapsedMs": 50606,
+        "ptcElapsedMs": 39541,
+        "nativeTokens": 35468,
+        "ptcTokens": 31559,
+        "timeSavingPercent": 21.9,
+        "tokenSavingPercent": 11
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F3",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 62827,
+        "ptcElapsedMs": 45646,
+        "nativeTokens": 32361,
+        "ptcTokens": 22366,
+        "timeSavingPercent": 27.3,
+        "tokenSavingPercent": 30.9
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F4",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 92722,
+        "ptcElapsedMs": 44863,
+        "nativeTokens": 41905,
+        "ptcTokens": 24947,
+        "timeSavingPercent": 51.6,
+        "tokenSavingPercent": 40.5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F1",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": false,
+        "nativeElapsedMs": 24165,
+        "ptcElapsedMs": 29304,
+        "nativeTokens": 28590,
+        "ptcTokens": 28538,
+        "timeSavingPercent": -21.3,
+        "tokenSavingPercent": 0.2
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F2",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": false,
+        "nativeElapsedMs": 31376,
+        "ptcElapsedMs": 32958,
+        "nativeTokens": 31154,
+        "ptcTokens": 29742,
+        "timeSavingPercent": -5,
+        "tokenSavingPercent": 4.5
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F3",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 72108,
+        "ptcElapsedMs": 35118,
+        "nativeTokens": 140015,
+        "ptcTokens": 21178,
+        "timeSavingPercent": 51.3,
+        "tokenSavingPercent": 84.9
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F4",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": false,
+        "nativeElapsedMs": 65806,
+        "ptcElapsedMs": 68748,
+        "nativeTokens": 35380,
+        "ptcTokens": 40950,
+        "timeSavingPercent": -4.5,
+        "tokenSavingPercent": -15.7
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F1",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 34815,
+        "ptcElapsedMs": 21691,
+        "nativeTokens": 30794,
+        "ptcTokens": 23434,
+        "timeSavingPercent": 37.7,
+        "tokenSavingPercent": 23.9
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F2",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": false,
+        "nativeElapsedMs": 34150,
+        "ptcElapsedMs": 40281,
+        "nativeTokens": 32216,
+        "ptcTokens": 30958,
+        "timeSavingPercent": -18,
+        "tokenSavingPercent": 3.9
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F3",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 78949,
+        "ptcElapsedMs": 29026,
+        "nativeTokens": 50819,
+        "ptcTokens": 20726,
+        "timeSavingPercent": 63.2,
+        "tokenSavingPercent": 59.2
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F4",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": true,
+        "nativeElapsedMs": 96116,
+        "ptcElapsedMs": 28316,
+        "nativeTokens": 58760,
+        "ptcTokens": 23388,
+        "timeSavingPercent": 70.5,
+        "tokenSavingPercent": 60.2
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F1",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": false,
+        "nativeElapsedMs": 18932,
+        "ptcElapsedMs": 13234,
+        "nativeTokens": 41154,
+        "ptcTokens": 29710,
+        "timeSavingPercent": 30.1,
+        "tokenSavingPercent": 27.8
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F2",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": false,
+        "nativeElapsedMs": 16322,
+        "ptcElapsedMs": 16731,
+        "nativeTokens": 35011,
+        "ptcTokens": 42027,
+        "timeSavingPercent": -2.5,
+        "tokenSavingPercent": -20
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F3",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": false,
+        "nativeElapsedMs": 34262,
+        "ptcElapsedMs": 13888,
+        "nativeTokens": 53950,
+        "ptcTokens": 20996,
+        "timeSavingPercent": 59.5,
+        "tokenSavingPercent": 61.1
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F4",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": false,
+        "nativeElapsedMs": 43755,
+        "ptcElapsedMs": 20191,
+        "nativeTokens": 55285,
+        "ptcTokens": 55871,
+        "timeSavingPercent": 53.9,
+        "tokenSavingPercent": -1.1
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F1",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": true,
+        "ptcClean": false,
+        "nativeElapsedMs": 28808,
+        "ptcElapsedMs": 17809,
+        "nativeTokens": 39196,
+        "ptcTokens": 23641,
+        "timeSavingPercent": 38.2,
+        "tokenSavingPercent": 39.7
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F2",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": false,
+        "nativeElapsedMs": 39660,
+        "ptcElapsedMs": 30445,
+        "nativeTokens": 44331,
+        "ptcTokens": 31765,
+        "timeSavingPercent": 23.2,
+        "tokenSavingPercent": 28.3
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F3",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": false,
+        "nativeElapsedMs": 69605,
+        "ptcElapsedMs": 31473,
+        "nativeTokens": 67841,
+        "ptcTokens": 41868,
+        "timeSavingPercent": 54.8,
+        "tokenSavingPercent": 38.3
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F4",
+        "nativeSemantic": true,
+        "ptcSemantic": true,
+        "nativeClean": false,
+        "ptcClean": true,
+        "nativeElapsedMs": 84287,
+        "ptcElapsedMs": 23271,
+        "nativeTokens": 61185,
+        "ptcTokens": 35930,
+        "timeSavingPercent": 72.4,
+        "tokenSavingPercent": 41.3
+      }
+    ],
+    "pairedRuns": [
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "native",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 27492,
+        "outerToolCalls": 8,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 4,
+          "find": 1,
+          "grep": 0,
+          "ls": 0,
+          "write": 2,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 14022,
+          "output": 921,
+          "cacheRead": 14848,
+          "cacheWrite": 0,
+          "reasoning": 244,
+          "totalTokens": 29791,
+          "cost": 0.10516400000000001
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "ptc",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 27633,
+        "outerToolCalls": 3,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 6,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8723,
+          "output": 1062,
+          "cacheRead": 13824,
+          "cacheWrite": 0,
+          "reasoning": 416,
+          "totalTokens": 23609,
+          "cost": 0.08238699999999999
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "native",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 50606,
+        "outerToolCalls": 17,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 8,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 6,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 7360,
+          "output": 1996,
+          "cacheRead": 26112,
+          "cacheWrite": 0,
+          "reasoning": 419,
+          "totalTokens": 35468,
+          "cost": 0.10973600000000001
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "ptc",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 39541,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 2,
+          "read": 8,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 6957,
+          "output": 1562,
+          "cacheRead": 23040,
+          "cacheWrite": 0,
+          "reasoning": 425,
+          "totalTokens": 31559,
+          "cost": 0.093165
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "native",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 62827,
+        "outerToolCalls": 18,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 2,
+          "find": 1,
+          "grep": 0,
+          "ls": 0,
+          "write": 14,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 11749,
+          "output": 2692,
+          "cacheRead": 17920,
+          "cacheWrite": 0,
+          "reasoning": 550,
+          "totalTokens": 32361,
+          "cost": 0.148465
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "ptc",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 45646,
+        "outerToolCalls": 2,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "ls": 2,
+          "read": 16,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 10108,
+          "output": 2018,
+          "cacheRead": 10240,
+          "cacheWrite": 0,
+          "reasoning": 343,
+          "totalTokens": 22366,
+          "cost": 0.11620000000000001
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "native",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 92722,
+        "outerToolCalls": 34,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 2,
+          "find": 2,
+          "grep": 0,
+          "ls": 1,
+          "write": 28,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 18438,
+          "output": 4523,
+          "cacheRead": 18944,
+          "cacheWrite": 0,
+          "reasoning": 603,
+          "totalTokens": 41905,
+          "cost": 0.237352
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "mode": "ptc",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 44863,
+        "outerToolCalls": 2,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 30,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 19236,
+          "output": 2127,
+          "cacheRead": 3584,
+          "cacheWrite": 0,
+          "reasoning": 500,
+          "totalTokens": 24947,
+          "cost": 0.161782
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "native",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 24165,
+        "outerToolCalls": 9,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 4,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 2,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 14143,
+          "output": 623,
+          "cacheRead": 13824,
+          "cacheWrite": 0,
+          "reasoning": 238,
+          "totalTokens": 28590,
+          "cost": 0.0385268
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "ptc",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 29304,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "read": 4,
+          "ls": 1,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 4520,
+          "output": 978,
+          "cacheRead": 23040,
+          "cacheWrite": 0,
+          "reasoning": 292,
+          "totalTokens": 28538,
+          "cost": 0.025384000000000004
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "native",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 31376,
+        "outerToolCalls": 16,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 8,
+          "find": 1,
+          "grep": 0,
+          "ls": 0,
+          "write": 6,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8627,
+          "output": 1023,
+          "cacheRead": 21504,
+          "cacheWrite": 0,
+          "reasoning": 290,
+          "totalTokens": 31154,
+          "cost": 0.0338308
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "ptc",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 32958,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 3,
+          "read": 8,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 6385,
+          "output": 1341,
+          "cacheRead": 22016,
+          "cacheWrite": 0,
+          "reasoning": 286,
+          "totalTokens": 29742,
+          "cost": 0.0332652
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "native",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 72108,
+        "outerToolCalls": 19,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 2,
+          "find": 0,
+          "grep": 0,
+          "ls": 2,
+          "write": 14,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 15346,
+          "output": 1789,
+          "cacheRead": 122880,
+          "cacheWrite": 0,
+          "reasoning": 575,
+          "totalTokens": 140015,
+          "cost": 0.07673600000000001
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "ptc",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 35118,
+        "outerToolCalls": 2,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 16,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 5779,
+          "output": 1575,
+          "cacheRead": 13824,
+          "cacheWrite": 0,
+          "reasoning": 241,
+          "totalTokens": 21178,
+          "cost": 0.033222800000000004
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "native",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 65806,
+        "outerToolCalls": 32,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 2,
+          "find": 0,
+          "grep": 0,
+          "ls": 1,
+          "write": 28,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8732,
+          "output": 3096,
+          "cacheRead": 23552,
+          "cacheWrite": 0,
+          "reasoning": 518,
+          "totalTokens": 35380,
+          "cost": 0.059326399999999994
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "mode": "ptc",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 68748,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "read": 30,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 10444,
+          "output": 3370,
+          "cacheRead": 27136,
+          "cacheWrite": 0,
+          "reasoning": 994,
+          "totalTokens": 40950,
+          "cost": 0.06675519999999999
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "native",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 34815,
+        "outerToolCalls": 9,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 4,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 2,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 9147,
+          "output": 1167,
+          "cacheRead": 20480,
+          "cacheWrite": 0,
+          "reasoning": 336,
+          "totalTokens": 30794,
+          "cost": 0.0036394
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "ptc",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 21691,
+        "outerToolCalls": 3,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 6,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8758,
+          "output": 852,
+          "cacheRead": 13824,
+          "cacheWrite": 0,
+          "reasoning": 277,
+          "totalTokens": 23434,
+          "cost": 0.0030504799999999995
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "native",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 34150,
+        "outerToolCalls": 17,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 8,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 6,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 9385,
+          "output": 1327,
+          "cacheRead": 21504,
+          "cacheWrite": 0,
+          "reasoning": 379,
+          "totalTokens": 32216,
+          "cost": 0.00389948
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "ptc",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 40281,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 1,
+          "read": 8,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 10865,
+          "output": 1661,
+          "cacheRead": 18432,
+          "cacheWrite": 0,
+          "reasoning": 471,
+          "totalTokens": 30958,
+          "cost": 0.00453484
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "native",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 78949,
+        "outerToolCalls": 33,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 16,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 14,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 14059,
+          "output": 3480,
+          "cacheRead": 33280,
+          "cacheWrite": 0,
+          "reasoning": 480,
+          "totalTokens": 50819,
+          "cost": 0.0076533999999999994
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "ptc",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 29026,
+        "outerToolCalls": 2,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 17,
+          "ls": 1,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 9145,
+          "output": 1341,
+          "cacheRead": 10240,
+          "cacheWrite": 0,
+          "reasoning": 719,
+          "totalTokens": 20726,
+          "cost": 0.0036429999999999995
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "native",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 96116,
+        "outerToolCalls": 61,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 30,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 28,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 12258,
+          "output": 4518,
+          "cacheRead": 41984,
+          "cacheWrite": 0,
+          "reasoning": 1257,
+          "totalTokens": 58760,
+          "cost": 0.00871288
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "mode": "ptc",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 28316,
+        "outerToolCalls": 2,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 31,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 10921,
+          "output": 1203,
+          "cacheRead": 11264,
+          "cacheWrite": 0,
+          "reasoning": 605,
+          "totalTokens": 23388,
+          "cost": 0.00385308
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "native",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": false,
+        "strictContract": true,
+        "elapsedMs": 18932,
+        "outerToolCalls": 10,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 4,
+          "find": 1,
+          "grep": 0,
+          "ls": 1,
+          "write": 2,
+          "bash": 2
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8184,
+          "output": 1482,
+          "cacheRead": 31488,
+          "cacheWrite": 0,
+          "reasoning": 457,
+          "totalTokens": 41154,
+          "cost": 0
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "ptc",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 13234,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 3,
+          "read": 4,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 8288,
+          "output": 1198,
+          "cacheRead": 20224,
+          "cacheWrite": 0,
+          "reasoning": 358,
+          "totalTokens": 29710,
+          "cost": 0
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "native",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": false,
+        "strictContract": true,
+        "elapsedMs": 16322,
+        "outerToolCalls": 16,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 8,
+          "find": 0,
+          "grep": 0,
+          "ls": 1,
+          "write": 6,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 5433,
+          "output": 1418,
+          "cacheRead": 28160,
+          "cacheWrite": 0,
+          "reasoning": 322,
+          "totalTokens": 35011,
+          "cost": 0
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "ptc",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 16731,
+        "outerToolCalls": 5,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 14,
+          "ls": 1,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 7663,
+          "output": 1596,
+          "cacheRead": 32768,
+          "cacheWrite": 0,
+          "reasoning": 426,
+          "totalTokens": 42027,
+          "cost": 0
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "native",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": false,
+        "strictContract": false,
+        "elapsedMs": 34262,
+        "outerToolCalls": 33,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 16,
+          "find": 0,
+          "grep": 0,
+          "ls": 2,
+          "write": 14,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 10022,
+          "output": 3992,
+          "cacheRead": 39936,
+          "cacheWrite": 0,
+          "reasoning": 456,
+          "totalTokens": 53950,
+          "cost": 0
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "ptc",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 13888,
+        "outerToolCalls": 2,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 2,
+          "ls": 1,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 5446,
+          "output": 1726,
+          "cacheRead": 13824,
+          "cacheWrite": 0,
+          "reasoning": 305,
+          "totalTokens": 20996,
+          "cost": 0
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "native",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": false,
+        "strictContract": false,
+        "elapsedMs": 43755,
+        "outerToolCalls": 34,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 4,
+          "find": 0,
+          "grep": 0,
+          "ls": 1,
+          "write": 28,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 11704,
+          "output": 5693,
+          "cacheRead": 37888,
+          "cacheWrite": 0,
+          "reasoning": 1054,
+          "totalTokens": 55285,
+          "cost": 0
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "mode": "ptc",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 20191,
+        "outerToolCalls": 5,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 30,
+          "ls": 1,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8093,
+          "output": 2210,
+          "cacheRead": 45568,
+          "cacheWrite": 0,
+          "reasoning": 652,
+          "totalTokens": 55871,
+          "cost": 0
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "native",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 28808,
+        "outerToolCalls": 10,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 4,
+          "find": 0,
+          "grep": 0,
+          "ls": 3,
+          "write": 2,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 9195,
+          "output": 1329,
+          "cacheRead": 28672,
+          "cacheWrite": 0,
+          "reasoning": 285,
+          "totalTokens": 39196,
+          "cost": 0
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "ptc",
+        "level": "F1",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 17809,
+        "outerToolCalls": 3,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 4,
+          "ls": 1,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 8422,
+          "output": 883,
+          "cacheRead": 14336,
+          "cacheWrite": 0,
+          "reasoning": 261,
+          "totalTokens": 23641,
+          "cost": 0
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "native",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 39660,
+        "outerToolCalls": 17,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 8,
+          "find": 0,
+          "grep": 0,
+          "ls": 2,
+          "write": 6,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 7453,
+          "output": 2062,
+          "cacheRead": 34816,
+          "cacheWrite": 0,
+          "reasoning": 324,
+          "totalTokens": 44331,
+          "cost": 0
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "ptc",
+        "level": "F2",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 30445,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 3,
+          "read": 8,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "usage": {
+          "input": 6414,
+          "output": 1799,
+          "cacheRead": 23552,
+          "cacheWrite": 0,
+          "reasoning": 480,
+          "totalTokens": 31765,
+          "cost": 0
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "native",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": false,
+        "strictContract": true,
+        "elapsedMs": 69605,
+        "outerToolCalls": 33,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 16,
+          "find": 0,
+          "grep": 0,
+          "ls": 1,
+          "write": 14,
+          "bash": 2
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 11514,
+          "output": 4103,
+          "cacheRead": 52224,
+          "cacheWrite": 0,
+          "reasoning": 605,
+          "totalTokens": 67841,
+          "cost": 0
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "ptc",
+        "level": "F3",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": false,
+        "elapsedMs": 31473,
+        "outerToolCalls": 5,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 17,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 7484,
+          "output": 1616,
+          "cacheRead": 32768,
+          "cacheWrite": 0,
+          "reasoning": 728,
+          "totalTokens": 41868,
+          "cost": 0
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "native",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": false,
+        "strictContract": true,
+        "elapsedMs": 84287,
+        "outerToolCalls": 38,
+        "outerRunCodeCalls": 0,
+        "toolCounts": {
+          "read": 6,
+          "find": 0,
+          "grep": 0,
+          "ls": 3,
+          "write": 28,
+          "bash": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 12933,
+          "output": 5244,
+          "cacheRead": 43008,
+          "cacheWrite": 0,
+          "reasoning": 364,
+          "totalTokens": 61185,
+          "cost": 0
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "mode": "ptc",
+        "level": "F4",
+        "trial": 1,
+        "semanticSuccess": true,
+        "cleanRun": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "toolCompliant": true,
+        "strictContract": true,
+        "elapsedMs": 23271,
+        "outerToolCalls": 4,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "read": 3,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "usage": {
+          "input": 7165,
+          "output": 1117,
+          "cacheRead": 27648,
+          "cacheWrite": 0,
+          "reasoning": 276,
+          "totalTokens": 35930,
+          "cost": 0
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        }
+      }
+    ],
+    "capabilitySource": "The previous 39 PTC-only F1-F7 runs are retained under capabilityRuns.",
+    "capabilityAggregate": [
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F1",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 21461,
+        "averageTokensOnPass": 17398
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F2",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 25289,
+        "averageTokensOnPass": 18641
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F3",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 39151,
+        "averageTokensOnPass": 21492
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F4",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 28103,
+        "averageTokensOnPass": 22064
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F5",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 44195,
+        "averageTokensOnPass": 44531
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F6",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 112655,
+        "averageTokensOnPass": 125362
+      },
+      {
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F7",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 103724,
+        "averageTokensOnPass": 96749
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F1",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 25574,
+        "averageTokensOnPass": 27692
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F2",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 32496,
+        "averageTokensOnPass": 25048
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F3",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 22916,
+        "averageTokensOnPass": 19527
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F4",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 56307,
+        "averageTokensOnPass": 44542
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F5",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 73751,
+        "averageTokensOnPass": 78017
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F6",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 84250,
+        "averageTokensOnPass": 95214
+      },
+      {
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F7",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 112281,
+        "averageTokensOnPass": 189672
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F1",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 33363,
+        "averageTokensOnPass": 24113
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F2",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 42521,
+        "averageTokensOnPass": 27728
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F3",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 50703,
+        "averageTokensOnPass": 34076
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F4",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 33312,
+        "averageTokensOnPass": 24157
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F5",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 61454,
+        "averageTokensOnPass": 61306
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F6",
+        "runs": 3,
+        "passed": 2,
+        "successRate": 66.7,
+        "averageElapsedMsOnPass": 94818,
+        "averageTokensOnPass": 108923
+      },
+      {
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F7",
+        "runs": 3,
+        "passed": 2,
+        "successRate": 66.7,
+        "averageElapsedMsOnPass": 93333,
+        "averageTokensOnPass": 120852
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F1",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 11162,
+        "averageTokensOnPass": 19373
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F2",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 10542,
+        "averageTokensOnPass": 19112
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F3",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 18789,
+        "averageTokensOnPass": 36583
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F4",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 12780,
+        "averageTokensOnPass": 37591
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F5",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 16580,
+        "averageTokensOnPass": 50783
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F6",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 25998,
+        "averageTokensOnPass": 119434
+      },
+      {
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F7",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 73495,
+        "averageTokensOnPass": 282580
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F1",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 14457,
+        "averageTokensOnPass": 17490
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F2",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 25409,
+        "averageTokensOnPass": 39325
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F3",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 36724,
+        "averageTokensOnPass": 45091
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F4",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 20504,
+        "averageTokensOnPass": 28321
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F5",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 44473,
+        "averageTokensOnPass": 55655
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F6",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 67195,
+        "averageTokensOnPass": 69571
+      },
+      {
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F7",
+        "runs": 1,
+        "passed": 1,
+        "successRate": 100,
+        "averageElapsedMsOnPass": 148360,
+        "averageTokensOnPass": 185369
+      }
+    ],
+    "capabilityRuns": [
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F1",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 21461,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 4,
+          "ls": 1,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 7318,
+          "output": 864,
+          "cacheRead": 9216,
+          "cacheWrite": 0,
+          "reasoning": 317,
+          "totalTokens": 17398,
+          "cost": 0.067118
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":2,\"assertions\":24}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 2,
+            "assertions": 24
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":2,\"assertions\":24}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F2",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 25289,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 8,
+          "ls": 1,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 8298,
+          "output": 1127,
+          "cacheRead": 9216,
+          "cacheWrite": 0,
+          "reasoning": 326,
+          "totalTokens": 18641,
+          "cost": 0.07990799999999999
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":6,\"assertions\":56}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 6,
+            "assertions": 56
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":6,\"assertions\":56}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F3",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 39151,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 17,
+          "ls": 1,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 5952,
+          "output": 1716,
+          "cacheRead": 13824,
+          "cacheWrite": 0,
+          "reasoning": 940,
+          "totalTokens": 21492,
+          "cost": 0.08815200000000001
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":14,\"assertions\":120}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 14,
+            "assertions": 120
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":14,\"assertions\":120}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F4",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 28103,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 31,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 17240,
+          "output": 1240,
+          "cacheRead": 3584,
+          "cacheWrite": 0,
+          "reasoning": 489,
+          "totalTokens": 22064,
+          "cost": 0.125192
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":28,\"assertions\":232}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 28,
+            "assertions": 232
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":28,\"assertions\":232}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F5",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 44195,
+        "modelTurns": 4,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 4,
+          "find": 1,
+          "grep": 1,
+          "write": 48,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 11918,
+          "output": 1893,
+          "cacheRead": 30720,
+          "cacheWrite": 0,
+          "reasoning": 852,
+          "totalTokens": 44531,
+          "cost": 0.13174
+        },
+        "input": {
+          "modules": 48,
+          "assertions": 392,
+          "minimumWrites": 48,
+          "minimumPrograms": 2
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":48,\"assertions\":392}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 48,
+            "assertions": 392
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":48,\"assertions\":392}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F1",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 25574,
+        "modelTurns": 5,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 3,
+          "read": 4,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "ENOENT: no such file or directory, realpath '/tmp/pi-ptc-full-benchmark-A1u11n/fixtures/openai-codex_gpt-5.6-terra/F1/t1/F1/src/stage-1.mjs'"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 8321,
+          "output": 939,
+          "cacheRead": 18432,
+          "cacheWrite": 0,
+          "reasoning": 148,
+          "totalTokens": 27692,
+          "cost": 0.0315964
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":2,\"assertions\":24}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 2,
+            "assertions": 24
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":2,\"assertions\":24}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F2",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 32496,
+        "modelTurns": 4,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 8,
+          "ls": 1,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 5263,
+          "output": 1353,
+          "cacheRead": 18432,
+          "cacheWrite": 0,
+          "reasoning": 422,
+          "totalTokens": 25048,
+          "cost": 0.0304484
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":6,\"assertions\":56}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 6,
+            "assertions": 56
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":6,\"assertions\":56}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F3",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 22916,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 17,
+          "ls": 1,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 12942,
+          "output": 953,
+          "cacheRead": 5632,
+          "cacheWrite": 0,
+          "reasoning": 312,
+          "totalTokens": 19527,
+          "cost": 0.0384464
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":14,\"assertions\":120}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 14,
+            "assertions": 120
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":14,\"assertions\":120}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F4",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 56307,
+        "modelTurns": 5,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "read": 33,
+          "ls": 1,
+          "write": 56,
+          "run": 2
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 9715,
+          "output": 2571,
+          "cacheRead": 32256,
+          "cacheWrite": 0,
+          "reasoning": 1444,
+          "totalTokens": 44542,
+          "cost": 0.0567332
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":28,\"assertions\":232}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 28,
+            "assertions": 232
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":28,\"assertions\":232}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F5",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 73751,
+        "modelTurns": 6,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 50,
+          "ls": 1,
+          "write": 48,
+          "run": 2
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 17155,
+          "output": 3518,
+          "cacheRead": 57344,
+          "cacheWrite": 0,
+          "reasoning": 1372,
+          "totalTokens": 78017,
+          "cost": 0.0879948
+        },
+        "input": {
+          "modules": 48,
+          "assertions": 392,
+          "minimumWrites": 48,
+          "minimumPrograms": 2
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":48,\"assertions\":392}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 48,
+            "assertions": 392
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":48,\"assertions\":392}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F1",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 33363,
+        "modelTurns": 4,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 6,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 8040,
+          "output": 1225,
+          "cacheRead": 14848,
+          "cacheWrite": 0,
+          "reasoning": 687,
+          "totalTokens": 24113,
+          "cost": 0.0033749599999999998
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":2,\"assertions\":24}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 2,
+            "assertions": 24
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":2,\"assertions\":24}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F2",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 42521,
+        "modelTurns": 4,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 14,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 9945,
+          "output": 1911,
+          "cacheRead": 15872,
+          "cacheWrite": 0,
+          "reasoning": 847,
+          "totalTokens": 27728,
+          "cost": 0.00459964
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":6,\"assertions\":56}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 6,
+            "assertions": 56
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":6,\"assertions\":56}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F3",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 50703,
+        "modelTurns": 5,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "ls": 2,
+          "read": 16,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "ENOENT: no such file or directory, realpath '/tmp/pi-ptc-full-benchmark-A1u11n/fixtures/openai-codex_gpt-5.6-luna/F3/t1/F3/src/stage-1.mjs'"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 11339,
+          "output": 2257,
+          "cacheRead": 20480,
+          "cacheWrite": 0,
+          "reasoning": 520,
+          "totalTokens": 34076,
+          "cost": 0.005385800000000001
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":14,\"assertions\":120}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 14,
+            "assertions": 120
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":14,\"assertions\":120}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F4",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 33312,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 31,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 11307,
+          "output": 1586,
+          "cacheRead": 11264,
+          "cacheWrite": 0,
+          "reasoning": 848,
+          "totalTokens": 24157,
+          "cost": 0.0043898800000000005
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":28,\"assertions\":232}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 28,
+            "assertions": 232
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":28,\"assertions\":232}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F5",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 61454,
+        "modelTurns": 6,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 52,
+          "find": 1,
+          "write": 48,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 22120,
+          "output": 2834,
+          "cacheRead": 36352,
+          "cacheWrite": 0,
+          "reasoning": 1495,
+          "totalTokens": 61306,
+          "cost": 0.00855184
+        },
+        "input": {
+          "modules": 48,
+          "assertions": 392,
+          "minimumWrites": 48,
+          "minimumPrograms": 2
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":48,\"assertions\":392}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 48,
+            "assertions": 392
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":48,\"assertions\":392}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F1",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 11162,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 4,
+          "find": 1,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 8002,
+          "output": 875,
+          "cacheRead": 10496,
+          "cacheWrite": 0,
+          "reasoning": 233,
+          "totalTokens": 19373,
+          "cost": 0
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":2,\"assertions\":24}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 2,
+            "assertions": 24
+          }
+        },
+        "finalText": "```json\n{\"ok\":true,\"modules\":2,\"assertions\":24}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F2",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 10542,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 8,
+          "ls": 1,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 3664,
+          "output": 1112,
+          "cacheRead": 14336,
+          "cacheWrite": 0,
+          "reasoning": 183,
+          "totalTokens": 19112,
+          "cost": 0
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":6,\"assertions\":56}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 6,
+            "assertions": 56
+          }
+        },
+        "finalText": "```json\n{\"ok\":true,\"modules\":6,\"assertions\":56}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F3",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 18789,
+        "modelTurns": 5,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "read": 16,
+          "ls": 1,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 6863,
+          "output": 2072,
+          "cacheRead": 27648,
+          "cacheWrite": 0,
+          "reasoning": 409,
+          "totalTokens": 36583,
+          "cost": 0
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":14,\"assertions\":120}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 14,
+            "assertions": 120
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":14,\"assertions\":120}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F4",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 12780,
+        "modelTurns": 5,
+        "outerRunCodeCalls": 4,
+        "toolCounts": {
+          "read": 7,
+          "ls": 1,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 5298,
+          "output": 1061,
+          "cacheRead": 31232,
+          "cacheWrite": 0,
+          "reasoning": 202,
+          "totalTokens": 37591,
+          "cost": 0
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":28,\"assertions\":232}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 28,
+            "assertions": 232
+          }
+        },
+        "finalText": "All 28 stages written and tests pass. Final result:\n\n```json\n{\"ok\":true,\"modules\":28,\"assertions\":232}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F5",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 16580,
+        "modelTurns": 6,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 5,
+          "write": 48,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 7706,
+          "output": 1605,
+          "cacheRead": 41472,
+          "cacheWrite": 0,
+          "reasoning": 331,
+          "totalTokens": 50783,
+          "cost": 0
+        },
+        "input": {
+          "modules": 48,
+          "assertions": 392,
+          "minimumWrites": 48,
+          "minimumPrograms": 2
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":48,\"assertions\":392}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 48,
+            "assertions": 392
+          }
+        },
+        "finalText": "tests/run.mjs 通过，exitCode 0。\n\n```json\n{\"ok\":true,\"modules\":48,\"assertions\":392}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F1",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 14457,
+        "modelTurns": 3,
+        "outerRunCodeCalls": 2,
+        "toolCounts": {
+          "read": 4,
+          "write": 2,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 7556,
+          "output": 718,
+          "cacheRead": 9216,
+          "cacheWrite": 0,
+          "reasoning": 192,
+          "totalTokens": 17490,
+          "cost": 0
+        },
+        "input": {
+          "modules": 2,
+          "assertions": 24,
+          "minimumWrites": 2,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":2,\"assertions\":24}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 2,
+            "assertions": 24
+          }
+        },
+        "finalText": "{\"ok\": true, \"modules\": 2, \"assertions\": 24}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F2",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 25409,
+        "modelTurns": 6,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 8,
+          "write": 6,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 7335,
+          "output": 1270,
+          "cacheRead": 30720,
+          "cacheWrite": 0,
+          "reasoning": 274,
+          "totalTokens": 39325,
+          "cost": 0
+        },
+        "input": {
+          "modules": 6,
+          "assertions": 56,
+          "minimumWrites": 6,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":6,\"assertions\":56}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 6,
+            "assertions": 56
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":6,\"assertions\":56}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F3",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 36724,
+        "modelTurns": 6,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 17,
+          "write": 14,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "ReferenceError: value is not defined"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 8267,
+          "output": 2008,
+          "cacheRead": 34816,
+          "cacheWrite": 0,
+          "reasoning": 472,
+          "totalTokens": 45091,
+          "cost": 0
+        },
+        "input": {
+          "modules": 14,
+          "assertions": 120,
+          "minimumWrites": 14,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":14,\"assertions\":120}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 14,
+            "assertions": 120
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":14,\"assertions\":120}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F4",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 20504,
+        "modelTurns": 4,
+        "outerRunCodeCalls": 3,
+        "toolCounts": {
+          "read": 8,
+          "write": 28,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 6758,
+          "output": 1083,
+          "cacheRead": 20480,
+          "cacheWrite": 0,
+          "reasoning": 299,
+          "totalTokens": 28321,
+          "cost": 0
+        },
+        "input": {
+          "modules": 28,
+          "assertions": 232,
+          "minimumWrites": 28,
+          "minimumPrograms": 1
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":28,\"assertions\":232}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 28,
+            "assertions": 232
+          }
+        },
+        "finalText": "```json\n{\"ok\":true,\"modules\":28,\"assertions\":232}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "base-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F5",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 44473,
+        "modelTurns": 6,
+        "outerRunCodeCalls": 5,
+        "toolCounts": {
+          "read": 50,
+          "write": 48,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 11950,
+          "output": 2745,
+          "cacheRead": 40960,
+          "cacheWrite": 0,
+          "reasoning": 647,
+          "totalTokens": 55655,
+          "cost": 0
+        },
+        "input": {
+          "modules": 48,
+          "assertions": 392,
+          "minimumWrites": 48,
+          "minimumPrograms": 2
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":48,\"assertions\":392}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 48,
+            "assertions": 392
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":48,\"assertions\":392}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F6",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 112655,
+        "modelTurns": 9,
+        "outerRunCodeCalls": 8,
+        "toolCounts": {
+          "read": 85,
+          "ls": 1,
+          "write": 80,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 37286,
+          "output": 2572,
+          "cacheRead": 85504,
+          "cacheWrite": 0,
+          "reasoning": 942,
+          "totalTokens": 125362,
+          "cost": 0.30634200000000006
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":80,\"assertions\":648}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-openai",
+        "model": "openai-codex/gpt-5.6-sol",
+        "level": "F7",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 103724,
+        "modelTurns": 11,
+        "outerRunCodeCalls": 10,
+        "toolCounts": {
+          "read": 135,
+          "ls": 1,
+          "write": 128,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 16533,
+          "output": 3928,
+          "cacheRead": 76288,
+          "cacheWrite": 0,
+          "reasoning": 953,
+          "totalTokens": 96749,
+          "cost": 0.23864899999999997
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":128,\"assertions\":1032}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F6",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 84250,
+        "modelTurns": 8,
+        "outerRunCodeCalls": 7,
+        "toolCounts": {
+          "read": 85,
+          "ls": 1,
+          "write": 80,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 13896,
+          "output": 3494,
+          "cacheRead": 77824,
+          "cacheWrite": 0,
+          "reasoning": 1921,
+          "totalTokens": 95214,
+          "cost": 0.0852848
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":80,\"assertions\":648}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-openai",
+        "model": "openai-codex/gpt-5.6-terra",
+        "level": "F7",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 112281,
+        "modelTurns": 12,
+        "outerRunCodeCalls": 11,
+        "toolCounts": {
+          "read": 139,
+          "ls": 1,
+          "write": 128,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 20781,
+          "output": 5051,
+          "cacheRead": 163840,
+          "cacheWrite": 0,
+          "reasoning": 1635,
+          "totalTokens": 189672,
+          "cost": 0.13494199999999998
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":128,\"assertions\":1032}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F6",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 84176,
+        "modelTurns": 8,
+        "outerRunCodeCalls": 7,
+        "toolCounts": {
+          "read": 85,
+          "ls": 1,
+          "write": 80,
+          "run": 3
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 22464,
+          "output": 3654,
+          "cacheRead": 82432,
+          "cacheWrite": 0,
+          "reasoning": 1291,
+          "totalTokens": 108550,
+          "cost": 0.01052624
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":80,\"assertions\":648}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-openai",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F7",
+        "trial": 1,
+        "status": "fail",
+        "success": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": false,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 129441,
+        "modelTurns": 7,
+        "outerRunCodeCalls": 6,
+        "toolCounts": {
+          "read": 10,
+          "ls": 1,
+          "write": 3,
+          "run": 6
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Expected unicode escape"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 24259,
+          "output": 6479,
+          "cacheRead": 82944,
+          "cacheWrite": 0,
+          "reasoning": 3640,
+          "totalTokens": 113682,
+          "cost": 0.01428548
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":128,\"assertions\":1032}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F6",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 25998,
+        "modelTurns": 8,
+        "outerRunCodeCalls": 7,
+        "toolCounts": {
+          "read": 9,
+          "write": 80,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "PTC sub-call limit exceeded (32)"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 15300,
+          "output": 2502,
+          "cacheRead": 101632,
+          "cacheWrite": 0,
+          "reasoning": 366,
+          "totalTokens": 119434,
+          "cost": 0
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "```json\n{\"ok\":true,\"modules\":80,\"assertions\":648}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-deepseek",
+        "model": "dashscope/deepseek-v4-flash",
+        "level": "F7",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 73495,
+        "modelTurns": 13,
+        "outerRunCodeCalls": 12,
+        "toolCounts": {
+          "read": 6,
+          "write": 128,
+          "run": 1
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "PTC sub-call limit exceeded (32)"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 28129,
+          "output": 8947,
+          "cacheRead": 245504,
+          "cacheWrite": 0,
+          "reasoning": 784,
+          "totalTokens": 282580,
+          "cost": 0
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "喵，测试通过，`exitCode: 0`，全部 128 个模块实现正确。\n\n```json\n{\"ok\":true,\"modules\":128,\"assertions\":1032}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F6",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 67195,
+        "modelTurns": 7,
+        "outerRunCodeCalls": 6,
+        "toolCounts": {
+          "read": 3,
+          "write": 80,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 13005,
+          "output": 4342,
+          "cacheRead": 52224,
+          "cacheWrite": 0,
+          "reasoning": 599,
+          "totalTokens": 69571,
+          "cost": 0
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":80,\"assertions\":648}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "high-deepseek",
+        "model": "dashscope/deepseek-v4-pro",
+        "level": "F7",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": false,
+        "elapsedMs": 148360,
+        "modelTurns": 13,
+        "outerRunCodeCalls": 12,
+        "toolCounts": {
+          "read": 2,
+          "write": 256,
+          "run": 2
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "PTC sub-call limit exceeded (32)"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 23209,
+          "output": 9584,
+          "cacheRead": 152576,
+          "cacheWrite": 0,
+          "reasoning": 1684,
+          "totalTokens": 185369,
+          "cost": 0
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "```json\n{\"ok\":true,\"modules\":128,\"assertions\":1032}\n```",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "luna-boundary",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F6",
+        "trial": 1,
+        "status": "fail",
+        "success": false,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": false,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 131721,
+        "modelTurns": 7,
+        "outerRunCodeCalls": 6,
+        "toolCounts": {
+          "read": 83,
+          "ls": 1,
+          "write": 1,
+          "run": 2
+        },
+        "toolErrorCount": 1,
+        "toolErrors": [
+          {
+            "name": "run_code",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "ReferenceError: stage is not defined"
+                }
+              ],
+              "details": {}
+            }
+          }
+        ],
+        "usage": {
+          "input": 25004,
+          "output": 6527,
+          "cacheRead": 70656,
+          "cacheWrite": 0,
+          "reasoning": 4440,
+          "totalTokens": 102187,
+          "cost": 0.01424632
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":80,\"assertions\":648}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "luna-boundary",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F6",
+        "trial": 2,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 105460,
+        "modelTurns": 7,
+        "outerRunCodeCalls": 7,
+        "toolCounts": {
+          "read": 82,
+          "ls": 1,
+          "write": 80,
+          "run": 1
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 26360,
+          "output": 5111,
+          "cacheRead": 77824,
+          "cacheWrite": 0,
+          "reasoning": 2444,
+          "totalTokens": 109295,
+          "cost": 0.01296168
+        },
+        "input": {
+          "modules": 80,
+          "assertions": 648,
+          "minimumWrites": 80,
+          "minimumPrograms": 3
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":80,\"assertions\":648}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 80,
+            "assertions": 648
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":80,\"assertions\":648}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "luna-boundary",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F7",
+        "trial": 1,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 102808,
+        "modelTurns": 8,
+        "outerRunCodeCalls": 7,
+        "toolCounts": {
+          "read": 12,
+          "ls": 1,
+          "write": 128,
+          "run": 5
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 22668,
+          "output": 4624,
+          "cacheRead": 93696,
+          "cacheWrite": 0,
+          "reasoning": 2215,
+          "totalTokens": 120988,
+          "cost": 0.011956320000000001
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":128,\"assertions\":1032}",
+        "runtimeError": null,
+        "stderr": ""
+      },
+      {
+        "source": "luna-boundary",
+        "model": "openai-codex/gpt-5.6-luna",
+        "level": "F7",
+        "trial": 2,
+        "status": "pass",
+        "success": true,
+        "projectPassed": true,
+        "protectedUnchanged": true,
+        "usedWriteAndRun": true,
+        "reportedCorrect": true,
+        "strictContract": true,
+        "elapsedMs": 83858,
+        "modelTurns": 8,
+        "outerRunCodeCalls": 7,
+        "toolCounts": {
+          "read": 11,
+          "ls": 1,
+          "write": 128,
+          "run": 5
+        },
+        "toolErrorCount": 0,
+        "toolErrors": [],
+        "usage": {
+          "input": 22056,
+          "output": 3939,
+          "cacheRead": 94720,
+          "cacheWrite": 0,
+          "reasoning": 1383,
+          "totalTokens": 120715,
+          "cost": 0.0110324
+        },
+        "input": {
+          "modules": 128,
+          "assertions": 1032,
+          "minimumWrites": 128,
+          "minimumPrograms": 5
+        },
+        "evaluator": {
+          "passed": true,
+          "exitCode": 0,
+          "signal": null,
+          "stdout": "{\"ok\":true,\"modules\":128,\"assertions\":1032}\n",
+          "stderr": "",
+          "output": {
+            "ok": true,
+            "modules": 128,
+            "assertions": 1032
+          }
+        },
+        "finalText": "{\"ok\":true,\"modules\":128,\"assertions\":1032}",
+        "runtimeError": null,
+        "stderr": ""
+      }
+    ]
+  }
+}
