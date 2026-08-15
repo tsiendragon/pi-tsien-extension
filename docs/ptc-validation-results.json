@@ -1,0 +1,119 @@
+{
+  "schema": "pi.ptc-runtime-validation/v1",
+  "generatedAt": "2026-08-15T05:40:18.000Z",
+  "models": [
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-luna",
+    "dashscope/deepseek-v4-flash",
+    "dashscope/deepseek-v4-pro"
+  ],
+  "finalMatrices": {
+    "readOnlyC1": {
+      "runs": 5,
+      "semanticSuccesses": 5,
+      "cleanRuns": 5,
+      "totalTokens": 82807,
+      "elapsedMsRange": [16072, 34047],
+      "source": "/tmp/ptc-prompt-c1.json"
+    },
+    "readOnlyC4": {
+      "runs": 5,
+      "semanticSuccesses": 5,
+      "cleanRuns": 5,
+      "totalTokens": 77629,
+      "elapsedMsRange": [20570, 35494],
+      "sources": [
+        "/tmp/ptc-final-c4.json",
+        "/tmp/ptc-retry4-flash-c4.json"
+      ]
+    },
+    "fullF1": {
+      "runs": 5,
+      "semanticSuccesses": 5,
+      "cleanRuns": 2,
+      "totalTokens": 171743,
+      "elapsedMsRange": [19995, 38353],
+      "recoverableErrors": 4,
+      "source": "/tmp/ptc-prompt2-f1.json"
+    },
+    "fullF3": {
+      "runs": 5,
+      "semanticSuccesses": 5,
+      "cleanRuns": 3,
+      "totalTokens": 162270,
+      "elapsedMsRange": [18913, 67286],
+      "recoverableErrors": 2,
+      "sources": [
+        "/tmp/ptc-final-f3.json",
+        "/tmp/ptc-retry-flash-f3.json"
+      ]
+    },
+    "mixedSimple": {
+      "runs": 5,
+      "semanticSuccesses": 5,
+      "selectionCompliant": 5,
+      "strictJson": 5,
+      "cleanRuns": 5,
+      "totalTokens": 59785,
+      "elapsedMsRange": [3770, 10708],
+      "source": "/tmp/ptc-selection-final.json"
+    },
+    "mixedBatchKnownSchema": {
+      "runs": 5,
+      "semanticSuccesses": 5,
+      "selectionCompliant": 5,
+      "strictJson": 5,
+      "cleanRuns": 5,
+      "totalTokens": 65679,
+      "elapsedMsRange": [7376, 22258],
+      "source": "/tmp/ptc-selection-batch-final.json"
+    }
+  },
+  "totals": {
+    "selectedFinalRuns": 30,
+    "semanticSuccesses": 30,
+    "cleanRuns": 25,
+    "selectionCases": 10,
+    "selectionCompliant": 10
+  },
+  "observedIssues": [
+    {
+      "kind": "model_path_guess",
+      "effect": "Recoverable ENOENT before the model used a manifest or directory listing correctly",
+      "runtimeFailure": false
+    },
+    {
+      "kind": "model_schema_assumption",
+      "effect": "Recoverable array/object mismatch when the task did not state the JSON shape",
+      "runtimeFailure": false
+    },
+    {
+      "kind": "result_contract_overconstraint",
+      "effect": "A model omitted the documented signal key from an exact contract around tools.run",
+      "runtimeFailure": false
+    },
+    {
+      "kind": "lossless_json_violation",
+      "effect": "A model returned undefined or a cyclic value and retried",
+      "runtimeFailure": false
+    },
+    {
+      "kind": "provider_transport_fallback",
+      "effect": "One Luna WebSocket connection failed before streaming and automatically fell back to SSE",
+      "runtimeFailure": false
+    },
+    {
+      "kind": "policy_boundary",
+      "effect": "Flash C4/F3 exposed insufficient wall, outer-call, total-sub-call, and correction-token headroom; final policies were adjusted and the failed cells passed on rerun",
+      "runtimeFailure": false
+    }
+  ],
+  "runtimeSafety": {
+    "runtimeCrashes": 0,
+    "extensionErrors": 0,
+    "budgetBypasses": 0,
+    "workspaceEscapeObserved": false,
+    "leftoverProcesses": 0
+  }
+}
