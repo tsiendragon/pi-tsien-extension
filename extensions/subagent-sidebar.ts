@@ -122,11 +122,23 @@ interface SessionScope {
   interactiveStates: Map<string, InteractiveAgent>;
 }
 
+interface MetricsSidebarSummary {
+  available: boolean;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  hitRatio: number;
+  writeRatio: number;
+  uncachedRatio: number;
+}
+
 interface SubagenturaRuntime {
   __piSubagenturaSessionScopes?: Map<number, SessionScope>;
   __piSubagenturaActiveSessionScopeId?: number;
   __piSubagenturaActiveSessionScopeGeneration?: number;
   __piSubagenturaWorkflowJobs?: Map<string, WorkflowJob>;
+  __piTsienMetricsSidebarGetSummary?: () => MetricsSidebarSummary;
 }
 
 interface Snapshot {
@@ -851,19 +863,29 @@ class SidebarComponent {
       }
     }
 
-    const usage = metrics.usage;
-    if (hasUsage(usage)) {
-      lines.push(
-        this.row(
-          innerWidth,
-          this.theme.fg(
-            "dim",
-            `  计费 ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} · ${formatCost(usage.cost)}`,
+    const metricsSummary = globalState().__piTsienMetricsSidebarGetSummary?.();
+    if (metricsSummary) {
+      const input = formatTokens(metricsSummary.input);
+      if (metricsSummary.available) {
+        lines.push(
+          this.row(
+            innerWidth,
+            this.theme.fg(
+              "dim",
+              `  R${formatTokens(metricsSummary.cacheRead)} W${formatTokens(metricsSummary.cacheWrite)} · 命中率${Math.round(metricsSummary.hitRatio * 100)}% · 未缓存${Math.round(metricsSummary.uncachedRatio * 100)}%`,
+            ),
           ),
-        ),
-      );
+        );
+      } else {
+        lines.push(this.row(this.theme.fg("dim", `  缓存暂无数据 · Input ${input}`)));
+      }
     } else {
-      lines.push(this.row(innerWidth, this.theme.fg("dim", "  计费尚未由模型返回")));
+      const usage = metrics.usage;
+      if (hasUsage(usage)) {
+        lines.push(this.row(this.theme.fg("dim", `  缓存暂无数据 · Input ${formatTokens(usage.input)}`)));
+      } else {
+        lines.push(this.row(this.theme.fg("dim", "  缓存暂无数据")));
+      }
     }
   }
 
