@@ -1,0 +1,120 @@
+{
+  "schema": "pi.ptc-full-tool-config/v1",
+  "generatedAt": "2026-08-15T03:23:24.750Z",
+  "advisoryOnly": false,
+  "partiallyEnforced": true,
+  "enforcement": {
+    "enforced": [
+      "perProgramSubCallHardLimit",
+      "maxOuterRunCodeCalls",
+      "maxNestedWrites",
+      "maxNestedRuns",
+      "maxWallTimeMs",
+      "maxTotalTokens"
+    ],
+    "advisory": [
+      "maxModules"
+    ],
+    "tokenBoundary": "Checked between assistant turns and before run_code/nested calls; an in-flight provider response cannot be interrupted at an exact token."
+  },
+  "common": {
+    "mode": "full",
+    "perProgramSubCallHardLimit": 32,
+    "maxWriteBytes": 262144,
+    "maxRunOutputBytes": 131072,
+    "maxRunTimeoutMs": 15000,
+    "runEntryExtensions": [
+      ".js",
+      ".mjs"
+    ],
+    "shellAvailable": false,
+    "runFilesystemWriteAvailable": false,
+    "networkAvailable": false,
+    "childProcessAvailable": false,
+    "requireProjectTrust": true,
+    "requireIndependentTests": true,
+    "note": "Runtime budgets are enforced by model ID. maxModules remains advisory because arbitrary code does not expose a reliable module count."
+  },
+  "models": {
+    "openai-codex/gpt-5.6-sol": {
+      "capabilityMaxTested": {
+        "level": "F7",
+        "modules": 128,
+        "success": "1/1"
+      },
+      "recommended": {
+        "maxModules": 128,
+        "maxOuterRunCodeCalls": 12,
+        "maxNestedWrites": 160,
+        "maxNestedRuns": 3,
+        "maxWallTimeMs": 130000,
+        "maxTotalTokens": 150000
+      },
+      "rationale": "Passed every tested level; F7 completed with 128 writes, one test run, about 97k tokens."
+    },
+    "openai-codex/gpt-5.6-terra": {
+      "capabilityMaxTested": {
+        "level": "F7",
+        "modules": 128,
+        "success": "1/1"
+      },
+      "recommended": {
+        "maxModules": 80,
+        "maxOuterRunCodeCalls": 8,
+        "maxNestedWrites": 100,
+        "maxNestedRuns": 3,
+        "maxWallTimeMs": 120000,
+        "maxTotalTokens": 120000
+      },
+      "rationale": "Passed F7, but F7 rose to about 190k tokens; F6 is the practical unattended limit."
+    },
+    "openai-codex/gpt-5.6-luna": {
+      "capabilityMaxTested": {
+        "level": "F7",
+        "modules": 128,
+        "success": "2/3"
+      },
+      "recommended": {
+        "maxModules": 48,
+        "maxOuterRunCodeCalls": 6,
+        "maxNestedWrites": 60,
+        "maxNestedRuns": 3,
+        "maxWallTimeMs": 90000,
+        "maxTotalTokens": 80000
+      },
+      "rationale": "F1-F5 passed, while both F6 and F7 were 2/3. Bulk-write planning becomes stochastic above 48 modules."
+    },
+    "dashscope/deepseek-v4-flash": {
+      "capabilityMaxTested": {
+        "level": "F7",
+        "modules": 128,
+        "success": "1/1"
+      },
+      "recommended": {
+        "maxModules": 48,
+        "maxOuterRunCodeCalls": 8,
+        "maxNestedWrites": 60,
+        "maxNestedRuns": 3,
+        "maxWallTimeMs": 90000,
+        "maxTotalTokens": 100000
+      },
+      "rationale": "Passed F7 historically, but token use climbed from about 51k at F5 to 119k at F6 and 283k at F7. A monitored F3 correction needed a seventh run_code and about 81k tokens; the revised call/token/time budget permits that correction while the 60-write cap still prevents repeated full rewrites at the 48-module recommendation."
+    },
+    "dashscope/deepseek-v4-pro": {
+      "capabilityMaxTested": {
+        "level": "F7",
+        "modules": 128,
+        "success": "1/1"
+      },
+      "recommended": {
+        "maxModules": 80,
+        "maxOuterRunCodeCalls": 8,
+        "maxNestedWrites": 100,
+        "maxNestedRuns": 3,
+        "maxWallTimeMs": 100000,
+        "maxTotalTokens": 100000
+      },
+      "rationale": "F6 completed near 70k tokens. F7 passed but rewrote all 128 modules twice and used about 185k tokens."
+    }
+  }
+}
