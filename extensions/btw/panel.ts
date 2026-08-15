@@ -78,6 +78,30 @@ export class BtwPanel implements Component, Focusable {
       return;
     }
 
+    if (matchesKey(data, "up")) {
+      this.scrollOffset += 1;
+      this.tui.requestRender();
+      return;
+    }
+
+    if (matchesKey(data, "down")) {
+      this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+      this.tui.requestRender();
+      return;
+    }
+
+    if (matchesKey(data, "ctrl+up")) {
+      this.scrollOffset += PAGE_SIZE;
+      this.tui.requestRender();
+      return;
+    }
+
+    if (matchesKey(data, "ctrl+down")) {
+      this.scrollOffset = Math.max(0, this.scrollOffset - PAGE_SIZE);
+      this.tui.requestRender();
+      return;
+    }
+
     if (matchesKey(data, "pageUp")) {
       this.scrollOffset += PAGE_SIZE;
       this.tui.requestRender();
@@ -150,7 +174,7 @@ export class BtwPanel implements Component, Focusable {
       ? this.theme.fg("warning", `● ${this.controller.activity || "生成中"}`)
       : this.theme.fg("success", "● 空闲");
     const scroll = maxOffset > 0
-      ? this.theme.fg("dim", ` · PgUp/PgDn ${this.scrollOffset}/${maxOffset}`)
+      ? this.theme.fg("dim", ` · ↑↓ 单行 · Fn+↑↓/Ctrl+↑↓ 翻页 ${this.scrollOffset}/${maxOffset}`)
       : "";
 
     const lines = [
@@ -162,7 +186,7 @@ export class BtwPanel implements Component, Focusable {
       ...visibleTranscript.map((line) => row(` ${line}`)),
       border(`├${"─".repeat(innerWidth)}┤`),
       ...inputLines,
-      row(` ${this.theme.fg("dim", "Enter 发送 · Esc 取消/关闭 · Ctrl+R 刷新 · Ctrl+Y 复制")}`),
+      row(` ${this.theme.fg("dim", "↑↓ 单行 · Fn+↑↓/Ctrl+↑↓ 翻页 · Enter 发送 · Esc 取消/关闭 · Ctrl+R 刷新 · Ctrl+Y 复制")}`),
       border(`╰${"─".repeat(innerWidth)}╯`),
     ];
     return lines.slice(0, maxPanelRows);
