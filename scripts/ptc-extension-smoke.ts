@@ -6,6 +6,7 @@ import ptcExtension from "../extensions/ptc.ts";
 let registeredTool: any;
 let registeredCommand: any;
 const handlers = new Map<string, Function[]>();
+const statusTexts: Array<string | undefined> = [];
 let activeTools = ["read", "bash", "edit", "write"];
 
 const pi = {
@@ -33,13 +34,13 @@ const pi = {
 
 const ui = {
   notify() {},
-  setStatus() {},
+  setStatus(_key: string, text: string | undefined) { statusTexts.push(text); },
   theme: { fg: (_color: string, value: string) => value },
 };
 const ctx = {
   cwd: process.cwd(),
   mode: "rpc",
-  hasUI: false,
+  hasUI: true,
   ui,
   model: { provider: "openai-codex", id: "gpt-5.6-sol" },
   isProjectTrusted: () => true,
@@ -50,6 +51,10 @@ ptcExtension(pi);
 for (const handler of handlers.get("session_start") ?? []) await handler({}, ctx);
 await registeredCommand.handler("on", ctx);
 
+const activeStatus = statusTexts.at(-1) ?? "";
+if (!activeStatus.includes("PTC strict · calls 0/4") || activeStatus.includes("gpt-5.6-sol")) {
+  throw new Error(`PTC status duplicates model information or omits call budget: ${activeStatus}`);
+}
 if (activeTools.join(",") !== "run_code") {
   throw new Error(`PTC strict mode did not select run_code: ${activeTools.join(",")}`);
 }
@@ -301,7 +306,8 @@ for (const handler of handlers.get("message_end") ?? []) {
     message: {
       role: "assistant",
       content: [{ type: "text", text: "结果如下：\n```json\n{\"ok\":true,\"count\":2}\n```" }],
-      usage: { totalTokens: 100 },
+      // A long input context must not consume the per-task PTC generation budget.
+      usage: { input: 126_617, output: 100, totalTokens: 126_717 },
     },
   }, deepSeekCtx);
   if (replacement?.message) normalizedAssistant = replacement.message;
