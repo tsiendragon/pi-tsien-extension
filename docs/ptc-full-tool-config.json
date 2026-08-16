@@ -10,12 +10,13 @@
       "maxNestedWrites",
       "maxNestedRuns",
       "maxWallTimeMs",
-      "maxTotalTokens"
+      "maxAssistantOutputTokens"
     ],
     "advisory": [
       "maxModules"
     ],
-    "tokenBoundary": "Checked between assistant turns and before run_code/nested calls; an in-flight provider response cannot be interrupted at an exact token."
+    "tokenBoundary": "Checked between assistant turns and before run_code/nested calls; an in-flight provider response cannot be interrupted at an exact token.",
+    "tokenMetric": "Runtime charges only newly generated assistant Usage.output tokens, including reasoning. recommended.maxTotalTokens is retained as the legacy benchmark config key; input and cached context do not consume the per-task budget."
   },
   "common": {
     "mode": "full",

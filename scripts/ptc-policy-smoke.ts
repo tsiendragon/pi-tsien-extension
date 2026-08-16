@@ -38,7 +38,7 @@ for (let index = 0; index < readPolicy.maxOuterRunCodeCalls; index += 1) reserve
 expectPolicyError(() => reserveOuterRunCode(outerBudget), "PTC_BUDGET_EXCEEDED");
 
 const tokenBudget = createBudgetState(readPolicy);
-recordAssistantTokens(tokenBudget, readPolicy.maxTotalTokens + 1);
+recordAssistantTokens(tokenBudget, readPolicy.maxAssistantOutputTokens + 1);
 expectPolicyError(() => assertBudgetAvailable(tokenBudget), "PTC_BUDGET_EXCEEDED");
 
 const wallBudget = createBudgetState({ ...readPolicy, maxActiveWallTimeMs: 1 }, true);
