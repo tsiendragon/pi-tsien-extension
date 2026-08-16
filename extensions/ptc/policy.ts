@@ -28,7 +28,7 @@ export type PtcPolicy = {
   mode: PolicyMode;
   maxOuterRunCodeCalls: number;
   maxActiveWallTimeMs: number;
-  maxTotalTokens: number;
+  maxAssistantOutputTokens: number;
   maxTotalSubCalls?: number;
   maxNestedWrites?: number;
   maxNestedRuns?: number;
@@ -44,7 +44,7 @@ export type PtcBudgetState = {
   totalSubCalls: number;
   nestedWrites: number;
   nestedRuns: number;
-  totalTokens: number;
+  assistantOutputTokens: number;
   violation?: PtcPolicyError;
 };
 
@@ -98,7 +98,10 @@ export function resolvePtcPolicy(
     mode,
     maxOuterRunCodeCalls: positiveInteger(modeRecommended?.maxOuterRunCodeCalls, 4),
     maxActiveWallTimeMs: positiveInteger(modeRecommended?.maxWallTimeMs, 90_000),
-    maxTotalTokens: positiveInteger(modeRecommended?.maxTotalTokens, 60_000),
+    // Keep reading the benchmark config's legacy maxTotalTokens field, but enforce it
+    // only against newly generated assistant output. Input already present in a long
+    // session is not PTC workload and must not consume this per-task budget.
+    maxAssistantOutputTokens: positiveInteger(modeRecommended?.maxTotalTokens, 60_000),
     maxTotalSubCalls: mode === "readOnly"
       ? positiveInteger(
           modeRecommended?.maxTotalSubCalls,
@@ -147,7 +150,7 @@ export function createBudgetState(policy: PtcPolicy, running = false): PtcBudget
     totalSubCalls: 0,
     nestedWrites: 0,
     nestedRuns: 0,
-    totalTokens: 0,
+    assistantOutputTokens: 0,
   };
 }
 
@@ -191,8 +194,13 @@ export function assertBudgetAvailable(state: PtcBudgetState): void {
   if (elapsed > state.policy.maxActiveWallTimeMs) {
     throw budgetError(state, "activeWallTimeMs", elapsed, state.policy.maxActiveWallTimeMs);
   }
-  if (state.totalTokens > state.policy.maxTotalTokens) {
-    throw budgetError(state, "totalTokens", state.totalTokens, state.policy.maxTotalTokens);
+  if (state.assistantOutputTokens > state.policy.maxAssistantOutputTokens) {
+    throw budgetError(
+      state,
+      "assistantOutputTokens",
+      state.assistantOutputTokens,
+      state.policy.maxAssistantOutputTokens,
+    );
   }
 }
 
@@ -229,9 +237,9 @@ export function reserveNestedCall(state: PtcBudgetState, name: string): void {
   }
 }
 
-export function recordAssistantTokens(state: PtcBudgetState | undefined, totalTokens: unknown): void {
-  if (!state || !Number.isFinite(totalTokens) || (totalTokens as number) < 0) return;
-  state.totalTokens += Math.round(totalTokens as number);
+export function recordAssistantTokens(state: PtcBudgetState | undefined, outputTokens: unknown): void {
+  if (!state || !Number.isFinite(outputTokens) || (outputTokens as number) < 0) return;
+  state.assistantOutputTokens += Math.round(outputTokens as number);
 }
 
 export function budgetSnapshot(state: PtcBudgetState | undefined): Record<string, unknown> | undefined {
@@ -242,7 +250,10 @@ export function budgetSnapshot(state: PtcBudgetState | undefined): Record<string
     mode: state.policy.mode,
     outerRunCodeCalls: { used: state.outerRunCodeCalls, limit: state.policy.maxOuterRunCodeCalls },
     activeWallTimeMs: { used: activeWallTimeMs(state), limit: state.policy.maxActiveWallTimeMs },
-    totalTokens: { used: state.totalTokens, limit: state.policy.maxTotalTokens },
+    assistantOutputTokens: {
+      used: state.assistantOutputTokens,
+      limit: state.policy.maxAssistantOutputTokens,
+    },
     totalSubCalls: { used: state.totalSubCalls, limit: state.policy.maxTotalSubCalls ?? null },
     nestedWrites: { used: state.nestedWrites, limit: state.policy.maxNestedWrites ?? null },
     nestedRuns: { used: state.nestedRuns, limit: state.policy.maxNestedRuns ?? null },
