@@ -584,9 +584,8 @@ function updateStatus(ctx: ExtensionContext, mode: PtcMode, budget?: PtcBudgetSt
     return;
   }
   const label = mode === "ptc" ? "strict" : mode === "full" ? "full-rwx" : "both";
-  const model = budget?.policy.modelKey.split("/").at(-1) ?? "unknown";
   const calls = budget ? `${budget.outerRunCodeCalls}/${budget.policy.maxOuterRunCodeCalls}` : "0/?";
-  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `PTC ${label} · ${model} · calls ${calls}`));
+  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `PTC ${label} · calls ${calls}`));
 }
 
 const RESULT_CONTRACT_SCHEMA = Type.Optional(Type.Object({
@@ -776,7 +775,9 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   pi.on("message_end", (event, ctx) => {
     if (mode === "off" || event.message.role !== "assistant") return undefined;
     const activeBudget = ensureBudget(ctx);
-    recordAssistantTokens(activeBudget, event.message.usage?.totalTokens);
+    // Provider totalTokens includes the full input context on every turn. Charging it
+    // would make PTC unusable in long or compacted sessions, so only new output counts.
+    recordAssistantTokens(activeBudget, event.message.usage?.output);
     updateStatus(ctx, mode, activeBudget);
     if (!activeBudget.policy.normalizeJsonFence || !Array.isArray(event.message.content)) return undefined;
     if (event.message.content.some((part) => part.type === "toolCall")) return undefined;
