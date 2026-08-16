@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   SettingsManager,
   type ExtensionAPI,
@@ -5,6 +6,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "context-threshold";
+const MODEL_STATUS_KEY = "model-info";
+const MACHINE_STATUS_KEY = "machine-status";
 const BAR_WIDTH = 12;
 const DEFAULT_RESERVE_TOKENS = 16_384;
 
@@ -67,8 +70,45 @@ function renderBar(
   return bar;
 }
 
+let previousCpuSample: { idle: number; total: number } | undefined;
+
+function updateMachineStatus(ctx: ExtensionContext): void {
+  if (!ctx.hasUI) return;
+
+  const cpuSample = os.cpus().reduce(
+    (sample, cpu) => {
+      const times = cpu.times;
+      sample.idle += times.idle;
+      sample.total += times.user + times.nice + times.sys + times.idle + times.irq;
+      return sample;
+    },
+    { idle: 0, total: 0 },
+  );
+  const totalDelta = previousCpuSample
+    ? cpuSample.total - previousCpuSample.total
+    : 0;
+  const cpuPercent = previousCpuSample && totalDelta > 0
+    ? Math.round(
+        (1 - (cpuSample.idle - previousCpuSample.idle) / totalDelta) * 100,
+      )
+    : 0;
+  previousCpuSample = cpuSample;
+
+  const memoryPercent = Math.round(
+    ((os.totalmem() - os.freemem()) / os.totalmem()) * 100,
+  );
+  ctx.ui.setStatus(
+    MACHINE_STATUS_KEY,
+    `MEM ${memoryPercent}% CPU ${clamp(cpuPercent, 0, 100)}%`,
+  );
+}
+
 function updateStatus(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
+
+  const modelId = ctx.model?.id ?? "unknown-model";
+  const effort = ctx.thinkingLevel ?? "unknown-effort";
+  ctx.ui.setStatus(MODEL_STATUS_KEY, `${modelId}|${effort}`.padEnd(32));
 
   const usage = ctx.getContextUsage();
   const total = usage?.contextWindow ?? ctx.model?.contextWindow;
@@ -90,23 +130,60 @@ function updateStatus(ctx: ExtensionContext): void {
     : `${usedText}/${formatTokens(total)} auto-off`;
   const color = settings.enabled && used >= threshold ? "error" : "muted";
 
-  ctx.ui.setStatus(
-    STATUS_KEY,
-    `${ctx.ui.theme.fg("dim", "ctx")} ${bar} ${ctx.ui.theme.fg(color, detail)}`,
-  );
+  ctx.ui.setStatus(STATUS_KEY, `${bar} ${ctx.ui.theme.fg(color, detail)}`);
 }
 
 export default function contextPowerline(pi: ExtensionAPI): void {
-  const update = (_event: unknown, ctx: ExtensionContext) => updateStatus(ctx);
+  let activeContext: ExtensionContext | undefined;
+  let machineTimer: ReturnType<typeof setInterval> | undefined;
 
-  pi.on("session_start", update);
-  pi.on("context", update);
-  pi.on("message_end", update);
-  pi.on("agent_settled", update);
-  pi.on("session_compact", update);
-  pi.on("model_select", update);
+  const stopMachineTimer = () => {
+    activeContext = undefined;
+    previousCpuSample = undefined;
+    if (machineTimer) clearInterval(machineTimer);
+    machineTimer = undefined;
+  };
+
+  const refreshMachineStatus = () => {
+    const ctx = activeContext;
+    if (!ctx) return;
+    try {
+      updateMachineStatus(ctx);
+    } catch {
+      // A session replacement can invalidate ctx before a queued timer runs.
+      stopMachineTimer();
+    }
+  };
+
+  const startMachineTimer = (ctx: ExtensionContext) => {
+    stopMachineTimer();
+    activeContext = ctx;
+    refreshMachineStatus();
+    machineTimer = setInterval(refreshMachineStatus, 2_000);
+    machineTimer.unref?.();
+  };
+
+  const refresh = (_event: unknown, ctx: ExtensionContext) => {
+    activeContext = ctx;
+    updateStatus(ctx);
+    updateMachineStatus(ctx);
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    startMachineTimer(ctx);
+    updateStatus(ctx);
+  });
+  pi.on("context", refresh);
+  pi.on("message_end", refresh);
+  pi.on("agent_settled", refresh);
+  pi.on("session_compact", refresh);
+  pi.on("model_select", refresh);
+  pi.on("thinking_level_select", refresh);
 
   pi.on("session_shutdown", (_event, ctx) => {
+    stopMachineTimer();
+    ctx.ui.setStatus(MODEL_STATUS_KEY, undefined);
     ctx.ui.setStatus(STATUS_KEY, undefined);
+    ctx.ui.setStatus(MACHINE_STATUS_KEY, undefined);
   });
 }
