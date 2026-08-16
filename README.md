@@ -39,7 +39,7 @@
 
 ### `context-powerline.ts`
 
-在 Pi footer 中显示当前上下文使用量、自动压缩阈值和模型上下文窗口。
+在 Pi footer 中显示当前模型、推理等级、上下文使用量、自动压缩阈值，以及本机 CPU/内存占用。
 
 ### `usage-analytics.ts`
 
