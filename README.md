@@ -30,12 +30,12 @@
 
 使用 `/git-graph [1-2000]` 打开当前 Git 仓库的提交概览浮层，展示本地与远端引用，并自动折叠普通提交。
 
-### `subagent-sidebar.ts`
+### `sidebar.ts`
 
-显示子代理与 workflow 的运行状态、工具活动、上下文和用量信息。
+显示当前 Main/Pi 会话的模型、上下文组成、用量和缓存信息，不读取或展示子代理、工作流或子会话状态。
 
-- `/subagent-sidebar [show|hide|toggle|close]`
-- `Ctrl+Alt+S`：显示或隐藏侧边栏
+- `/sidebar [show|hide|toggle|close]`
+- `Ctrl+Alt+S`：显示或隐藏当前会话信息侧栏
 
 ### `context-powerline.ts`
 
@@ -70,7 +70,7 @@ pi -e /mnt/workspace/lilong/repos/pi-tsien-extension
 
 ## 避免重复加载
 
-以下三个 extension 当前仍保留独立副本：
+如果仍存在旧的独立 extension 副本，应先停用它们：
 
 ```text
 ~/.pi/agent/extensions/git-graph.ts
@@ -78,9 +78,9 @@ pi -e /mnt/workspace/lilong/repos/pi-tsien-extension
 ~/.pi/agent/extensions/context-powerline.ts
 ```
 
-在正式启用本 package 前，应先停用这些独立副本，否则 Pi 会同时加载两份，重名命令可能显示为 `/git-graph:1`、`/git-graph:2`。
+否则 Pi 可能同时加载两份 extension，重名命令可能显示为 `/git-graph:1`、`/git-graph:2`。当前会话信息侧栏由本 package 的 `extensions/sidebar.ts` 提供。
 
-本仓库创建过程不会自动修改或删除现有全局 extension。
+本仓库不会自动修改或删除其他全局 extension。
 
 ## 开发
 
