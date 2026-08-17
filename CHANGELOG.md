@@ -17,5 +17,5 @@
 ## 0.1.0
 
 - 集中管理 `git-graph` extension。
-- 集中管理 `subagent-sidebar` extension。
+- 将会话信息侧栏重命名为 `sidebar`，并移除子代理与工作流展示。
 - 集中管理 `context-powerline` extension。
