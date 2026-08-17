@@ -383,7 +383,6 @@ export default function (pi: ExtensionAPI) {
 						anchor: "center",
 						width: "96%",
 						minWidth: 52,
-						maxWidth: 130,
 						maxHeight: "80%",
 					},
 				},
