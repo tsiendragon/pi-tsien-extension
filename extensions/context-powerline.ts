@@ -99,7 +99,7 @@ function updateMachineStatus(ctx: ExtensionContext): void {
   );
   ctx.ui.setStatus(
     MACHINE_STATUS_KEY,
-    `MEM ${memoryPercent}% CPU ${clamp(cpuPercent, 0, 100)}%`,
+    `M/C ${memoryPercent}/${clamp(cpuPercent, 0, 100)}%`,
   );
 }
 
