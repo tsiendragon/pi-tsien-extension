@@ -41,6 +41,34 @@
 
 在 Pi footer 中显示当前模型、推理等级、上下文使用量、自动压缩阈值，以及本机 CPU/内存占用。
 
+### `running-commands.ts`
+
+在现有 Powerline 正上方统一显示前台 Agent Bash 与显式后台任务，不改变普通 Bash 的前台执行语义。
+
+- 依赖支持 `pre-powerline v1` 插槽的 `pi-zero`；缺少时只禁用命令界面，不影响命令执行。
+- 输入框严格为空时按 `↑` 聚焦命令列表；空格、换行、IME 输入或其他内容均保持原编辑行为。
+- 输入为空且有运行命令时，`Ctrl+↑/Ctrl+↓` 仍用于浏览输入历史。
+- 命令列表使用 `↑/↓` 选择、`Enter` 查看实时输出、`Esc` 返回输入框。
+- 输出视图使用 `↑/↓` 或 `PageUp/PageDown` 滚动、`←/→` 跨前后台任务切换、`End` 恢复跟随、`Esc` 返回列表。
+- 前台命令默认保持同步；只有 Agent 明确调用 `background_command_start` 才会后台运行。
+- 后台能力提供 `background_command_start`、`background_command_status`、`background_command_output` 和 `background_command_cancel` 四个 Tool；启动时可传可选 `title`，用于列表、输出视图和完成通知，未传时回退到清理后的 Bash 内容。
+- 每个 Session 最多同时运行 4 个后台任务；每条任务内存尾部最多 50KB，完整合并输出写入 Session 隔离日志，单文件上限 1GiB。
+- 后台任务与主 Agent 共享工作目录；首次启动时会提示并发修改风险。
+- `/reload` 会在同一 Pi 进程内重新绑定任务；`/new`、`/resume`、正常退出及扩展失联会终止任务并清理日志。
+- 完成摘要只排入下一次用户 Turn，不会自动触发模型请求。
+- 设置 `backgroundCommands.enabled: false` 可仅关闭并清理后台 Tool，保留阶段一界面和普通 Bash；项目级覆盖只在项目已受信任时生效。
+- 当前阶段仍不提供 `Ctrl+B` 动态后台化或 `/tasks` 管理界面。
+
+```json
+{
+  "backgroundCommands": {
+    "enabled": false
+  }
+}
+```
+
+如果另一个 Extension 已接管自定义 Editor，命令状态仍会显示，但按键聚焦会停用并给出警告，避免静默覆盖。
+
 ### `usage-analytics.ts`
 
 在本地统计 Tool 与 Skill 的使用频率，不上传提示词、参数或输出，也不会自动卸载任何能力。
