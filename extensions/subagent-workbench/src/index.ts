@@ -25,6 +25,7 @@ import {
 import {
   WorkbenchController,
   type WorkbenchJobQuery,
+  type WorkbenchWorkflowPreflight,
   type WorkbenchWorkflowResult,
 } from "./workbench-controller.ts";
 import type { WorkbenchJobSnapshot } from "./job-registry.ts";
@@ -129,6 +130,32 @@ const WorkflowTaskParams = Type.Object({
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(ThinkingLevelParam),
   context: Type.Optional(Type.String()),
+  outputSchema: Type.Optional(
+    Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        "Optional JSON Schema. Each complete task output must be valid JSON matching this schema.",
+    }),
+  ),
+  when: Type.Optional(
+    Type.Union([Type.Boolean(), Type.String()], {
+      description:
+        "Bounded condition: boolean, one template reference, or ==/!= against a JSON primitive.",
+    }),
+  ),
+  foreach: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Template reference resolving to a JSON array. Each item runs one child task with {{item}} and {{index}} available.",
+    }),
+  ),
+  maxItems: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 8,
+      description: "Hard foreach expansion bound; defaults to eight.",
+    }),
+  ),
 });
 
 const WorkflowStageParams = Type.Object({
@@ -138,6 +165,12 @@ const WorkflowStageParams = Type.Object({
 
 const WorkflowToolParams = Type.Object({
   label: Type.Optional(Type.String()),
+  parameters: Type.Optional(
+    Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        "JSON values available to reusable Workflow templates through parameters.<name>.",
+    }),
+  ),
   name: Type.Optional(
     Type.String({
       pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
@@ -159,6 +192,12 @@ const WorkflowToolParams = Type.Object({
     Type.Boolean({
       description:
         "Return immediately while the workflow continues in the Workbench. Defaults to true; set false only when this turn must wait for the result.",
+    }),
+  ),
+  dryRun: Type.Optional(
+    Type.Boolean({
+      description:
+        "Validate and preview the Workflow without saving it, creating a Job, or starting child processes.",
     }),
   ),
 });
@@ -595,12 +634,41 @@ function boundedToolOutput(text: string): string {
   return `${text.slice(0, TOOL_OUTPUT_CHARS)}\n… output truncated; open /subagent-workbench for the retained transcript.`;
 }
 
+function workflowPreflightOutput(
+  preflight: WorkbenchWorkflowPreflight,
+): string {
+  const lines = [
+    `Workflow preflight · ${preflight.stages} Stages · ${preflight.taskDefinitions} definitions · up to ${preflight.maximumChildTasks} child tasks · ${preflight.availableSessionSlots} slots available`,
+  ];
+  for (const [stageIndex, stage] of preflight.items.entries()) {
+    lines.push(`\n## Stage ${stageIndex + 1}: ${stage.label}`);
+    for (const task of stage.tasks) {
+      const annotations = [
+        task.inputs.length ? `inputs=${task.inputs.join(",")}` : undefined,
+        task.conditional ? "conditional" : undefined,
+        task.foreachMaxItems === undefined
+          ? undefined
+          : `foreach<=${task.foreachMaxItems}`,
+      ].filter(Boolean);
+      lines.push(`- ${task.key}${annotations.length ? ` · ${annotations.join(" · ")}` : ""}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function workflowToolOutput(result: WorkbenchWorkflowResult): string {
   const lines = [
-    `Workflow ${result.label} (${result.workflowId}) · ${result.status}`,
+    `Workflow ${result.label} (${result.workflowId}) · ${result.status} · attempt ${result.attempt}`,
   ];
+  if (result.sourceWorkId) {
+    lines.push(
+      `Resumed from ${result.sourceWorkId} at Stage ${result.resumedFromStage ?? 1}.`,
+    );
+  }
   for (const stage of result.stages) {
-    lines.push(`\n## ${stage.label} · ${stage.status}`);
+    lines.push(
+      `\n## ${stage.label} · ${stage.status}${stage.reused ? " · reused" : ""}`,
+    );
     for (const task of stage.tasks) {
       lines.push(`\n### ${task.label} · ${task.status}`);
       if (task.output) lines.push(task.output);
@@ -876,9 +944,11 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             throw new TypeError("Provide stages or a saved workflow name.");
           }
           const workflowLabel = params.label ?? loaded?.label;
+          const workflowParameters = params.parameters ?? loaded?.parameters;
           const background = params.background ?? true;
           const request = {
             label: workflowLabel,
+            parameters: workflowParameters,
             cwd: ctx.cwd,
             model: currentModel(ctx),
             thinking: currentThinking(ctx),
@@ -894,14 +964,29 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
                 model: task.model || currentModel(ctx),
                 thinking: task.thinking ?? currentThinking(ctx),
                 context: task.context,
+                outputSchema: task.outputSchema,
+                when: task.when,
+                foreach: task.foreach,
+                maxItems: task.maxItems,
               })),
             })),
           };
-          current.validateWorkflowRequest(request);
+          const preflight = current.preflightWorkflow(request);
+          if (params.dryRun) {
+            return {
+              content: [{ type: "text", text: workflowPreflightOutput(preflight) }],
+              details: {
+                status: "completed",
+                dryRun: true,
+                preflight,
+              },
+            };
+          }
           const savedPath = params.saveAs
             ? await saveWorkflowDefinition(ctx.cwd, params.saveAs, {
                 version: SAVED_WORKFLOW_VERSION,
                 label: workflowLabel,
+                parameters: workflowParameters,
                 stages: sourceStages,
               })
             : undefined;
@@ -972,12 +1057,12 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow_control",
       label: "Control Subagent Workflow",
       description:
-        "Pause a running workflow at the next stage boundary, resume it, or retry a terminal workflow from its retained definition.",
+        "Pause a running workflow at the next stage boundary, resume it, or retry a terminal workflow as a new attempt that reuses completed Stages.",
       promptSnippet:
         "Pause, resume, or retry a workflow by its workId without rebuilding the request.",
       promptGuidelines: [
         "Pause is cooperative: already-running tasks finish, and the next stage waits.",
-        "Retry creates a new background workId and reruns the retained definition.",
+        "Retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage.",
       ],
       executionMode: "sequential",
       parameters: WorkflowControlParams,
@@ -1041,6 +1126,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
         void retry.completion.catch(() => {
           // The new durable job record retains the retry failure.
         });
+        const retryJob = current.getJobs([retry.handle.workId]).pending[0];
         return {
           content: [
             {
@@ -1053,6 +1139,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             action: params.action,
             sourceWorkId: params.workId,
             workId: retry.handle.workId,
+            attempt: retryJob?.attempt,
           },
         };
       },

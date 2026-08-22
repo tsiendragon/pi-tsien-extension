@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import type { TSchema } from "typebox";
+import { Check } from "typebox/value";
 import {
   WorkbenchJobRegistry,
   type WorkbenchJobSnapshot,
@@ -20,6 +22,12 @@ import {
   type SubagentServiceEvent,
 } from "./subagent-service.ts";
 import {
+  evaluateWorkflowWhen,
+  resolveWorkflowForeach,
+  resolveWorkflowTemplate,
+  type WorkflowExpressionContext,
+} from "./workflow-expression.ts";
+import {
   WorkbenchRuntimeHost,
   type ConversationAssistantBlock,
   type ConversationAvailability,
@@ -30,6 +38,7 @@ import {
   type WorkflowStageRecord,
   type WorkflowStatus,
   type WorkflowTaskRecord,
+  type WorkflowTaskStatus,
   type WorkbenchCommand,
   type WorkbenchCommandResult,
 } from "./runtime.ts";
@@ -116,6 +125,14 @@ export interface WorkbenchWorkflowTaskRequest extends WorkbenchAgentRequest {
   readonly key?: string;
   /** Keys from earlier stages whose outputs are appended to explicit context. */
   readonly inputs?: readonly string[];
+  /** Optional JSON Schema applied to each complete task output. */
+  readonly outputSchema?: Readonly<Record<string, unknown>>;
+  /** Minimal declarative condition resolved at the Stage boundary. */
+  readonly when?: boolean | string;
+  /** Template reference resolving to an array for bounded fan-out. */
+  readonly foreach?: string;
+  /** Required upper bound for foreach expansion; defaults to eight. */
+  readonly maxItems?: number;
 }
 
 export interface WorkbenchWorkflowStageRequest {
@@ -130,7 +147,20 @@ export interface WorkbenchWorkflowRequest {
   readonly cwd: string;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
+  readonly parameters?: Readonly<Record<string, unknown>>;
   readonly signal?: AbortSignal;
+}
+
+export interface WorkbenchWorkflowIterationResult {
+  readonly index: number;
+  readonly item: unknown;
+  readonly status: Exclude<WorkflowTaskStatus, "queued" | "running" | "idle">;
+  readonly sessionId?: string;
+  readonly runId?: string;
+  readonly output?: string;
+  readonly json?: unknown;
+  readonly model?: string;
+  readonly error?: string;
 }
 
 export interface WorkbenchWorkflowTaskResult extends WorkflowTaskRecord {
@@ -139,6 +169,7 @@ export interface WorkbenchWorkflowTaskResult extends WorkflowTaskRecord {
   readonly json?: unknown;
   readonly model?: string;
   readonly reused?: boolean;
+  readonly iterations?: readonly WorkbenchWorkflowIterationResult[];
 }
 
 export interface WorkbenchWorkflowStageResult {
@@ -147,6 +178,22 @@ export interface WorkbenchWorkflowStageResult {
   readonly status: WorkflowStatus;
   readonly tasks: readonly WorkbenchWorkflowTaskResult[];
   readonly reused?: boolean;
+}
+
+export interface WorkbenchWorkflowPreflight {
+  readonly stages: number;
+  readonly taskDefinitions: number;
+  readonly maximumChildTasks: number;
+  readonly availableSessionSlots: number;
+  readonly items: readonly {
+    readonly label: string;
+    readonly tasks: readonly {
+      readonly key: string;
+      readonly inputs: readonly string[];
+      readonly conditional: boolean;
+      readonly foreachMaxItems?: number;
+    }[];
+  }[];
 }
 
 export interface WorkbenchWorkflowResult {
@@ -166,13 +213,14 @@ interface MutableWorkflowTaskResult {
   key: string;
   label: string;
   task: string;
-  status: ConversationStatus;
+  status: WorkflowTaskStatus;
   sessionId?: string;
   runId?: string;
   output?: string;
   json?: unknown;
   model?: string;
   reused?: boolean;
+  iterations?: WorkbenchWorkflowIterationResult[];
   error?: string;
 }
 
@@ -204,6 +252,35 @@ interface WorkflowRetryContext {
 }
 
 const WORKFLOW_TASK_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const WORKFLOW_TASK_REFERENCE =
+  /{{\s*tasks\.([A-Za-z][A-Za-z0-9_-]{0,63})\.(?:output|json(?:\.[^{}\s]+)?)\s*}}/g;
+const WORKFLOW_PARAMETER_REFERENCE =
+  /{{\s*parameters\.([A-Za-z][A-Za-z0-9_-]{0,63})\s*}}/g;
+
+function workflowTemplateValues(
+  task: WorkbenchWorkflowTaskRequest,
+): readonly string[] {
+  return [
+    task.task,
+    task.label,
+    task.context,
+    typeof task.when === "string" ? task.when : undefined,
+    task.foreach,
+  ].filter((value): value is string => value !== undefined);
+}
+
+function templateReferences(
+  pattern: RegExp,
+  values: readonly string[],
+): readonly string[] {
+  const references = new Set<string>();
+  for (const value of values) {
+    pattern.lastIndex = 0;
+    for (const match of value.matchAll(pattern)) references.add(match[1]!);
+  }
+  pattern.lastIndex = 0;
+  return [...references];
+}
 
 function workflowTaskKey(
   task: WorkbenchWorkflowTaskRequest,
@@ -211,6 +288,19 @@ function workflowTaskKey(
   taskIndex: number,
 ): string {
   return task.key?.trim() || `stage${stageIndex + 1}_task${taskIndex + 1}`;
+}
+
+function workflowSessionDemand(request: WorkbenchWorkflowRequest): number {
+  return request.stages.reduce(
+    (total, stage) =>
+      total +
+      stage.tasks.reduce(
+        (stageTotal, task) =>
+          stageTotal + (task.foreach ? (task.maxItems ?? 8) : 1),
+        0,
+      ),
+    0,
+  );
 }
 
 function reusableWorkflowRequest(
@@ -221,6 +311,9 @@ function reusableWorkflowRequest(
     cwd: request.cwd,
     model: request.model,
     thinking: request.thinking,
+    parameters: request.parameters
+      ? structuredClone(request.parameters)
+      : undefined,
     stages: request.stages.map((stage) => ({
       label: stage.label,
       tasks: stage.tasks.map((task) => ({
@@ -232,6 +325,12 @@ function reusableWorkflowRequest(
         context: task.context,
         key: task.key,
         inputs: task.inputs ? [...task.inputs] : undefined,
+        outputSchema: task.outputSchema
+          ? structuredClone(task.outputSchema)
+          : undefined,
+        when: task.when,
+        foreach: task.foreach,
+        maxItems: task.maxItems,
       })),
     })),
   };
@@ -249,11 +348,115 @@ function workflowTaskContext(
     );
   }
   for (const key of task.inputs ?? []) {
+    if (!outputs.has(key)) {
+      throw new TypeError(
+        `Workflow input ${key} is unavailable because its producer did not complete.`,
+      );
+    }
     sections.push(
-      `## Workflow input: ${key}\n\n<workflow_input key="${key}">\n${outputs.get(key) ?? ""}\n</workflow_input>`,
+      `## Workflow input: ${key}\n\n<workflow_input key="${key}">\n${outputs.get(key)!}\n</workflow_input>`,
     );
   }
   return sections.length ? sections.join("\n\n") : undefined;
+}
+
+function workflowExpressionContext(
+  parameters: Readonly<Record<string, unknown>> | undefined,
+  taskResults: ReadonlyMap<string, { readonly output: string; readonly json?: unknown }>,
+  iteration?: { readonly item: unknown; readonly index: number },
+): WorkflowExpressionContext {
+  const tasks: Record<
+    string,
+    { readonly output: string; readonly json?: unknown }
+  > = Object.create(null) as Record<
+    string,
+    { readonly output: string; readonly json?: unknown }
+  >;
+  for (const [key, result] of taskResults) tasks[key] = result;
+  return {
+    parameters: parameters ?? {},
+    tasks,
+    ...(iteration ? { item: iteration.item, index: iteration.index } : {}),
+  };
+}
+
+function resolvedWorkflowString(
+  value: string | undefined,
+  context: WorkflowExpressionContext,
+): string | undefined {
+  if (value === undefined) return undefined;
+  return resolveWorkflowTemplate(value, context) as string;
+}
+
+function assertJsonValue(
+  value: unknown,
+  location: string,
+  seen = new WeakSet<object>(),
+): void {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError(`${location} must contain finite JSON numbers.`);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`${location} must contain only JSON values.`);
+  }
+  if (seen.has(value)) throw new TypeError(`${location} must not contain cycles.`);
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      assertJsonValue(item, `${location}[${index}]`, seen),
+    );
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(`${location} must contain only plain JSON objects.`);
+    }
+    for (const [key, item] of Object.entries(value)) {
+      if (["__proto__", "prototype", "constructor"].includes(key)) {
+        throw new TypeError(`${location} contains a forbidden key: ${key}.`);
+      }
+      assertJsonValue(item, `${location}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function parseStructuredOutput(
+  output: string,
+  schema: Readonly<Record<string, unknown>>,
+): unknown {
+  let text = output.trim();
+  const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  if (fenced) text = fenced[1]!.trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (cause) {
+    throw new TypeError("Task output is not valid JSON for outputSchema.", {
+      cause,
+    });
+  }
+  let matches = false;
+  try {
+    matches = Check(schema as TSchema, parsed);
+  } catch (cause) {
+    throw new TypeError("outputSchema is not a supported JSON Schema.", {
+      cause,
+    });
+  }
+  if (!matches) {
+    throw new TypeError("Task JSON output does not match outputSchema.");
+  }
+  return parsed;
 }
 
 function positiveInteger(name: string, value: number): number {
@@ -437,10 +640,7 @@ export class WorkbenchController {
   ): WorkbenchSubmission<WorkbenchWorkflowResult> {
     if (this.disposed) throw new Error("Workbench controller is disposed.");
     this.validateWorkflowRequest(request);
-    const reservedSessionSlots = request.stages.reduce(
-      (total, stage) => total + stage.tasks.length,
-      0,
-    );
+    const reservedSessionSlots = workflowSessionDemand(request);
     const created = this.jobs.create({
       kind: "workflow",
       label: request.label?.trim() || "Workflow",
@@ -596,6 +796,26 @@ export class WorkbenchController {
     ownedReservation = 0,
   ): void {
     if (!request.cwd?.trim()) throw new TypeError("cwd must not be empty.");
+    if (request.parameters !== undefined) {
+      if (
+        typeof request.parameters !== "object" ||
+        request.parameters === null ||
+        Array.isArray(request.parameters)
+      ) {
+        throw new TypeError("Workflow parameters must be a JSON object.");
+      }
+      assertJsonValue(request.parameters, "workflow.parameters");
+      for (const key of Object.keys(request.parameters)) {
+        if (!WORKFLOW_TASK_KEY.test(key)) {
+          throw new TypeError(
+            `Invalid Workflow parameter ${JSON.stringify(key)}; use the task-key grammar.`,
+          );
+        }
+      }
+      if (Buffer.byteLength(JSON.stringify(request.parameters), "utf8") > 16 * 1024) {
+        throw new TypeError("Workflow parameters exceed 16 KiB.");
+      }
+    }
     if (request.stages.length < 1 || request.stages.length > 8) {
       throw new TypeError("A workflow requires between one and eight stages.");
     }
@@ -603,6 +823,7 @@ export class WorkbenchController {
       (total, stage) => total + stage.tasks.length,
       0,
     );
+    const sessionDemand = workflowSessionDemand(request);
     if (
       request.stages.some(
         (stage) => stage.tasks.length < 1 || stage.tasks.length > 8,
@@ -618,9 +839,9 @@ export class WorkbenchController {
         this.reservedWorkflowSessions +
         ownedReservation,
     );
-    if (totalTasks > availableSessions) {
+    if (sessionDemand > availableSessions) {
       throw new TypeError(
-        `Workflow has ${totalTasks} tasks; provider has ${availableSessions} available session slots (${provider.sessions}/${provider.limit} in use). Keep the entire workflow within ${availableSessions} tasks.`,
+        `Workflow may start ${sessionDemand} tasks from ${totalTasks} definitions; provider has ${availableSessions} available session slots (${provider.sessions}/${provider.limit} in use). Keep the entire workflow within ${availableSessions} tasks.`,
       );
     }
 
@@ -633,6 +854,44 @@ export class WorkbenchController {
         const task = stage.tasks[taskIndex]!;
         const invalid = this.invalidTask(task.task);
         if (invalid) throw new TypeError(invalid);
+        if (
+          task.when !== undefined &&
+          typeof task.when !== "boolean" &&
+          typeof task.when !== "string"
+        ) {
+          throw new TypeError("Workflow task when must be a boolean or string.");
+        }
+        if (task.foreach !== undefined) {
+          if (typeof task.foreach !== "string" || !task.foreach.trim()) {
+            throw new TypeError("Workflow task foreach must be a template string.");
+          }
+          if (
+            task.maxItems !== undefined &&
+            (!Number.isSafeInteger(task.maxItems) ||
+              task.maxItems < 0 ||
+              task.maxItems > 8)
+          ) {
+            throw new TypeError("Workflow task maxItems must be between zero and eight.");
+          }
+        } else if (task.maxItems !== undefined) {
+          throw new TypeError("Workflow task maxItems requires foreach.");
+        }
+        if (task.outputSchema !== undefined) {
+          if (
+            typeof task.outputSchema !== "object" ||
+            task.outputSchema === null ||
+            Array.isArray(task.outputSchema)
+          ) {
+            throw new TypeError("outputSchema must be a JSON Schema object.");
+          }
+          assertJsonValue(task.outputSchema, "outputSchema");
+          if (
+            Buffer.byteLength(JSON.stringify(task.outputSchema), "utf8") >
+            16 * 1024
+          ) {
+            throw new TypeError("outputSchema exceeds 16 KiB.");
+          }
+        }
         const key = workflowTaskKey(task, stageIndex, taskIndex);
         if (!WORKFLOW_TASK_KEY.test(key)) {
           throw new TypeError(
@@ -641,6 +900,37 @@ export class WorkbenchController {
         }
         if (allKeys.has(key)) {
           throw new TypeError(`Duplicate workflow task key: ${key}`);
+        }
+        const templateValues = workflowTemplateValues(task);
+        for (const reference of templateReferences(
+          WORKFLOW_TASK_REFERENCE,
+          templateValues,
+        )) {
+          if (!previousKeys.has(reference)) {
+            throw new TypeError(
+              `Workflow task ${key} template reference ${reference} must target an earlier Stage.`,
+            );
+          }
+        }
+        for (const reference of templateReferences(
+          WORKFLOW_PARAMETER_REFERENCE,
+          templateValues,
+        )) {
+          if (!Object.prototype.hasOwnProperty.call(request.parameters ?? {}, reference)) {
+            throw new TypeError(
+              `Workflow task ${key} references missing parameter: ${reference}`,
+            );
+          }
+        }
+        if (
+          !task.foreach &&
+          templateValues.some((value) =>
+            /{{\s*(?:item|index)\s*}}/.test(value),
+          )
+        ) {
+          throw new TypeError(
+            `Workflow task ${key} can use item or index only with foreach.`,
+          );
         }
         allKeys.add(key);
         stageKeys.push(key);
@@ -662,6 +952,36 @@ export class WorkbenchController {
       }
       for (const key of stageKeys) previousKeys.add(key);
     }
+  }
+
+  preflightWorkflow(
+    request: WorkbenchWorkflowRequest,
+  ): WorkbenchWorkflowPreflight {
+    this.validateWorkflowRequest(request);
+    const provider = this.provider.snapshot();
+    return {
+      stages: request.stages.length,
+      taskDefinitions: request.stages.reduce(
+        (total, stage) => total + stage.tasks.length,
+        0,
+      ),
+      maximumChildTasks: workflowSessionDemand(request),
+      availableSessionSlots: Math.max(
+        0,
+        provider.limit - provider.sessions - this.reservedWorkflowSessions,
+      ),
+      items: request.stages.map((stage, stageIndex) => ({
+        label: stage.label?.trim() || `Stage ${stageIndex + 1}`,
+        tasks: stage.tasks.map((task, taskIndex) => ({
+          key: workflowTaskKey(task, stageIndex, taskIndex),
+          inputs: [...(task.inputs ?? [])],
+          conditional: task.when !== undefined,
+          ...(task.foreach
+            ? { foreachMaxItems: task.maxItems ?? 8 }
+            : {}),
+        })),
+      })),
+    };
   }
 
   async runWorkflow(
@@ -753,6 +1073,10 @@ export class WorkbenchController {
     let currentStage = resumeFromStage;
     let workflowError: string | undefined;
     const outputs = new Map<string, string>();
+    const expressionTaskResults = new Map<
+      string,
+      { readonly output: string; readonly json?: unknown }
+    >();
     if (retry) {
       for (let stageIndex = 0; stageIndex < resumeFromStage; stageIndex++) {
         const stage = stages[stageIndex]!;
@@ -766,8 +1090,18 @@ export class WorkbenchController {
           task.output = previousTask.output;
           task.json = previousTask.json;
           task.model = previousTask.model;
+          task.iterations = previousTask.iterations
+            ? previousTask.iterations.map((iteration) => ({ ...iteration }))
+            : undefined;
           task.reused = true;
-          outputs.set(task.key, previousTask.output ?? "");
+          const output = previousTask.output ?? "";
+          outputs.set(task.key, output);
+          expressionTaskResults.set(task.key, {
+            output,
+            ...(previousTask.json === undefined
+              ? {}
+              : { json: previousTask.json }),
+          });
         }
       }
     }
@@ -820,35 +1154,156 @@ export class WorkbenchController {
           sourceStage.tasks.map(async (task, taskIndex) => {
             const taskResult = stage.tasks[taskIndex]!;
             try {
-              const context = workflowTaskContext(task, outputs);
-              const result = await this.service.start({
-                task: task.task,
-                label: taskResult.label,
-                isolation: "process",
-                foreground: false,
-                cwd: task.cwd || request.cwd,
-                model: task.model || request.model,
-                thinking: task.thinking ?? request.thinking,
-                parentId: taskResult.id,
-                workflowId,
-                signal: abort.signal,
-                ...(context
-                  ? {
-                      contextMode: "explicit" as const,
-                      context,
-                    }
-                  : {}),
-              });
-              taskResult.sessionId = result.sessionId;
-              taskResult.runId = result.runId;
-              taskResult.output = result.output;
-              taskResult.model = result.model;
-              taskResult.status = abort.signal.aborted
-                ? "cancelled"
-                : result.isError
-                  ? "failed"
-                  : "completed";
-              taskResult.error = result.errorMessage;
+              const baseContext = workflowExpressionContext(
+                request.parameters,
+                expressionTaskResults,
+              );
+              if (!evaluateWorkflowWhen(task.when, baseContext)) {
+                taskResult.status = "skipped";
+                publish();
+                return;
+              }
+              const items = task.foreach
+                ? resolveWorkflowForeach(
+                    task.foreach,
+                    baseContext,
+                    task.maxItems ?? 8,
+                  )
+                : undefined;
+              if (items?.length === 0) {
+                taskResult.status = "skipped";
+                taskResult.iterations = [];
+                publish();
+                return;
+              }
+
+              const runInstance = async (
+                item: unknown,
+                index: number,
+              ): Promise<WorkbenchWorkflowIterationResult> => {
+                const iteration = task.foreach ? { item, index } : undefined;
+                const context = workflowExpressionContext(
+                  request.parameters,
+                  expressionTaskResults,
+                  iteration,
+                );
+                const resolvedTask = resolvedWorkflowString(task.task, context)!;
+                const resolvedContext = resolvedWorkflowString(
+                  task.context,
+                  context,
+                );
+                const resolvedLabel =
+                  resolvedWorkflowString(task.label, context)?.trim() ||
+                  taskResult.label;
+                if (!task.foreach) taskResult.label = resolvedLabel;
+                const explicitContext = workflowTaskContext(
+                  { ...task, context: resolvedContext },
+                  outputs,
+                );
+                try {
+                  const result = await this.service.start({
+                    task: resolvedTask,
+                    label: task.foreach
+                      ? `${resolvedLabel} [${index + 1}]`
+                      : resolvedLabel,
+                    isolation: "process",
+                    foreground: false,
+                    cwd: task.cwd || request.cwd,
+                    model: task.model || request.model,
+                    thinking: task.thinking ?? request.thinking,
+                    parentId: task.foreach
+                      ? `${taskResult.id}:iteration:${index + 1}`
+                      : taskResult.id,
+                    workflowId,
+                    signal: abort.signal,
+                    ...(explicitContext
+                      ? {
+                          contextMode: "explicit" as const,
+                          context: explicitContext,
+                        }
+                      : {}),
+                  });
+                  let json: unknown;
+                  try {
+                    json =
+                      !abort.signal.aborted &&
+                      !result.isError &&
+                      task.outputSchema
+                        ? parseStructuredOutput(result.output, task.outputSchema)
+                        : undefined;
+                  } catch (error) {
+                    return {
+                      index,
+                      item,
+                      status: "failed",
+                      sessionId: result.sessionId,
+                      runId: result.runId,
+                      output: result.output,
+                      ...(result.model ? { model: result.model } : {}),
+                      error: errorMessage(error),
+                    };
+                  }
+                  return {
+                    index,
+                    item,
+                    status: abort.signal.aborted
+                      ? "cancelled"
+                      : result.isError
+                        ? "failed"
+                        : "completed",
+                    sessionId: result.sessionId,
+                    runId: result.runId,
+                    output: result.output,
+                    ...(json === undefined ? {} : { json }),
+                    ...(result.model ? { model: result.model } : {}),
+                    ...(result.errorMessage
+                      ? { error: result.errorMessage }
+                      : {}),
+                  };
+                } catch (error) {
+                  return {
+                    index,
+                    item,
+                    status: abort.signal.aborted ? "cancelled" : "failed",
+                    error: errorMessage(error),
+                  };
+                }
+              };
+
+              if (!items) {
+                const result = await runInstance(undefined, 0);
+                taskResult.status = result.status;
+                taskResult.sessionId = result.sessionId;
+                taskResult.runId = result.runId;
+                taskResult.output = result.output;
+                taskResult.json = result.json;
+                taskResult.model = result.model;
+                taskResult.error = result.error;
+              } else {
+                taskResult.status = "running";
+                publish();
+                const iterations = await Promise.all(
+                  items.map((item, index) => runInstance(item, index)),
+                );
+                taskResult.iterations = iterations;
+                const failed = iterations.find(
+                  (iteration) => iteration.status !== "completed",
+                );
+                taskResult.status = abort.signal.aborted
+                  ? "cancelled"
+                  : failed
+                    ? "failed"
+                    : "completed";
+                taskResult.error = failed?.error;
+                const aggregate = iterations.map(
+                  (iteration) => iteration.json ?? iteration.output ?? null,
+                );
+                taskResult.json = aggregate;
+                taskResult.output = JSON.stringify(aggregate);
+                taskResult.model = iterations.find(
+                  (iteration) => iteration.model,
+                )?.model;
+              }
             } catch (error) {
               taskResult.status = abort.signal.aborted ? "cancelled" : "failed";
               taskResult.error = errorMessage(error);
@@ -864,7 +1319,12 @@ export class WorkbenchController {
           }
           break;
         }
-        if (stage.tasks.some((task) => task.status !== "completed")) {
+        if (
+          stage.tasks.some(
+            (task) =>
+              task.status !== "completed" && task.status !== "skipped",
+          )
+        ) {
           stage.status = "failed";
           status = "failed";
           workflowError = stage.tasks.find((task) => task.error)?.error;
@@ -877,7 +1337,13 @@ export class WorkbenchController {
         }
         stage.status = "completed";
         for (const task of stage.tasks) {
-          outputs.set(task.key, task.output ?? "");
+          if (task.status !== "completed") continue;
+          const output = task.output ?? "";
+          outputs.set(task.key, output);
+          expressionTaskResults.set(task.key, {
+            output,
+            ...(task.json === undefined ? {} : { json: task.json }),
+          });
         }
         publish();
       }
@@ -920,6 +1386,9 @@ export class WorkbenchController {
           ...(task.json === undefined ? {} : { json: task.json }),
           ...(task.model ? { model: task.model } : {}),
           ...(task.reused ? { reused: true } : {}),
+          ...(task.iterations
+            ? { iterations: task.iterations.map((iteration) => ({ ...iteration })) }
+            : {}),
           ...(task.error ? { error: task.error } : {}),
         })),
       })),
@@ -983,9 +1452,12 @@ export class WorkbenchController {
     const sessionIds = [
       ...new Set(
         stages.flatMap((stage) =>
-          stage.tasks.flatMap((task) =>
-            task.sessionId ? [task.sessionId] : [],
-          ),
+          stage.tasks.flatMap((task) => [
+            ...(task.sessionId ? [task.sessionId] : []),
+            ...(task.iterations ?? []).flatMap((iteration) =>
+              iteration.sessionId ? [iteration.sessionId] : [],
+            ),
+          ]),
         ),
       ),
     ];

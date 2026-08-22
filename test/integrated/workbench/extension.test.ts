@@ -215,10 +215,16 @@ describe("Pi extension", () => {
         {
           label: "Saved review",
           saveAs: "review-flow",
+          parameters: { country: "IQ" },
           stages: [
             {
               tasks: [
-                { key: "review", task: "Review implementation" },
+                {
+                  key: "review",
+                  task: "Review {{parameters.country}} implementation",
+                  when: "{{parameters.country}} == \"IQ\"",
+                  outputSchema: { type: "object" },
+                },
               ],
             },
           ],
@@ -237,6 +243,7 @@ describe("Pi extension", () => {
       expect(JSON.parse(await readFile(expectedPath, "utf8"))).toMatchObject({
         version: 1,
         label: "Saved review",
+        parameters: { country: "IQ" },
       });
 
       await tools.get("subagent_workflow").execute(
@@ -249,12 +256,15 @@ describe("Pi extension", () => {
       expect(submitWorkflow).toHaveBeenLastCalledWith(
         expect.objectContaining({
           label: "Saved review",
+          parameters: { country: "IQ" },
           stages: [
             expect.objectContaining({
               tasks: [
                 expect.objectContaining({
                   key: "review",
-                  task: "Review implementation",
+                  task: "Review {{parameters.country}} implementation",
+                  when: "{{parameters.country}} == \"IQ\"",
+                  outputSchema: { type: "object" },
                 }),
               ],
             }),
@@ -262,6 +272,75 @@ describe("Pi extension", () => {
         }),
         true,
       );
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler();
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("previews a Workflow without saving or submitting it", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "workflow-dry-run-"));
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const submitWorkflow = vi.spyOn(
+      WorkbenchController.prototype,
+      "submitWorkflow",
+    );
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+    };
+    subagentWorkbench(pi as any);
+
+    try {
+      const result = await tools.get("subagent_workflow").execute(
+        "dry-run",
+        {
+          dryRun: true,
+          saveAs: "must-not-save",
+          parameters: { files: ["a.ts", "b.ts"] },
+          stages: [
+            {
+              label: "Inspect",
+              tasks: [
+                {
+                  key: "inspect",
+                  foreach: "{{parameters.files}}",
+                  maxItems: 2,
+                  task: "Inspect {{item}}",
+                },
+              ],
+            },
+          ],
+        },
+        new AbortController().signal,
+        undefined,
+        { cwd, hasUI: false, ui: { notify: vi.fn() } },
+      );
+
+      expect(result).toMatchObject({
+        details: {
+          status: "completed",
+          dryRun: true,
+          preflight: {
+            stages: 1,
+            taskDefinitions: 1,
+            maximumChildTasks: 2,
+          },
+        },
+      });
+      expect(result.content[0].text).toContain("foreach<=2");
+      expect(submitWorkflow).not.toHaveBeenCalled();
+      await expect(
+        readFile(path.join(cwd, ".pi", "workflows", "must-not-save.json")),
+      ).rejects.toThrow();
     } finally {
       for (const handler of handlers.get("session_shutdown") ?? []) {
         await handler();

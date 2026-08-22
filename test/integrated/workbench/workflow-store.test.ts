@@ -33,6 +33,10 @@ describe("workflow definition store", () => {
     const definition: SavedWorkflowDefinition = {
       version: SAVED_WORKFLOW_VERSION,
       label: "Review pipeline",
+      parameters: {
+        country: "IQ",
+        files: ["README.md", "package.json"],
+      },
       stages: [
         {
           label: "Review",
@@ -46,6 +50,13 @@ describe("workflow definition store", () => {
               thinking: "high",
               context: "Focus on correctness.",
               inputs: ["implementation"],
+              when: '{{parameters.country}} == "IQ"',
+              foreach: "{{parameters.files}}",
+              maxItems: 2,
+              outputSchema: {
+                type: "object",
+                properties: { passed: { type: "boolean" } },
+              },
             },
           ],
         },
