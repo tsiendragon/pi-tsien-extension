@@ -17,6 +17,7 @@ const context: WorkflowExpressionContext = {
   tasks: {
     collect: {
       output: JSON.stringify({ result: { count: 2, ok: true }, items: [1, 2] }),
+      json: { result: { count: 2, ok: true }, items: [1, 2] },
     },
     summary: { output: "ready" },
     invalidJson: { output: "not-json" },
@@ -56,6 +57,16 @@ describe("workflow expressions", () => {
     expect(
       evaluateWorkflowWhen("{{tasks.collect.json.result.ok}} == true", context),
     ).toBe(true);
+  });
+
+  it("resolves foreach item and index without executing code", () => {
+    expect(
+      resolveWorkflowTemplate("inspect {{item}} at {{index}}", {
+        ...context,
+        item: { file: "README.md" },
+        index: 3,
+      }),
+    ).toBe('inspect {"file":"README.md"} at 3');
   });
 
   it("returns foreach arrays without exposing the context array to mutation", () => {

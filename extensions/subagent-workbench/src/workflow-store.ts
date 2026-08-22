@@ -14,6 +14,10 @@ export interface SavedWorkflowTask {
   readonly thinking?: AgentThinkingLevel;
   readonly context?: string;
   readonly inputs?: readonly string[];
+  readonly outputSchema?: Readonly<Record<string, unknown>>;
+  readonly when?: boolean | string;
+  readonly foreach?: string;
+  readonly maxItems?: number;
 }
 
 export interface SavedWorkflowStage {
@@ -24,6 +28,7 @@ export interface SavedWorkflowStage {
 export interface SavedWorkflowDefinition {
   readonly version: typeof SAVED_WORKFLOW_VERSION;
   readonly label?: string;
+  readonly parameters?: Readonly<Record<string, unknown>>;
   readonly stages: readonly SavedWorkflowStage[];
 }
 
@@ -52,13 +57,66 @@ function assertOptionalString(
   }
 }
 
+function assertJsonValue(
+  value: unknown,
+  location: string,
+  seen = new WeakSet<object>(),
+): void {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError(`${location} must contain finite JSON numbers.`);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`${location} must contain only JSON values.`);
+  }
+  if (seen.has(value)) throw new TypeError(`${location} must not contain cycles.`);
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      assertJsonValue(item, `${location}[${index}]`, seen),
+    );
+  } else {
+    for (const [key, item] of Object.entries(value)) {
+      if (["__proto__", "prototype", "constructor"].includes(key)) {
+        throw new TypeError(`${location} contains a forbidden key: ${key}.`);
+      }
+      assertJsonValue(item, `${location}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function assertJsonRecord(value: unknown, location: string): void {
+  if (!isRecord(value)) throw new TypeError(`${location} must be a JSON object.`);
+  assertJsonValue(value, location);
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > 16 * 1024) {
+    throw new TypeError(`${location} exceeds 16 KiB.`);
+  }
+}
+
 function assertTask(value: unknown, location: string): asserts value is SavedWorkflowTask {
   if (!isRecord(value)) throw new TypeError(`${location} must be an object.`);
   if (typeof value.task !== "string" || !value.task.trim()) {
     throw new TypeError(`${location}.task must be a non-empty string.`);
   }
 
-  for (const field of ["key", "label", "cwd", "model", "context"] as const) {
+  for (const field of [
+    "key",
+    "label",
+    "cwd",
+    "model",
+    "context",
+    "foreach",
+  ] as const) {
     assertOptionalString(value, field, location);
   }
 
@@ -76,6 +134,34 @@ function assertTask(value: unknown, location: string): asserts value is SavedWor
   ) {
     throw new TypeError(`${location}.inputs must be an array of strings.`);
   }
+  if (
+    value.when !== undefined &&
+    typeof value.when !== "boolean" &&
+    typeof value.when !== "string"
+  ) {
+    throw new TypeError(`${location}.when must be a boolean or string.`);
+  }
+  if (
+    value.foreach !== undefined &&
+    (typeof value.foreach !== "string" || !value.foreach.trim())
+  ) {
+    throw new TypeError(`${location}.foreach must not be empty.`);
+  }
+  if (
+    value.maxItems !== undefined &&
+    (typeof value.maxItems !== "number" ||
+      !Number.isSafeInteger(value.maxItems) ||
+      value.maxItems < 0 ||
+      value.maxItems > 8)
+  ) {
+    throw new TypeError(`${location}.maxItems must be between zero and eight.`);
+  }
+  if (value.maxItems !== undefined && value.foreach === undefined) {
+    throw new TypeError(`${location}.maxItems requires foreach.`);
+  }
+  if (value.outputSchema !== undefined) {
+    assertJsonRecord(value.outputSchema, `${location}.outputSchema`);
+  }
 }
 
 function assertWorkflowDefinition(
@@ -90,6 +176,9 @@ function assertWorkflowDefinition(
     );
   }
   assertOptionalString(value, "label", "workflow");
+  if (value.parameters !== undefined) {
+    assertJsonRecord(value.parameters, "workflow.parameters");
+  }
   if (!Array.isArray(value.stages) || value.stages.length === 0) {
     throw new TypeError("Workflow definition requires at least one stage.");
   }
