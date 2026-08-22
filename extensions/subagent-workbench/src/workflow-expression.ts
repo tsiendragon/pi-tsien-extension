@@ -2,11 +2,14 @@ export type WorkflowJsonPrimitive = string | number | boolean | null;
 
 export interface WorkflowExpressionTaskResult {
   readonly output: unknown;
+  readonly json?: unknown;
 }
 
 export interface WorkflowExpressionContext {
   readonly parameters: Readonly<Record<string, unknown>>;
   readonly tasks: Readonly<Record<string, WorkflowExpressionTaskResult>>;
+  readonly item?: unknown;
+  readonly index?: number;
 }
 
 export interface ResolveWorkflowTemplateOptions {
@@ -77,6 +80,10 @@ export function resolveWorkflowReference(
   const segments = normalized.split(".");
   assertSafeSegments(normalized, segments);
 
+  if (normalized === "item" || normalized === "index") {
+    return ownValue(context, normalized, normalized);
+  }
+
   if (segments[0] === "parameters" && segments.length === 2) {
     return ownValue(context.parameters, segments[1]!, normalized);
   }
@@ -94,7 +101,9 @@ export function resolveWorkflowReference(
       throw expressionError(`unsupported reference "${normalized}".`);
     }
 
-    let value = parseTaskJson(output, normalized);
+    let value = Object.prototype.hasOwnProperty.call(task, "json")
+      ? task.json
+      : parseTaskJson(output, normalized);
     for (const segment of segments.slice(3)) {
       value = ownValue(value, segment, normalized);
     }
@@ -105,6 +114,9 @@ export function resolveWorkflowReference(
 }
 
 function stringifyTemplateValue(value: unknown): string {
+  if (value !== null && typeof value === "object") {
+    return JSON.stringify(value);
+  }
   return String(value);
 }
 

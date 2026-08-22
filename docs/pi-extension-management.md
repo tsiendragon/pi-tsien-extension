@@ -1,62 +1,80 @@
-# Pi 扩展声明式管理
+# Pi 用户级扩展管理
 
-`config/pi-extensions.json` 是当前 Pi 扩展安装状态的唯一清单。它同时管理：
+用户级唯一配置是：
 
-- `~/.pi/agent/settings.json` 中的 Pi packages；
-- `~/.pi/agent/extensions/` 下的独立扩展文件。
+```text
+~/.pi/agent/extensions.config.json
+```
 
-## 使用
+它控制用户安装和加载哪些扩展，包括：
 
-先预览，不写入：
+- `pi-tsien-extension` 中的单个扩展；
+- npm、Git、本地目录等其他 Pi packages 中的单个扩展；
+- `settings.json.extensions` 直接引用的本地扩展文件。
+
+同步器把该配置转换为 Pi 原生的 `settings.json.packages` package filtering 和 `settings.json.extensions`，不引入另一套运行时加载机制。
+
+## 配置格式
+
+```json
+{
+  "version": 1,
+  "packages": [
+    {
+      "source": "${PI_TSIEN_EXTENSION_ROOT}",
+      "extensions": [
+        "+extensions/goal.ts",
+        "+extensions/memory.ts"
+      ]
+    },
+    {
+      "source": "git:github.com/example/pi-tools",
+      "extensions": ["+extensions/tool.ts"]
+    }
+  ],
+  "extensions": [
+    "${HOME}/src/custom-extension.ts"
+  ],
+  "prune": {
+    "packages": true,
+    "extensions": true,
+    "autoDiscoveredExtensions": "quarantine"
+  }
+}
+```
+
+- 从 `packages` 删除整个 source：卸载该来源，不再加载其中任何扩展。
+- 从 `packages[].extensions` 删除一项：保留 package，但不加载该扩展。
+- `+relative/path` 是相对 package 根目录的精确白名单。
+- `extensions` 用于直接加载已存在的绝对路径；Git/npm 来源应优先写成 package，Pi 才能自动安装。
+
+## 同步
+
+默认只预览：
 
 ```bash
-node scripts/pi-extension-sync.mjs
+node /mnt/workspace/lilong/repos/pi-tsien-extension/scripts/pi-extension-sync.mjs
 ```
 
 确认后应用：
 
 ```bash
-node scripts/pi-extension-sync.mjs --apply
+node /mnt/workspace/lilong/repos/pi-tsien-extension/scripts/pi-extension-sync.mjs --apply
 ```
 
-应用后重启 Pi；Pi 会根据 `settings.json.packages` 自动安装缺失的 npm/git packages。本地 package 直接从清单解析后的目录加载。
+应用后 `/reload` 或重启 Pi。Pi 会自动安装配置中缺失的 npm/git packages。本地 package 必须已存在。
 
-## 严格同步行为
+## 严格模式与恢复
 
-- 清单缺失的 package 会从 `settings.json.packages` 移除，因此不再加载；Pi 自己的下载缓存可能保留，但不属于已安装状态。
-- 清单缺失的独立扩展不会永久删除，而会移动到 `~/.pi/agent/extension-quarantine/<timestamp>/`。
-- 修改前的 `settings.json` 和被覆盖的独立扩展会备份到 `~/.pi/agent/extension-sync-backups/<timestamp>/`。
-- 默认是 dry-run；只有 `--apply` 才写入。
-- 不修改 `settings.json` 的其他字段。
+- 配置外 package 会从 `settings.json.packages` 移除。
+- 配置外直接路径会从 `settings.json.extensions` 移除。
+- `~/.pi/agent/extensions/` 中未被配置引用的自动发现文件会移到 `~/.pi/agent/extension-quarantine/<timestamp>/`，不会永久删除。
+- 原 `settings.json` 备份到 `~/.pi/agent/extension-sync-backups/<timestamp>/settings.json`。
+- `settings.json` 其他字段保持不变。
 
 ## 路径变量
 
-清单支持：
-
-- `${REPO_ROOT}`：本仓库根目录；
-- `${EAGLEEYE_AI_DEV_ROOT}`：优先读取同名环境变量，否则自动发现本仓库同级的 `eagleeye-ai-dev`；
-- `${HOME}`：当前用户主目录。
-
-可覆盖默认位置：
-
-```bash
-node scripts/pi-extension-sync.mjs \
-  --config /absolute/path/pi-extensions.json \
-  --agent-dir /absolute/path/.pi/agent \
-  --apply
-```
-
-## 添加扩展
-
-标准 Pi package 应加入 `packages`。不要复制 Marketplace 安装产物；直接引用 `eagleeye-ai-dev` 中带 `package.json` 的 Pi package 目录。
-
-确实只能以单文件存在的扩展可加入：
-
-```json
-{
-  "target": "example.ts",
-  "source": "${REPO_ROOT}/managed-extensions/example.ts"
-}
-```
-
-其中 `target` 只能是文件名，`source` 必须存在。配置外单文件将在下一次 `--apply` 时被隔离。
+- `${PI_TSIEN_EXTENSION_ROOT}`：优先读取环境变量，否则使用同步器所在仓库。
+- `${EAGLEEYE_AI_DEV_ROOT}`：优先读取环境变量，否则发现 `pi-tsien-extension` 同级仓库。
+- `${PI_AGENT_DIR}`：当前 Pi agent 配置目录。
+- `${HOME}`：用户主目录。
