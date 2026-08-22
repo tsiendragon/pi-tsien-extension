@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { performance } from "node:perf_hooks";
 
 export type PolicyMode = "readOnly" | "full";
 export type ResultKind = "object" | "array";
@@ -27,7 +26,8 @@ export type PtcPolicy = {
   source: "configured" | "fallback";
   mode: PolicyMode;
   maxOuterRunCodeCalls: number;
-  maxActiveWallTimeMs: number;
+  maxRunComputeTimeMs: number;
+  maxRunWallTimeMs: number;
   maxAssistantOutputTokens: number;
   maxTotalSubCalls?: number;
   maxNestedWrites?: number;
@@ -37,14 +37,15 @@ export type PtcPolicy = {
 
 export type PtcBudgetState = {
   policy: PtcPolicy;
-  startedAt: number;
-  endedAt?: number;
-  running: boolean;
   outerRunCodeCalls: number;
   totalSubCalls: number;
   nestedWrites: number;
   nestedRuns: number;
   assistantOutputTokens: number;
+  lastRunComputeTimeMs?: number;
+  totalRunComputeTimeMs: number;
+  lastRunWallTimeMs?: number;
+  totalRunWallTimeMs: number;
   violation?: PtcPolicyError;
 };
 
@@ -52,6 +53,8 @@ type RecommendedPolicy = {
   maxEstimatedSubCalls?: number;
   maxTotalSubCalls?: number;
   maxOuterRunCodeCalls?: number;
+  maxRunWallTimeMs?: number;
+  /** Legacy v1 field; read for compatibility with older generated configs. */
   maxWallTimeMs?: number;
   maxTotalTokens?: number;
   maxNestedWrites?: number;
@@ -60,6 +63,7 @@ type RecommendedPolicy = {
 };
 
 type PolicyConfig = {
+  common?: { maxRunComputeTimeMs?: number };
   models?: Record<string, { recommended?: RecommendedPolicy }>;
 };
 
@@ -89,6 +93,7 @@ export function resolvePtcPolicy(
 ): PtcPolicy {
   const key = modelKey(model);
   const readRecommended = readOnlyConfig.models?.[key]?.recommended;
+  const modeConfig = mode === "full" ? fullConfig : readOnlyConfig;
   const modeRecommended = mode === "full" ? fullConfig.models?.[key]?.recommended : readRecommended;
   const configured = modeRecommended !== undefined;
 
@@ -97,7 +102,11 @@ export function resolvePtcPolicy(
     source: configured ? "configured" : "fallback",
     mode,
     maxOuterRunCodeCalls: positiveInteger(modeRecommended?.maxOuterRunCodeCalls, 4),
-    maxActiveWallTimeMs: positiveInteger(modeRecommended?.maxWallTimeMs, 90_000),
+    maxRunComputeTimeMs: positiveInteger(modeConfig.common?.maxRunComputeTimeMs, 15_000),
+    maxRunWallTimeMs: positiveInteger(
+      modeRecommended?.maxRunWallTimeMs ?? modeRecommended?.maxWallTimeMs,
+      90_000,
+    ),
     // Keep reading the benchmark config's legacy maxTotalTokens field, but enforce it
     // only against newly generated assistant output. Input already present in a long
     // session is not PTC workload and must not consume this per-task budget.
@@ -131,7 +140,9 @@ export class PtcPolicyError extends Error {
         code,
         ...details,
         suggestedAction: code === "PTC_BUDGET_EXCEEDED"
-          ? "Reduce the workload, split it into a new user turn, or switch to ordinary tools with /ptc off."
+          ? details.budget === "runComputeTimeMs" || details.budget === "runWallTimeMs"
+            ? "Reduce this program, split it across run_code calls, or switch to ordinary tools with /ptc off."
+            : "Reduce the workload, split it into a new user turn, or switch to ordinary tools with /ptc off."
           : "Return JSON matching resultContract, or correct the expected count/checksum values.",
       },
     }));
@@ -141,17 +152,21 @@ export class PtcPolicyError extends Error {
   }
 }
 
-export function createBudgetState(policy: PtcPolicy, running = false): PtcBudgetState {
+export function createBudgetState(policy: PtcPolicy): PtcBudgetState {
   return {
     policy,
-    startedAt: performance.now(),
-    running,
     outerRunCodeCalls: 0,
     totalSubCalls: 0,
     nestedWrites: 0,
     nestedRuns: 0,
     assistantOutputTokens: 0,
+    totalRunComputeTimeMs: 0,
+    totalRunWallTimeMs: 0,
   };
+}
+
+export function retargetBudgetState(state: PtcBudgetState, policy: PtcPolicy): PtcBudgetState {
+  return { ...state, policy };
 }
 
 function budgetError(
@@ -171,29 +186,23 @@ function budgetError(
   return error;
 }
 
-export function startBudgetState(state: PtcBudgetState): void {
-  state.startedAt = performance.now();
-  state.endedAt = undefined;
-  state.running = true;
-}
-
-export function stopBudgetState(state: PtcBudgetState | undefined): void {
-  if (!state?.running) return;
-  state.endedAt = performance.now();
-  state.running = false;
-}
-
-export function activeWallTimeMs(state: PtcBudgetState): number {
-  if (!state.running && state.endedAt === undefined) return 0;
-  return Math.max(0, Math.round((state.endedAt ?? performance.now()) - state.startedAt));
+export function createRunBudgetError(
+  state: PtcBudgetState,
+  budget: "runComputeTimeMs" | "runWallTimeMs",
+  used: number,
+  limit: number,
+): PtcPolicyError {
+  return new PtcPolicyError("PTC_BUDGET_EXCEEDED", {
+    model: state.policy.modelKey,
+    mode: state.policy.mode,
+    budget,
+    used,
+    limit,
+  });
 }
 
 export function assertBudgetAvailable(state: PtcBudgetState): void {
   if (state.violation) throw state.violation;
-  const elapsed = activeWallTimeMs(state);
-  if (elapsed > state.policy.maxActiveWallTimeMs) {
-    throw budgetError(state, "activeWallTimeMs", elapsed, state.policy.maxActiveWallTimeMs);
-  }
   if (state.assistantOutputTokens > state.policy.maxAssistantOutputTokens) {
     throw budgetError(
       state,
@@ -242,6 +251,22 @@ export function recordAssistantTokens(state: PtcBudgetState | undefined, outputT
   state.assistantOutputTokens += Math.round(outputTokens as number);
 }
 
+export function recordRunUsage(
+  state: PtcBudgetState,
+  usage: { computeTimeMs?: number; wallTimeMs: number },
+): void {
+  const wallTimeMs = Math.max(0, Math.round(usage.wallTimeMs));
+  state.lastRunWallTimeMs = wallTimeMs;
+  state.totalRunWallTimeMs += wallTimeMs;
+  if (usage.computeTimeMs !== undefined && Number.isFinite(usage.computeTimeMs)) {
+    const computeTimeMs = Math.max(0, Math.round(usage.computeTimeMs));
+    state.lastRunComputeTimeMs = computeTimeMs;
+    state.totalRunComputeTimeMs += computeTimeMs;
+  } else {
+    state.lastRunComputeTimeMs = undefined;
+  }
+}
+
 export function budgetSnapshot(state: PtcBudgetState | undefined): Record<string, unknown> | undefined {
   if (!state) return undefined;
   return {
@@ -249,7 +274,16 @@ export function budgetSnapshot(state: PtcBudgetState | undefined): Record<string
     policySource: state.policy.source,
     mode: state.policy.mode,
     outerRunCodeCalls: { used: state.outerRunCodeCalls, limit: state.policy.maxOuterRunCodeCalls },
-    activeWallTimeMs: { used: activeWallTimeMs(state), limit: state.policy.maxActiveWallTimeMs },
+    runComputeTimeMs: {
+      lastUsed: state.lastRunComputeTimeMs ?? null,
+      totalUsed: state.totalRunComputeTimeMs,
+      limitPerRun: state.policy.maxRunComputeTimeMs,
+    },
+    runWallTimeMs: {
+      lastUsed: state.lastRunWallTimeMs ?? null,
+      totalUsed: state.totalRunWallTimeMs,
+      limitPerRun: state.policy.maxRunWallTimeMs,
+    },
     assistantOutputTokens: {
       used: state.assistantOutputTokens,
       limit: state.policy.maxAssistantOutputTokens,

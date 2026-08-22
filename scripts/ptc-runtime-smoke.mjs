@@ -29,7 +29,11 @@ lines.on("line", (line) => {
   if (message.type === "call") {
     calls.push(message.name);
     const value = message.name === "read" ? "alpha\nbeta" : "src/a.ts\nsrc/b.ts";
-    child.stdin.write(`${JSON.stringify({ type: "result", id: message.id, ok: true, value })}\n`);
+    // Deliberately wait longer than maxComputeTimeMs. Heartbeats must keep the
+    // runtime alive because nested-tool waiting consumes wall time, not compute.
+    setTimeout(() => {
+      child.stdin.write(`${JSON.stringify({ type: "result", id: message.id, ok: true, value })}\n`);
+    }, 300);
     return;
   }
   if (message.type === "done") {
@@ -40,6 +44,9 @@ lines.on("line", (line) => {
     }
     if (calls.join(",") !== "read,find") {
       throw new Error(`Unexpected PTC calls: ${calls.join(",")}`);
+    }
+    if (!Number.isFinite(message.computeTimeMs) || message.computeTimeMs < 0) {
+      throw new Error(`Missing PTC compute-time measurement: ${String(message.computeTimeMs)}`);
     }
   }
   if (message.type === "error") throw new Error(message.message);
@@ -59,6 +66,7 @@ child.on("exit", (code, signal) => {
 child.stdin.write(`${JSON.stringify({
   type: "run",
   maxCalls: 4,
+  maxComputeTimeMs: 100,
   code: `
     const [text, files] = await Promise.all([
       tools.read({ path: "README.md" }),

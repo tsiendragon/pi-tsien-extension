@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BtwPanel } from "./btw/panel.ts";
 import { BtwSessionController } from "./btw/session.ts";
+import { BtwDashboardAdapter } from "./btw/bridge.ts";
+import { registerDashboardFeatureBridge } from "./lib/dashboard-bridge.ts";
 
 type ActiveBtw = {
   cancelled: boolean;
@@ -9,9 +11,19 @@ type ActiveBtw = {
   close?: () => void;
 };
 
-let activeBtw: ActiveBtw | undefined;
-
 export default function btwExtension(pi: ExtensionAPI): void {
+  let activeBtw: ActiveBtw | undefined;
+  let dashboardAdapter: BtwDashboardAdapter | undefined;
+  let dashboardBridgeCleanup: (() => void) | undefined;
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (process.env.PI_RUNTIME !== "dashboard" || process.env.PI_SUBAGENT_WORKBENCH_CHILD === "1") return;
+    dashboardBridgeCleanup?.();
+    await dashboardAdapter?.dispose();
+    dashboardAdapter = new BtwDashboardAdapter(ctx);
+    dashboardBridgeCleanup = registerDashboardFeatureBridge(ctx, dashboardAdapter);
+  });
+
   pi.registerCommand("btw", {
     description: "打开读取主会话历史、仅可读文件的临时侧聊窗口",
     handler: async (_args, ctx) => {
@@ -84,6 +96,10 @@ export default function btwExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    dashboardBridgeCleanup?.();
+    dashboardBridgeCleanup = undefined;
+    await dashboardAdapter?.dispose();
+    dashboardAdapter = undefined;
     const state = activeBtw;
     if (!state) return;
     activeBtw = undefined;

@@ -2,9 +2,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { readBackgroundCommandsSettings } from "./lib/background-commands/config.ts";
 import {
+  BackgroundCommandManager,
   getBackgroundCommandManager,
-  type BackgroundCommandManager,
 } from "./lib/background-commands/manager.ts";
+import { BackgroundCommandsDashboardAdapter } from "./lib/background-commands/dashboard-bridge.ts";
+import { registerDashboardFeatureBridge } from "./lib/dashboard-bridge.ts";
 import {
   BACKGROUND_COMMAND_TOOL_NAMES,
   formatBackgroundCompletionSummary,
@@ -62,7 +64,10 @@ function sessionId(ctx: ExtensionContext): string {
 }
 
 export default function runningCommands(pi: ExtensionAPI): void {
-  const manager: BackgroundCommandManager = getBackgroundCommandManager();
+  const isDashboard = process.env.PI_RUNTIME === "dashboard" && process.env.PI_SUBAGENT_WORKBENCH_CHILD !== "1";
+  const manager: BackgroundCommandManager = isDashboard
+    ? new BackgroundCommandManager()
+    : getBackgroundCommandManager();
   const registry = manager.registry;
   const focus = new CommandFocusController();
   let backgroundCommandsEnabled = true;
@@ -75,6 +80,8 @@ export default function runningCommands(pi: ExtensionAPI): void {
   let editorFactory: EditorFactory | undefined;
   let elapsedTimer: ReturnType<typeof setInterval> | undefined;
   let pendingRender: ReturnType<typeof setTimeout> | undefined;
+  let dashboardAdapter: BackgroundCommandsDashboardAdapter | undefined;
+  let dashboardBridgeCleanup: (() => void) | undefined;
 
   const stopTimers = (): void => {
     if (elapsedTimer) clearInterval(elapsedTimer);
@@ -178,13 +185,13 @@ export default function runningCommands(pi: ExtensionAPI): void {
             exitReason: task.exitReason,
             outputFile: task.outputFile,
           },
-        }, { triggerTurn: false, deliverAs: "nextTurn" });
+        }, { triggerTurn: true, deliverAs: "followUp" });
         manager.markCompletionDelivered(task.id);
         try {
           const notice = completionNotification(task);
           ctx.ui.notify(notice.message, notice.level);
         } catch {
-          // A stale UI context must not duplicate an already queued nextTurn summary.
+          // A stale UI context must not duplicate an already queued follow-up summary.
         }
       } catch {
         // sendMessage failed before enqueueing; leave the completion pending for one retry.
@@ -227,7 +234,14 @@ export default function runningCommands(pi: ExtensionAPI): void {
       if (remainingTools.length !== activeTools.length) pi.setActiveTools(remainingTools);
     }
 
-    if (!ctx.hasUI) return;
+    if (isDashboard) {
+      dashboardBridgeCleanup?.();
+      dashboardAdapter?.dispose();
+      dashboardAdapter = new BackgroundCommandsDashboardAdapter(manager);
+      dashboardBridgeCleanup = registerDashboardFeatureBridge(ctx, dashboardAdapter);
+    }
+
+    if (isDashboard || !ctx.hasUI) return;
     host = getPrePowerlineHost();
     if (!host) {
       ctx.ui.notify(
@@ -279,6 +293,10 @@ export default function runningCommands(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async (event) => {
     cleanupUiBindings();
+    dashboardBridgeCleanup?.();
+    dashboardBridgeCleanup = undefined;
+    dashboardAdapter?.dispose();
+    dashboardAdapter = undefined;
     if (event.reason === "reload" && backgroundCommandsEnabled) {
       manager.scheduleReloadCleanup();
       return;

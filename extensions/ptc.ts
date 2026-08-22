@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -14,17 +15,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
-  assertBudgetAvailable,
   budgetSnapshot,
   createBudgetState,
+  createRunBudgetError,
   normalizeAndValidateResult,
   normalizeFencedJsonText,
   recordAssistantTokens,
+  recordRunUsage,
   reserveNestedCall,
   reserveOuterRunCode,
   resolvePtcPolicy,
-  startBudgetState,
-  stopBudgetState,
+  retargetBudgetState,
   type PtcBudgetState,
 } from "./ptc/policy.ts";
 
@@ -38,7 +39,8 @@ const MAX_BINDING_RESULT_BYTES = 64 * 1024;
 const MAX_WRITE_BYTES = 256 * 1024;
 const MAX_RUN_OUTPUT_BYTES = 128 * 1024;
 const MAX_SUB_CALLS = 32;
-const WALL_TIMEOUT_MS = 15_000;
+const RUNTIME_HEARTBEAT_GRACE_MS = 250;
+const RUNTIME_WATCHDOG_INTERVAL_MS = 100;
 const MAX_RUN_TIMEOUT_MS = 15_000;
 const BLOCKED_WRITE_SEGMENTS = new Set([".git", ".pi", ".ssh", ".aws", ".gnupg", "node_modules"]);
 
@@ -58,25 +60,34 @@ type RuntimeLogMessage = {
   text: string;
 };
 
+type RuntimeHeartbeatMessage = {
+  type: "heartbeat";
+  computeTimeMs: number;
+};
+
 type RuntimeDoneMessage = {
   type: "done";
   result?: unknown;
   calls: number;
   toolCounts?: Record<string, number>;
+  computeTimeMs?: number;
 };
 
 type RuntimeErrorMessage = {
   type: "error";
+  code?: "compute_timeout";
   message: string;
+  computeTimeMs?: number;
 };
 
-type RuntimeMessage = RuntimeCallMessage | RuntimeLogMessage | RuntimeDoneMessage | RuntimeErrorMessage;
+type RuntimeMessage = RuntimeCallMessage | RuntimeLogMessage | RuntimeHeartbeatMessage | RuntimeDoneMessage | RuntimeErrorMessage;
 
 type RuntimeResult = {
   logs: string[];
   result?: unknown;
   calls: number;
   toolCounts: Record<string, number>;
+  computeTimeMs: number;
 };
 
 type StructuredRunResult = {
@@ -106,7 +117,7 @@ declare const tools: {
 
 Run independent calls through a bounded \`Promise.all\` and preserve each result's association with its input path. Keep dependent calls sequential. Different \`run_code\` calls do not share variables or memory. If work must be split, return compact mergeable partials such as counts, totals, grouped values, candidates, and checksums so the next call does not repeat reads. A compute-only merge program still consumes one outer \`run_code\` call even when it invokes no tools; either reserve that call or merge prior partials inside the final data-reading batch.
 
-Plan against the active policy before starting. Reserve headroom for discovery, validation, and one correction instead of filling the ${MAX_SUB_CALLS}-call hard limit. Use \`resultContract\` only when structure or invariant values are known independently, especially for side-effect-free computed summaries. Do not invent expected values, and do not apply \`exactKeys\` to a built-in binding result unless every documented key is included. Handle expected per-item failures with \`try/catch\`; do not hide budget or contract failures. The runtime permits at most ${MAX_SUB_CALLS} sub-calls and ${WALL_TIMEOUT_MS / 1000} seconds per program.
+Plan against the active policy before starting. Reserve headroom for discovery, validation, and one correction instead of filling the ${MAX_SUB_CALLS}-call hard limit. Use \`resultContract\` only when structure or invariant values are known independently, especially for side-effect-free computed summaries. Do not invent expected values, and do not apply \`exactKeys\` to a built-in binding result unless every documented key is included. Handle expected per-item failures with \`try/catch\`; do not hide budget or contract failures. Each program has independent compute-time and wall-time ceilings shown in the active policy; time spent by the model or ordinary tools does not consume them.
 `;
 
 const FULL_SDK = `
@@ -418,6 +429,7 @@ function parseRuntimeMessage(line: string): RuntimeMessage {
     return value as RuntimeCallMessage;
   }
   if (value.type === "log" && typeof value.text === "string") return value as RuntimeLogMessage;
+  if (value.type === "heartbeat" && Number.isFinite(value.computeTimeMs)) return value as RuntimeHeartbeatMessage;
   if (value.type === "done" && Number.isSafeInteger(value.calls)) return value as RuntimeDoneMessage;
   if (value.type === "error" && typeof value.message === "string") return value as RuntimeErrorMessage;
   throw new Error("Invalid PTC runtime protocol message");
@@ -455,6 +467,9 @@ async function runPtcProgram(
   let finalMessage: RuntimeDoneMessage | RuntimeErrorMessage | undefined;
   let forcedError: Error | undefined;
   let settled = false;
+  const runStartedAt = performance.now();
+  let lastHeartbeatAt = runStartedAt;
+  let reportedComputeTimeMs = 0;
 
   const send = (message: unknown) => {
     if (child.stdin.destroyed || child.stdin.writableEnded || !child.stdin.writable) return;
@@ -471,7 +486,25 @@ async function runPtcProgram(
     terminate(error);
   });
 
-  const timeout = setTimeout(() => terminate(new Error(`PTC program exceeded ${WALL_TIMEOUT_MS} ms wall timeout`)), WALL_TIMEOUT_MS);
+  const wallTimeoutMs = budget.policy.maxRunWallTimeMs;
+  const computeTimeoutMs = budget.policy.maxRunComputeTimeMs;
+  const timeout = setTimeout(() => terminate(createRunBudgetError(
+    budget,
+    "runWallTimeMs",
+    Math.ceil(performance.now() - runStartedAt),
+    wallTimeoutMs,
+  )), wallTimeoutMs);
+  const computeWatchdog = setInterval(() => {
+    const heartbeatSilenceMs = performance.now() - lastHeartbeatAt;
+    if (heartbeatSilenceMs <= computeTimeoutMs + RUNTIME_HEARTBEAT_GRACE_MS) return;
+    terminate(createRunBudgetError(
+      budget,
+      "runComputeTimeMs",
+      Math.ceil(heartbeatSilenceMs - RUNTIME_HEARTBEAT_GRACE_MS),
+      computeTimeoutMs,
+    ));
+  }, RUNTIME_WATCHDOG_INTERVAL_MS);
+  computeWatchdog.unref();
   const onOuterAbort = () => terminate(new Error("PTC program was cancelled"));
   outerSignal?.addEventListener("abort", onOuterAbort, { once: true });
   if (outerSignal?.aborted) onOuterAbort();
@@ -495,6 +528,19 @@ async function runPtcProgram(
       return;
     }
 
+    if (message.type === "heartbeat") {
+      lastHeartbeatAt = performance.now();
+      reportedComputeTimeMs = Math.max(reportedComputeTimeMs, message.computeTimeMs);
+      if (reportedComputeTimeMs > computeTimeoutMs) {
+        terminate(createRunBudgetError(
+          budget,
+          "runComputeTimeMs",
+          Math.ceil(reportedComputeTimeMs),
+          computeTimeoutMs,
+        ));
+      }
+      return;
+    }
     if (message.type === "log") {
       logs.push(`[${message.level}] ${message.text}`);
       return;
@@ -528,6 +574,7 @@ async function runPtcProgram(
     type: "run",
     code,
     maxCalls: MAX_SUB_CALLS,
+    maxComputeTimeMs: computeTimeoutMs,
     allowedTools: fullMode ? FULL_TOOLS : READ_ONLY_TOOLS,
   });
 
@@ -536,6 +583,7 @@ async function runPtcProgram(
     child.once("exit", async (exitCode, exitSignal) => {
       settled = true;
       clearTimeout(timeout);
+      clearInterval(computeWatchdog);
       outerSignal?.removeEventListener("abort", onOuterAbort);
       nestedAbort.abort();
       await Promise.allSettled([...inFlight]);
@@ -549,7 +597,16 @@ async function runPtcProgram(
         return;
       }
       if (finalMessage?.type === "error") {
-        rejectPromise(new Error(finalMessage.message));
+        if (finalMessage.code === "compute_timeout") {
+          rejectPromise(createRunBudgetError(
+            budget,
+            "runComputeTimeMs",
+            Math.ceil(finalMessage.computeTimeMs ?? computeTimeoutMs + 1),
+            computeTimeoutMs,
+          ));
+        } else {
+          rejectPromise(new Error(finalMessage.message));
+        }
         return;
       }
       if (finalMessage?.type !== "done" || exitCode !== 0 || exitSignal) {
@@ -562,9 +619,20 @@ async function runPtcProgram(
         result: finalMessage.result,
         calls: finalMessage.calls,
         toolCounts: finalMessage.toolCounts ?? {},
+        computeTimeMs: Math.max(reportedComputeTimeMs, finalMessage.computeTimeMs ?? 0),
       });
     });
   });
+}
+
+export function runPtcProgramForTest(
+  code: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  fullMode: boolean,
+  budget: PtcBudgetState,
+): Promise<RuntimeResult> {
+  return runPtcProgram(code, cwd, signal, fullMode, budget);
 }
 
 function renderRuntimeResult(result: RuntimeResult): string {
@@ -606,40 +674,22 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   let mode: PtcMode = "off";
   let previousTools: string[] | undefined;
   let budget: PtcBudgetState | undefined;
-  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const clearBudgetTimer = () => {
-    if (budgetTimer) clearTimeout(budgetTimer);
-    budgetTimer = undefined;
-  };
   const policyMode = () => mode === "full" ? "full" as const : "readOnly" as const;
-  const resetBudget = (ctx: ExtensionContext, active = false) => {
-    clearBudgetTimer();
+  const resetBudget = (ctx: ExtensionContext) => {
     if (mode === "off") {
       budget = undefined;
       return undefined;
     }
     budget = createBudgetState(resolvePtcPolicy(policyMode(), ctx.model));
-    if (active) {
-      startBudgetState(budget);
-      const captured = budget;
-      budgetTimer = setTimeout(() => {
-        if (mode === "off" || budget !== captured || !captured.running) return;
-        try {
-          assertBudgetAvailable(captured);
-        } catch (error) {
-          ctx.abort();
-          ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-        }
-      }, captured.policy.maxActiveWallTimeMs + 10);
-    }
     updateStatus(ctx, mode, budget);
     return budget;
   };
   const ensureBudget = (ctx: ExtensionContext) => {
     const expected = resolvePtcPolicy(policyMode(), ctx.model);
-    if (!budget || budget.policy.modelKey !== expected.modelKey || budget.policy.mode !== expected.mode) {
-      budget = createBudgetState(expected);
+    if (!budget) budget = createBudgetState(expected);
+    else if (budget.policy.modelKey !== expected.modelKey || budget.policy.mode !== expected.mode) {
+      budget = retargetBudgetState(budget, expected);
     }
     return budget;
   };
@@ -655,7 +705,6 @@ export default function ptcExtension(pi: ExtensionAPI): void {
     if (nextMode === "off") {
       restoreTools();
       mode = "off";
-      clearBudgetTimer();
       budget = undefined;
       updateStatus(ctx, mode);
       ctx.ui.notify("PTC 模式已关闭", "info");
@@ -701,7 +750,18 @@ export default function ptcExtension(pi: ExtensionAPI): void {
       const activeBudget = ensureBudget(ctx);
       reserveOuterRunCode(activeBudget);
       updateStatus(ctx, mode, activeBudget);
-      const result = await runPtcProgram(params.code, ctx.cwd, signal, fullMode, activeBudget);
+      const runStartedAt = performance.now();
+      let result: RuntimeResult | undefined;
+      try {
+        result = await runPtcProgram(params.code, ctx.cwd, signal, fullMode, activeBudget);
+      } finally {
+        recordRunUsage(activeBudget, {
+          computeTimeMs: result?.computeTimeMs,
+          wallTimeMs: performance.now() - runStartedAt,
+        });
+        updateStatus(ctx, mode, activeBudget);
+      }
+      if (!result) throw new Error("PTC runtime completed without a result");
       const validated = normalizeAndValidateResult(
         result.result,
         activeBudget.policy.normalizeJsonFence,
@@ -749,7 +809,7 @@ export default function ptcExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", (event, ctx) => {
     if (mode === "off") return undefined;
-    const activeBudget = resetBudget(ctx, true);
+    const activeBudget = resetBudget(ctx);
     const fullPrompt = mode === "full" ? FULL_SDK : "\nFilesystem writes, process execution, network access, and shell commands are unavailable.\n";
     const modePrompt = mode === "both"
       ? "\nThis is mixed PTC mode. For one file read/search with no cross-file processing, use the ordinary tool directly and do not use run_code. For deterministic filtering, joining, aggregation, or transformation across three or more related files/calls, use run_code as the first data-access tool. After a failed approach, a focused ordinary read is allowed for diagnosis before retrying."
@@ -757,19 +817,8 @@ export default function ptcExtension(pi: ExtensionAPI): void {
         ? "\nThis is strict PTC full mode. Call only run_code directly. If the task needs a shell, a non-Node executable, unsupported patch semantics, or capabilities outside the declared SDK, stop and explain that the user should switch modes instead of attempting a workaround."
         : "\nThis is strict read-only PTC mode. Call only run_code directly. If the task is not a read-only deterministic workflow supported by the declared SDK, stop and explain that the user should switch modes instead of attempting a workaround.";
     const policyPrompt = `\nActive model policy: ${JSON.stringify(budgetSnapshot(activeBudget))}. `
-      + "These limits are enforced. Use resultContract only for independently known structure/invariants; avoid brittle exact-key contracts around side-effecting write/run workflows. Split early when the remaining budget cannot cover work plus one correction.";
+      + "These limits are enforced. Compute and wall ceilings apply independently to each run_code execution; model thinking and ordinary tools do not consume them. Reserve call, sub-call, and token headroom for one correction. Use resultContract only for independently known structure/invariants; avoid brittle exact-key contracts around side-effecting write/run workflows.";
     return { systemPrompt: `${event.systemPrompt}\n${READ_ONLY_SDK}${fullPrompt}${modePrompt}${policyPrompt}` };
-  });
-
-  pi.on("turn_start", (_event, ctx) => {
-    if (mode === "off" || !budget) return;
-    const previousViolation = budget.violation;
-    try {
-      assertBudgetAvailable(budget);
-    } catch (error) {
-      ctx.abort();
-      if (!previousViolation) ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-    }
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -795,20 +844,20 @@ export default function ptcExtension(pi: ExtensionAPI): void {
     return { message: { ...event.message, content } };
   });
 
-  pi.on("model_select", (_event, ctx) => {
-    if (mode !== "off") resetBudget(ctx);
+  pi.on("model_select", (event, ctx) => {
+    if (mode === "off") return;
+    const expected = resolvePtcPolicy(policyMode(), event.model);
+    budget = budget ? retargetBudgetState(budget, expected) : createBudgetState(expected);
+    updateStatus(ctx, mode, budget);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    clearBudgetTimer();
-    stopBudgetState(budget);
     if (mode !== "off") updateStatus(ctx, mode, budget);
   });
 
   pi.on("session_start", (_event, ctx) => {
     mode = "off";
     previousTools = undefined;
-    clearBudgetTimer();
     budget = undefined;
     const active = pi.getActiveTools();
     if (active.includes(TOOL_NAME)) pi.setActiveTools(active.filter((name) => name !== TOOL_NAME));
@@ -818,7 +867,6 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", (_event, ctx) => {
     restoreTools();
     mode = "off";
-    clearBudgetTimer();
     budget = undefined;
     updateStatus(ctx, mode);
   });

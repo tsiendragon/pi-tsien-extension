@@ -1,0 +1,912 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PiRpcProcessProvider } from "../../../extensions/subagent-workbench/src/providers/pi-rpc-process-provider.ts";
+import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
+import { WorkbenchController } from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
+
+const fixture = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/fake-pi-rpc.mjs",
+);
+
+const controllers: WorkbenchController[] = [];
+
+function setup(
+  maxTranscriptBytes = 1024 * 1024,
+  stalledAfterMs?: number,
+): {
+  runtime: WorkbenchRuntimeHost;
+  controller: WorkbenchController;
+} {
+  const runtime = new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 });
+  const provider = new PiRpcProcessProvider({
+    executable: process.execPath,
+    baseArgs: [fixture],
+    commandTimeoutMs: 2_000,
+    startupTimeoutMs: 2_000,
+    runTimeoutMs: 5_000,
+    shutdownTimeoutMs: 500,
+    heartbeatIntervalMs: 50,
+  });
+  const controller = new WorkbenchController(runtime, {
+    provider,
+    maxTranscriptBytes,
+    ...(stalledAfterMs === undefined ? {} : { stalledAfterMs }),
+  });
+  controllers.push(controller);
+  return { runtime, controller };
+}
+
+afterEach(async () => {
+  await Promise.all(
+    controllers.splice(0).map((controller) => controller.dispose()),
+  );
+});
+
+describe("WorkbenchController", () => {
+  it("rejects invalid volatile commands before creating a Session", async () => {
+    const { runtime, controller } = setup();
+    await expect(
+      runtime.dispatch({
+        type: "start-agent",
+        task: "   ",
+        cwd: process.cwd(),
+      }),
+    ).resolves.toEqual({ ok: false, error: "invalid_task" });
+    await expect(
+      runtime.dispatch({
+        type: "send-agent",
+        sessionId: "missing",
+        message: "hello",
+      }),
+    ).resolves.toEqual({ ok: false, error: "session_not_found" });
+    expect(runtime.getSnapshot().conversations.total).toBe(0);
+    expect(controller.provider.snapshot().sessions).toBe(0);
+  });
+
+  it("projects a multi-Run conversation and preserves one RPC ChildSession", async () => {
+    const { runtime, controller } = setup();
+    const accepted = await runtime.dispatch({
+      type: "start-agent",
+      task: "remember: SWITCHER_7319",
+      label: "Memory worker",
+      cwd: process.cwd(),
+      thinking: "high",
+    });
+    expect(accepted).toEqual({ ok: true, accepted: "volatile" });
+
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe(
+        "completed",
+      );
+    });
+    const first = runtime.getSnapshot().conversations.items[0]!;
+    expect(first.messages?.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(first.messages?.at(-1)?.streaming).toBe(false);
+    expect(first.activeRunId).toBeNull();
+    expect(controller.provider.snapshot()).toMatchObject({
+      sessions: 1,
+      active: 0,
+      acceptedRuns: 1,
+    });
+
+    const followUp = await runtime.dispatch({
+      type: "send-agent",
+      sessionId: first.id,
+      message: "what was remembered",
+    });
+    expect(followUp).toMatchObject({
+      ok: true,
+      accepted: "volatile",
+      sessionId: first.id,
+    });
+    await vi.waitFor(() => {
+      const conversation = runtime.getSnapshot().conversations.items[0]!;
+      expect(conversation.messages).toHaveLength(4);
+      expect(conversation.messages?.at(-1)?.text).toBe("SWITCHER_7319");
+      expect(conversation.status).toBe("completed");
+    });
+    expect(controller.provider.snapshot()).toMatchObject({
+      sessions: 1,
+      acceptedRuns: 2,
+    });
+  });
+
+  it("projects thinking, tool progress, and multi-turn assistant blocks into the timeline", async () => {
+    const { runtime, controller } = setup();
+    const result = await controller.runAgent({
+      task: "timeline-events",
+      cwd: process.cwd(),
+    });
+
+    expect(result.output).toBe("Inspection complete.");
+    const conversation = runtime.getSnapshot().conversations.items[0];
+    expect(conversation).toMatchObject({
+      provider: "fake",
+      model: "fake-rpc",
+      thinkingLevel: "off",
+    });
+    expect(conversation?.usage).toEqual({
+      input: 15,
+      output: 4,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0.002,
+    });
+    const timeline = conversation?.timeline;
+    expect(timeline?.map((entry) => entry.type)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    expect(timeline?.[1]).toMatchObject({
+      type: "assistant",
+      streaming: false,
+      content: [
+        { type: "thinking", thinking: "Inspecting the repository" },
+        { type: "text", text: "I will read the source." },
+        { type: "toolCall", id: "call-read", name: "read" },
+      ],
+    });
+    expect(timeline?.[2]).toMatchObject({
+      type: "tool",
+      toolCallId: "call-read",
+      status: "completed",
+      output: { content: [{ type: "text", text: "complete README" }] },
+    });
+    expect(timeline?.[3]).toMatchObject({
+      type: "assistant",
+      streaming: false,
+      content: [{ type: "text", text: "Inspection complete." }],
+    });
+  });
+
+  it("serializes concurrent Follow-ups through one FIFO drain", async () => {
+    const { runtime, controller } = setup();
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "initial-turn",
+      label: "Concurrent queue",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe(
+        "completed",
+      );
+    });
+    const sessionId = runtime.getSnapshot().conversations.items[0]!.id;
+    const followUps = ["follow-up-1", "follow-up-2", "follow-up-3"];
+    const accepted = await Promise.all(
+      followUps.map((message) =>
+        runtime.dispatch({ type: "send-agent", sessionId, message }),
+      ),
+    );
+    expect(accepted.map((result) => result.accepted)).toEqual([
+      "volatile",
+      "queued",
+      "queued",
+    ]);
+
+    await vi.waitFor(() => {
+      const conversation = runtime
+        .getSnapshot()
+        .conversations.items.find((item) => item.id === sessionId)!;
+      expect(
+        conversation.messages
+          ?.filter((message) => message.role === "user")
+          .map((message) => message.text),
+      ).toEqual(["initial-turn", ...followUps]);
+      expect(conversation.status).toBe("completed");
+    });
+    expect(controller.provider.snapshot().acceptedRuns).toBe(4);
+  });
+
+  it("queues a Follow-up while a direct Agent Run is active", async () => {
+    const { runtime } = setup();
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "wait-for-abort",
+      label: "Queueable",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(
+        runtime.getSnapshot().conversations.items[0]?.activeRunId,
+      ).toBeTruthy();
+    });
+    const conversation = runtime.getSnapshot().conversations.items[0]!;
+    await expect(
+      runtime.dispatch({
+        type: "send-agent",
+        sessionId: conversation.id,
+        message: "queued-follow-up",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      accepted: "queued",
+      sessionId: conversation.id,
+    });
+    await runtime.dispatch({
+      type: "interrupt-agent",
+      sessionId: conversation.id,
+    });
+    await vi.waitFor(() => {
+      const latest = runtime.getSnapshot().conversations.items[0]!;
+      expect(latest.status).toBe("completed");
+      expect(latest.messages?.at(-2)?.text).toBe("queued-follow-up");
+    });
+  });
+
+  it("interrupts an active Run without closing the Conversation", async () => {
+    const { runtime, controller } = setup();
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "wait-for-abort",
+      label: "Interruptible",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(
+        runtime.getSnapshot().conversations.items[0]?.activeRunId,
+      ).toBeTruthy();
+    });
+    const running = runtime.getSnapshot().conversations.items[0]!;
+    const interrupted = await runtime.dispatch({
+      type: "interrupt-agent",
+      sessionId: running.id,
+    });
+    expect(interrupted).toMatchObject({ ok: true, sessionId: running.id });
+    await vi.waitFor(() => {
+      const conversation = runtime.getSnapshot().conversations.items[0]!;
+      expect(conversation.status).toBe("interrupted");
+      expect(conversation.activeRunId).toBeNull();
+      expect(conversation.availability).toBe("ready");
+      expect(conversation.messages?.some((message) => message.streaming)).toBe(
+        false,
+      );
+    });
+
+    await runtime.dispatch({
+      type: "send-agent",
+      sessionId: running.id,
+      message: "after abort",
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe(
+        "completed",
+      );
+    });
+    expect(controller.provider.snapshot()).toMatchObject({
+      sessions: 1,
+      acceptedRuns: 1,
+    });
+  });
+
+  it("finalizes a partial streaming assistant message on failure", async () => {
+    const { runtime, controller } = setup();
+    const originalRun = controller.provider.run.bind(controller.provider);
+    vi.spyOn(controller.provider, "run").mockImplementation(async (request) => {
+      if (request.task !== "stream-then-fail") return originalRun(request);
+      request.emit({ type: "message", text: "partial output" });
+      throw new Error("synthetic provider failure");
+    });
+
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "stream-then-fail",
+      label: "Streaming failure",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      const conversation = runtime
+        .getSnapshot()
+        .conversations.items.find(
+          (item) => item.label === "Streaming failure",
+        )!;
+      expect(conversation.status).toBe("failed");
+      expect(conversation.messages?.at(-1)).toMatchObject({
+        role: "assistant",
+        text: "partial output",
+        streaming: false,
+      });
+    });
+  });
+
+  it("marks a running Conversation stalled after heartbeats stop", async () => {
+    const { runtime, controller } = setup(1024 * 1024, 30);
+    const originalRun = controller.provider.run.bind(controller.provider);
+    vi.spyOn(controller.provider, "run").mockImplementation((request) => {
+      if (request.task !== "no-heartbeats") return originalRun(request);
+      return new Promise((_, reject) => {
+        const onAbort = (): void => reject(new Error("watchdog run aborted"));
+        if (request.signal.aborted) onAbort();
+        else request.signal.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "no-heartbeats",
+      label: "Stalled run",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]).toMatchObject({
+        status: "running",
+        stalled: true,
+        needsAttention: true,
+      });
+    });
+    const sessionId = runtime.getSnapshot().conversations.items[0]!.id;
+    await runtime.dispatch({ type: "interrupt-agent", sessionId });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]).toMatchObject({
+        status: "interrupted",
+        stalled: false,
+      });
+    });
+  });
+
+  it("marks volatile Sessions disposed across controller shutdown and reload", async () => {
+    const { runtime, controller } = setup();
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "one turn",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe(
+        "completed",
+      );
+    });
+    const sessionId = runtime.getSnapshot().conversations.items[0]!.id;
+    await controller.dispose();
+    expect(runtime.getSnapshot().conversations.items[0]).toMatchObject({
+      id: sessionId,
+      availability: "disposed",
+      activeRunId: null,
+    });
+    expect(controller.provider.snapshot().sessions).toBe(0);
+
+    const replacement = new WorkbenchController(runtime, {
+      provider: new PiRpcProcessProvider({
+        executable: process.execPath,
+        baseArgs: [fixture],
+        shutdownTimeoutMs: 500,
+      }),
+    });
+    controllers.push(replacement);
+    await expect(
+      runtime.dispatch({
+        type: "send-agent",
+        sessionId,
+        message: "must not fake retained context",
+      }),
+    ).resolves.toEqual({ ok: false, error: "session_disposed" });
+    expect(replacement.provider.snapshot().sessions).toBe(0);
+  });
+
+  it("bounds transcript bytes and marks evicted content", async () => {
+    const { runtime } = setup(48);
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "x".repeat(120),
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe(
+        "completed",
+      );
+    });
+    const conversation = runtime.getSnapshot().conversations.items[0]!;
+    const bytes = (conversation.messages ?? []).reduce(
+      (total, message) => total + Buffer.byteLength(message.text, "utf8"),
+      0,
+    );
+    expect(bytes).toBeLessThanOrEqual(48);
+    expect(conversation.transcriptTruncated).toBe(true);
+  });
+
+  it("truncates UTF-8 only at code point boundaries and stays within bytes", async () => {
+    const { runtime } = setup(5);
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "unicode-A😀",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe(
+        "completed",
+      );
+    });
+    const conversation = runtime.getSnapshot().conversations.items[0]!;
+    const retained = conversation.messages?.at(-1)?.text;
+    expect(retained).toBe("A😀");
+    expect(Buffer.byteLength(retained ?? "", "utf8")).toBe(5);
+    expect(retained).not.toContain("�");
+  });
+
+  it("marks a crashed persistent Session unavailable and fails follow-up loudly", async () => {
+    const { runtime } = setup();
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "crash-now",
+      label: "Crash worker",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.availability).toBe(
+        "unavailable",
+      );
+    });
+    const conversation = runtime.getSnapshot().conversations.items[0]!;
+    const result = await runtime.dispatch({
+      type: "send-agent",
+      sessionId: conversation.id,
+      message: "do not recreate context",
+    });
+    expect(result).toEqual({ ok: false, error: "session_unavailable" });
+  });
+
+  it("keeps workflow tasks queued until run admission", async () => {
+    const { runtime, controller } = setup();
+    await Promise.all([
+      runtime.dispatch({
+        type: "start-agent",
+        task: "wait-for-abort",
+        label: "Capacity blocker A",
+        cwd: process.cwd(),
+      }),
+      runtime.dispatch({
+        type: "start-agent",
+        task: "wait-for-abort",
+        label: "Capacity blocker B",
+        cwd: process.cwd(),
+      }),
+    ]);
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.running).toBe(2);
+    });
+
+    const workflow = controller.runWorkflow({
+      label: "Admission projection",
+      cwd: process.cwd(),
+      stages: [{ tasks: [{ task: "admitted-later", cwd: process.cwd() }] }],
+    });
+    await vi.waitFor(() => {
+      const task =
+        runtime.getSnapshot().workflows.items[0]?.stages?.[0]?.tasks[0];
+      expect(task).toMatchObject({ status: "queued" });
+      expect(task?.sessionId).toBeUndefined();
+      expect(task?.runId).toBeUndefined();
+    });
+
+    const blockers = runtime
+      .getSnapshot()
+      .conversations.items.filter((item) => !item.workflowId);
+    await runtime.dispatch({
+      type: "interrupt-agent",
+      sessionId: blockers[0]!.id,
+    });
+    await expect(workflow).resolves.toMatchObject({ status: "completed" });
+    await runtime.dispatch({
+      type: "interrupt-agent",
+      sessionId: blockers[1]!.id,
+    });
+  });
+
+  it("runs workflow stages sequentially and tasks within a stage in parallel", async () => {
+    const { runtime, controller } = setup();
+    const result = await controller.runWorkflow({
+      workflowId: "workflow-explicit",
+      label: "Repository review",
+      cwd: process.cwd(),
+      stages: [
+        {
+          label: "Parallel inspect",
+          tasks: [
+            { task: "inspect-a", label: "Inspect A", cwd: process.cwd() },
+            { task: "inspect-b", label: "Inspect B", cwd: process.cwd() },
+          ],
+        },
+        {
+          label: "Synthesize",
+          tasks: [
+            { task: "synthesize", label: "Synthesize", cwd: process.cwd() },
+          ],
+        },
+      ],
+    });
+
+    expect(result.workflowId).toBe("workflow-explicit");
+    expect(result.status).toBe("completed");
+    expect(result.stages.map((stage) => stage.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+    expect(runtime.getSnapshot().workflows.items[0]).toMatchObject({
+      id: result.workflowId,
+      label: "Repository review",
+      status: "completed",
+      currentStage: 1,
+    });
+    expect(runtime.getSnapshot().conversations.items).toHaveLength(3);
+    expect(
+      runtime
+        .getSnapshot()
+        .conversations.items.every(
+          (conversation) => conversation.workflowId === result.workflowId,
+        ),
+    ).toBe(true);
+  });
+
+  it("does not complete a Stage or Workflow after a late Abort", async () => {
+    const { controller } = setup();
+    const lateAbort = new AbortController();
+    const originalStart = controller.service.start.bind(controller.service);
+    vi.spyOn(controller.service, "start").mockImplementation(
+      async (request) => {
+        const result = await originalStart(request);
+        if (request.workflowId) {
+          lateAbort.abort(new Error("late workflow abort"));
+        }
+        return result;
+      },
+    );
+
+    await expect(
+      controller.runWorkflow({
+        label: "Late abort",
+        cwd: process.cwd(),
+        signal: lateAbort.signal,
+        stages: [{ tasks: [{ task: "fast-task", cwd: process.cwd() }] }],
+      }),
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      stages: [
+        {
+          status: "cancelled",
+          tasks: [{ status: "cancelled" }],
+        },
+      ],
+    });
+  });
+
+  it("cancels governor-queued Direct Agents when disposed", async () => {
+    const { runtime, controller } = setup();
+    for (const label of ["Active one", "Active two", "Queued three"]) {
+      await runtime.dispatch({
+        type: "start-agent",
+        task: "wait-for-abort",
+        label,
+        cwd: process.cwd(),
+      });
+    }
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().governor).toMatchObject({
+        active: 2,
+        queued: 1,
+      });
+    });
+
+    await controller.dispose();
+
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().governor).toMatchObject({
+        active: 0,
+        queued: 0,
+      });
+    });
+  });
+
+  it("submits background work with a stable handle and collects its retained result", async () => {
+    const { controller } = setup();
+    const submission = controller.submitAgent({
+      task: "retained-result",
+      label: "Retained result",
+      cwd: process.cwd(),
+    });
+    expect(submission.handle).toMatchObject({
+      workId: expect.stringMatching(/^work_/),
+      kind: "agent",
+      status: "queued",
+      background: true,
+    });
+    const result = await submission.completion;
+    expect(result.output).toContain("retained-result");
+    expect(controller.getJobs([submission.handle.workId])).toMatchObject({
+      completed: [
+        {
+          workId: submission.handle.workId,
+          status: "completed",
+          result: expect.objectContaining({ output: expect.stringContaining("retained-result") }),
+        },
+      ],
+      pending: [],
+      missing: [],
+    });
+    expect(controller.collectJobs([submission.handle.workId]).completed[0]).toMatchObject({
+      collectedAt: expect.any(Number),
+    });
+  });
+
+  it("waits without cancelling unfinished background work and can cancel it explicitly", async () => {
+    const { controller } = setup();
+    const submission = controller.submitAgent({
+      task: "wait-for-abort",
+      label: "Cancellable job",
+      cwd: process.cwd(),
+    });
+    const timeout = await controller.waitForJobs(
+      [submission.handle.workId],
+      "all",
+      10,
+    );
+    expect(timeout.pending).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(controller.getJobs([submission.handle.workId]).pending[0]?.runId).toBeTruthy();
+    });
+    expect(controller.cancelJob(submission.handle.workId)).toMatchObject({
+      workId: submission.handle.workId,
+      status: "running",
+    });
+    await expect(submission.completion).rejects.toThrow("Cancelled by user.");
+    await vi.waitFor(() => {
+      expect(controller.getJobs([submission.handle.workId]).completed[0]).toMatchObject({
+        status: "cancelled",
+      });
+    });
+  });
+
+  it("passes completed task outputs into later-stage inputs", async () => {
+    const { controller } = setup();
+    const result = await controller.runWorkflow({
+      label: "Dataflow",
+      cwd: process.cwd(),
+      stages: [
+        {
+          label: "Produce",
+          tasks: [
+            {
+              key: "producer",
+              task: "source-value",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+        {
+          label: "Consume",
+          tasks: [
+            {
+              key: "consumer",
+              inputs: ["producer"],
+              task: "use-source",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.stages[0]?.tasks[0]).toMatchObject({
+      key: "producer",
+      output: expect.stringContaining("source-value"),
+    });
+    expect(result.stages[1]?.tasks[0]).toMatchObject({
+      key: "consumer",
+      output: expect.stringContaining("Workflow input: producer"),
+    });
+    expect(result.stages[1]?.tasks[0]?.output).toContain("source-value");
+  });
+
+  it("rejects same-stage inputs and capacity overflow before creating a job", () => {
+    const { controller } = setup();
+    const sameStage = {
+      label: "Invalid dataflow",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            { key: "first", task: "first", cwd: process.cwd() },
+            {
+              key: "second",
+              inputs: ["first"],
+              task: "second",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => controller.submitWorkflow(sameStage)).toThrow(
+      "must reference a task from an earlier stage",
+    );
+
+    const tooMany = {
+      label: "Too large",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: Array.from({ length: 5 }, (_, index) => ({
+            task: `first-${index}`,
+            cwd: process.cwd(),
+          })),
+        },
+        {
+          tasks: Array.from({ length: 4 }, (_, index) => ({
+            task: `second-${index}`,
+            cwd: process.cwd(),
+          })),
+        },
+      ],
+    };
+    expect(() => controller.submitWorkflow(tooMany)).toThrow(
+      "Keep the entire workflow within 8 tasks",
+    );
+    expect(controller.getJobs()).toMatchObject({ completed: [], pending: [] });
+  });
+
+  it("accounts for existing persistent sessions during workflow preflight", async () => {
+    const { controller } = setup();
+    await controller.runAgent({
+      task: "occupy-one-session",
+      cwd: process.cwd(),
+    });
+    expect(controller.provider.snapshot()).toMatchObject({
+      sessions: 1,
+      limit: 8,
+    });
+
+    expect(() =>
+      controller.submitWorkflow({
+        label: "No remaining capacity",
+        cwd: process.cwd(),
+        stages: [
+          {
+            tasks: Array.from({ length: 8 }, (_, index) => ({
+              task: `workflow-${index}`,
+              cwd: process.cwd(),
+            })),
+          },
+        ],
+      }),
+    ).toThrow("provider has 7 available session slots");
+  });
+
+  it("reserves provider slots across concurrently submitted workflows", async () => {
+    const { controller } = setup();
+    const first = controller.submitWorkflow({
+      label: "Reserved first",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: Array.from({ length: 4 }, (_, index) => ({
+            task: `reserved-${index}`,
+            cwd: process.cwd(),
+          })),
+        },
+      ],
+    });
+
+    expect(() =>
+      controller.submitWorkflow({
+        label: "Would overbook",
+        cwd: process.cwd(),
+        stages: [
+          {
+            tasks: Array.from({ length: 5 }, (_, index) => ({
+              task: `overbook-${index}`,
+              cwd: process.cwd(),
+            })),
+          },
+        ],
+      }),
+    ).toThrow("provider has 4 available session slots");
+    await expect(first.completion).resolves.toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("pauses at a stage boundary, resumes, and retries from the retained definition", async () => {
+    const { runtime, controller } = setup();
+    const submission = controller.submitWorkflow({
+      label: "Controllable",
+      cwd: process.cwd(),
+      stages: [
+        {
+          label: "Slow first",
+          tasks: [{ task: "progress-for:80:10", cwd: process.cwd() }],
+        },
+        {
+          label: "Second",
+          tasks: [{ task: "after-resume", cwd: process.cwd() }],
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().workflows.items[0]?.stages?.[0]?.status).toBe(
+        "running",
+      );
+    });
+    expect(controller.pauseWorkflowJob(submission.handle.workId)).toMatchObject({
+      status: "paused",
+    });
+    await vi.waitFor(() => {
+      const workflow = runtime.getSnapshot().workflows.items[0]!;
+      expect(workflow.status).toBe("paused");
+      expect(workflow.stages?.[0]?.status).toBe("completed");
+      expect(workflow.stages?.[1]?.status).toBe("queued");
+    });
+    expect(controller.resumeWorkflowJob(submission.handle.workId)).toMatchObject({
+      status: "running",
+    });
+    await expect(submission.completion).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(controller.provider.snapshot().sessions).toBe(0);
+
+    const retry = controller.retryWorkflowJob(submission.handle.workId);
+    expect(retry?.handle).toMatchObject({
+      kind: "workflow",
+      status: "queued",
+      background: true,
+    });
+    expect(retry?.handle.workId).not.toBe(submission.handle.workId);
+    await expect(retry?.completion).resolves.toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("interrupts an active workflow from the runtime command", async () => {
+    const { runtime, controller } = setup();
+    const running = controller.runWorkflow({
+      label: "Interruptible",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            {
+              task: "wait-for-abort",
+              label: "Slow task",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().workflows.active).toBe(1);
+      expect(runtime.getSnapshot().conversations.running).toBe(1);
+    });
+    const activeWorkflow = runtime.getSnapshot().workflows.items[0]!;
+    const workflowId = activeWorkflow.id;
+    expect(activeWorkflow.stages?.[0]?.tasks[0]).toMatchObject({
+      status: "running",
+      sessionId: expect.any(String),
+      runId: expect.any(String),
+    });
+    const workflowSessionId = activeWorkflow.stages?.[0]?.tasks[0]?.sessionId!;
+    await expect(
+      runtime.dispatch({
+        type: "send-agent",
+        sessionId: workflowSessionId,
+        message: "must remain read-only",
+      }),
+    ).resolves.toEqual({ ok: false, error: "workflow_agent_read_only" });
+    await expect(
+      runtime.dispatch({ type: "interrupt-workflow", workflowId }),
+    ).resolves.toEqual({ ok: true });
+    await expect(running).resolves.toMatchObject({
+      workflowId,
+      status: "cancelled",
+    });
+    expect(runtime.getSnapshot().workflows.items[0]?.status).toBe("cancelled");
+  });
+});
