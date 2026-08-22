@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "packages": [
+    "git:github.com/brettatoms/pi-web-tools",
+    "npm:pi-rtk",
+    "npm:pi-knowledge",
+    "${REPO_ROOT}",
+    "${EAGLEEYE_AI_DEV_ROOT}/marketplace/packages/plugins/remote-notifications/current",
+    "${EAGLEEYE_AI_DEV_ROOT}/marketplace/packages/plugins/security-guard/current"
+  ],
+  "standaloneExtensions": [],
+  "prune": {
+    "packages": true,
+    "standaloneExtensions": "quarantine"
+  }
+}

@@ -1,4 +1,5 @@
 import { stripTypeScriptTypes } from "node:module";
+import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import vm from "node:vm";
 
@@ -9,6 +10,9 @@ let started = false;
 let settled = false;
 let nextCallId = 1;
 let maxCalls = 32;
+let maxComputeTimeMs = 15_000;
+let computeBaseline;
+let heartbeat;
 const toolCounts = Object.create(null);
 
 function send(message) {
@@ -18,8 +22,33 @@ function send(message) {
 function exitWith(message, code) {
   if (settled) return;
   settled = true;
+  if (heartbeat) clearInterval(heartbeat);
   const payload = `${JSON.stringify(message)}\n`;
   process.stdout.write(payload, () => process.exit(code));
+}
+
+function currentComputeTimeMs() {
+  if (!computeBaseline) return 0;
+  return Math.max(0, performance.eventLoopUtilization(computeBaseline).active);
+}
+
+function startComputeHeartbeat() {
+  computeBaseline = performance.eventLoopUtilization();
+  send({ type: "heartbeat", computeTimeMs: 0 });
+  heartbeat = setInterval(() => {
+    const computeTimeMs = currentComputeTimeMs();
+    if (computeTimeMs > maxComputeTimeMs) {
+      exitWith({
+        type: "error",
+        code: "compute_timeout",
+        message: `PTC program exceeded ${maxComputeTimeMs} ms compute-time limit`,
+        computeTimeMs,
+      }, 1);
+      return;
+    }
+    send({ type: "heartbeat", computeTimeMs });
+  }, 100);
+  heartbeat.unref();
 }
 
 function cloneLosslessJson(value, label) {
@@ -126,6 +155,9 @@ const tools = new Proxy(Object.create(null), {
 
 async function runProgram(message) {
   maxCalls = Number.isSafeInteger(message.maxCalls) && message.maxCalls > 0 ? message.maxCalls : maxCalls;
+  maxComputeTimeMs = Number.isSafeInteger(message.maxComputeTimeMs) && message.maxComputeTimeMs > 0
+    ? message.maxComputeTimeMs
+    : maxComputeTimeMs;
   if (Array.isArray(message.allowedTools)) {
     allowedTools = new Set(message.allowedTools.filter((name) => typeof name === "string" && SUPPORTED_TOOLS.has(name)));
   }
@@ -141,7 +173,8 @@ async function runProgram(message) {
   const script = new vm.Script(`${stripped}\n__ptc_main(tools, console)`, {
     filename: "ptc-program.ts",
   });
-  const result = await script.runInContext(context);
+  startComputeHeartbeat();
+  const result = await script.runInContext(context, { timeout: maxComputeTimeMs });
   return cloneLosslessJson(result, "PTC result");
 }
 
@@ -162,8 +195,19 @@ input.on("line", (line) => {
     }
     started = true;
     void runProgram(message).then(
-      (result) => exitWith({ type: "done", result, calls: nextCallId - 1, toolCounts }, 0),
-      (error) => exitWith({ type: "error", message: error instanceof Error ? error.message : String(error) }, 1),
+      (result) => exitWith({
+        type: "done",
+        result,
+        calls: nextCallId - 1,
+        toolCounts,
+        computeTimeMs: currentComputeTimeMs(),
+      }, 0),
+      (error) => exitWith({
+        type: "error",
+        code: error?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT" ? "compute_timeout" : undefined,
+        message: error instanceof Error ? error.message : String(error),
+        computeTimeMs: currentComputeTimeMs(),
+      }, 1),
     );
     return;
   }

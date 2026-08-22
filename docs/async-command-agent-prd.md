@@ -670,13 +670,13 @@ LLM 调用 background_command_start
 1. 更新任务状态。
 2. 更新 Widget。
 3. 在 TUI 发出一次本地通知。
-4. 将完成摘要以 `nextTurn` 方式加入下一次 Agent 上下文。
-5. 默认不因为后台任务完成自动发起新的模型请求，避免无提示消耗 Token。
+4. 将简短完成摘要以 `followUp` 方式加入 Agent 上下文。
+5. Agent 忙碌时等待当前工作结束，空闲时自动触发新的模型请求，让 Agent 读取输出并继续任务。
 
-完成摘要不得包含完整输出，只包含：
+完成摘要不得包含完整输出或输出路径，只包含任务 ID、标题、结果、耗时和下一步动作：
 
 ```text
-Background task bash-a81f [运行测试] finished: exit=0, duration=3m12s, output=/tmp/...
+Background task bash-a81f [运行测试] finished: exit=0 after 3m12s. Read its output with background_command_output and continue the task.
 ```
 
 ### 11.5 Widget 扩展
@@ -1370,7 +1370,7 @@ backgroundCommands.dynamicForegroundHandoff
 2. **阶段一使用 Extension + `pi-zero` pre-powerline 插槽**，新增命令组件、方向键焦点和输出视图，不修改 Pi Core 或现有 Powerline。
 3. **阶段二先提供独立后台 Tool**，验证任务模型和生命周期。
 4. **阶段三再修改 Pi Core**，支持已经运行的命令通过 `Ctrl+B` 转入后台。
-5. **后台完成默认不自动触发模型请求**，只在下一 Turn 注入一次摘要。
+5. **后台完成发送简短 `followUp` 摘要**；Agent 忙碌时排队，空闲时自动触发并继续处理。
 6. **Session 退出默认终止全部后台任务**，首版不支持跨进程保活。
 7. **前台与后台统一使用一个 CommandTaskRegistry**，避免 TUI、Tool 和 Shell 分别维护状态。
 
@@ -1382,6 +1382,6 @@ backgroundCommands.dynamicForegroundHandoff
 2. 后台输出文件默认总上限为 1GiB，内存尾部为 50KB。
 3. `/reload` 由进程级管理器保留任务并重新绑定；扩展未在 10 秒内重新绑定时统一取消和清理。
 4. Linux/macOS 使用独立进程组终止；Windows 先标记实验支持。
-5. 后台完成摘要只以 `nextTurn` 进入下一次用户请求，不允许立即触发 Agent Turn。
+5. 后台完成摘要以 `followUp` 投递；Agent 忙碌时等待，空闲时立即触发 Agent Turn。
 
 阶段三仍需确认：存在前台 Bash 时，`Ctrl+B` 是否覆盖 Pi 默认“光标左移”，或改用单独的可配置快捷键。

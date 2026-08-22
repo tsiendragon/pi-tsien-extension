@@ -83,7 +83,7 @@ export function formatBackgroundCompletionSummary(task: BackgroundTaskSnapshot):
       : task.state === "cancelled"
         ? "cancelled"
         : `exit=${task.exitCode ?? task.exitSignal ?? "unknown"}`;
-  return `Background task ${task.id} [${task.title}] finished: ${exit}, duration=${duration}, output=${task.outputFile}`;
+  return `Background task ${task.id} [${task.title}] finished: ${exit} after ${duration}. Read its output with background_command_output and continue the task.`;
 }
 
 export function registerBackgroundCommandTools(
@@ -99,13 +99,11 @@ export function registerBackgroundCommandTools(
   pi.registerTool({
     name: "background_command_start",
     label: "Start background command",
-    description: "Start an explicitly requested Bash command as a Session-owned background task. Returns after the process obtains a PID instead of waiting for completion. An optional short title is shown in the task UI and completion notice. The task shares the Agent working directory and can modify files concurrently. Prefer ordinary bash unless the user explicitly asks for background execution.",
-    promptSnippet: "Start an explicitly requested Bash command in the background and return a task ID immediately",
+    description: "Start a user-requested Bash command in the background and return its task ID. Use ordinary bash otherwise.",
+    promptSnippet: "Start a requested Bash command in the background.",
     promptGuidelines: [
-      "Use background_command_start only when the user explicitly requests background execution or when the request explicitly requires continuing while a long command runs; otherwise use ordinary bash.",
-      "Set a reasonable timeout for tests and builds started with background_command_start; long-lived development servers may omit it.",
-      "Use the optional title for a short human-readable label; it falls back to the Bash command when omitted.",
-      "Use background_command_status, background_command_output, and background_command_cancel with the returned task ID; never inspect or kill background task PIDs through ad-hoc shell commands.",
+      "Set a timeout for tests and builds; omit it only for long-lived servers.",
+      "Use the returned task ID with the background status, output, or cancel tools; do not manage its PID directly.",
     ],
     parameters: Type.Object({
       command: Type.String({ minLength: 1, description: "Bash command to execute in the current Agent working directory" }),
