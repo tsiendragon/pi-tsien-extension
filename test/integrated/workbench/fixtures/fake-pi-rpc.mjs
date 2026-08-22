@@ -209,6 +209,9 @@ function progressingTool(totalMs, intervalMs) {
 }
 
 function promptOutput(message) {
+  if (message.startsWith("json-output:")) {
+    return message.slice("json-output:".length);
+  }
   if (message === "report-argv") {
     return JSON.stringify(process.argv.slice(2));
   }
