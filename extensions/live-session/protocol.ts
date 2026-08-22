@@ -1,0 +1,258 @@
+export const LIVE_SESSION_PROTOCOL_VERSION = 1 as const;
+
+export const MAX_EVENT_BYTES = 1024 * 1024;
+export const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+export const MAX_COMMAND_BYTES = 256 * 1024;
+export const MAX_CONNECTION_BUFFER_BYTES = 4 * 1024 * 1024;
+export const MAX_PROMPT_BYTES = 128 * 1024;
+export const MAX_TOOL_OUTPUT_BYTES = 256 * 1024;
+export const REQUEST_CACHE_SIZE = 256;
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export type JsonObject = { readonly [key: string]: JsonValue };
+
+export type LiveSessionMode = "tui" | "rpc";
+export type LiveSessionStatus = "idle" | "running" | "reconnecting";
+
+export interface LiveSessionSummary {
+  readonly processInstanceId: string;
+  readonly sessionId: string;
+  readonly sessionFile?: string;
+  readonly sessionName?: string;
+  readonly pid: number;
+  readonly cwd: string;
+  readonly canonicalCwd: string;
+  readonly mode: LiveSessionMode;
+  readonly model?: { readonly provider: string; readonly id: string };
+  readonly thinkingLevel?: string;
+  readonly status: LiveSessionStatus;
+  readonly claim: {
+    readonly state: "unclaimed" | "claimed";
+    readonly leaseId?: string;
+    readonly expiresAt?: number;
+  };
+  readonly startedAt: number;
+  readonly lastActivityAt: number;
+  readonly revision: number;
+  readonly eventSequence: number;
+  readonly contextUsage?: {
+    readonly tokens: number | null;
+    readonly contextWindow: number;
+    readonly percent: number | null;
+  };
+}
+
+export type LiveSessionSummaryBase = Omit<LiveSessionSummary, "revision" | "eventSequence">;
+
+export type ProjectedSessionEntry = JsonObject & {
+  readonly type: string;
+  readonly id?: string;
+  readonly timestamp?: string;
+  readonly truncated?: boolean;
+};
+
+export type LiveSessionEvent = JsonObject & {
+  readonly type: string;
+  readonly data: JsonObject;
+  readonly truncated?: boolean;
+};
+
+export type LiveSessionCommand =
+  | { readonly type: "resync" }
+  | { readonly type: "claim"; readonly browserClientId: string; readonly requestedLeaseMs: number }
+  | { readonly type: "renew"; readonly leaseId: string }
+  | { readonly type: "release"; readonly leaseId: string }
+  | {
+      readonly type: "prompt";
+      readonly leaseId: string;
+      readonly text: string;
+      readonly deliverAs?: "steer" | "followUp";
+      readonly expandPromptTemplates?: false;
+    }
+  | { readonly type: "abort"; readonly leaseId: string };
+
+export interface HelloMessage {
+  readonly type: "hello";
+  readonly protocolVersion: typeof LIVE_SESSION_PROTOCOL_VERSION;
+  readonly brokerToken: string;
+  readonly processInstanceId: string;
+  readonly pid: number;
+  readonly cwd: string;
+  readonly mode: LiveSessionMode;
+  readonly sessionId: string;
+}
+
+export interface SnapshotMessage {
+  readonly type: "snapshot";
+  readonly processInstanceId: string;
+  readonly revision: number;
+  readonly sequence: number;
+  readonly summary: LiveSessionSummary;
+  readonly entries: readonly ProjectedSessionEntry[];
+}
+
+export interface EventMessage {
+  readonly type: "event";
+  readonly processInstanceId: string;
+  readonly sequence: number;
+  readonly event: LiveSessionEvent;
+}
+
+export interface CommandError {
+  readonly code: string;
+  readonly message: string;
+}
+
+export type CommandResultMessage =
+  | { readonly type: "command_result"; readonly requestId: string; readonly ok: true; readonly result: JsonValue }
+  | { readonly type: "command_result"; readonly requestId: string; readonly ok: false; readonly error: CommandError };
+
+export interface HeartbeatMessage {
+  readonly type: "heartbeat";
+  readonly processInstanceId: string;
+  readonly at: number;
+}
+
+export interface GoodbyeMessage {
+  readonly type: "goodbye";
+  readonly processInstanceId: string;
+  readonly reason: string;
+}
+
+export type ExtensionToBrokerMessage =
+  | HelloMessage
+  | SnapshotMessage
+  | EventMessage
+  | CommandResultMessage
+  | HeartbeatMessage
+  | GoodbyeMessage;
+
+export interface WelcomeMessage {
+  readonly type: "welcome";
+  readonly protocolVersion: typeof LIVE_SESSION_PROTOCOL_VERSION;
+  readonly heartbeatMs: number;
+}
+
+export interface RejectMessage {
+  readonly type: "reject";
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface CommandEnvelope {
+  readonly type: "command";
+  readonly requestId: string;
+  readonly processInstanceId: string;
+  readonly command: LiveSessionCommand;
+}
+
+export type BrokerToExtensionMessage = WelcomeMessage | RejectMessage | CommandEnvelope;
+
+export type CommandExecutionResult =
+  | { readonly ok: true; readonly result: JsonValue }
+  | { readonly ok: false; readonly error: CommandError };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => Object.hasOwn(value, key))
+    && Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isBoundedString(value: unknown, maxBytes = 4096): value is string {
+  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= maxBytes;
+}
+
+function parseCommand(value: unknown): LiveSessionCommand | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+
+  if (value.type === "resync" && hasOnlyKeys(value, ["type"])) return { type: "resync" };
+
+  if (value.type === "claim" && hasOnlyKeys(value, ["type", "browserClientId", "requestedLeaseMs"])) {
+    if (!isBoundedString(value.browserClientId, 256)
+      || !Number.isInteger(value.requestedLeaseMs)
+      || Number(value.requestedLeaseMs) < 10_000
+      || Number(value.requestedLeaseMs) > 120_000) return undefined;
+    return {
+      type: "claim",
+      browserClientId: value.browserClientId,
+      requestedLeaseMs: Number(value.requestedLeaseMs),
+    };
+  }
+
+  if ((value.type === "renew" || value.type === "release" || value.type === "abort")
+    && hasOnlyKeys(value, ["type", "leaseId"])) {
+    if (!isBoundedString(value.leaseId, 256)) return undefined;
+    return { type: value.type, leaseId: value.leaseId };
+  }
+
+  if (value.type === "prompt"
+    && hasOnlyKeys(value, ["type", "leaseId", "text"], ["deliverAs", "expandPromptTemplates"])) {
+    if (!isBoundedString(value.leaseId, 256)
+      || typeof value.text !== "string"
+      || value.text.trim().length === 0
+      || Buffer.byteLength(value.text, "utf8") > MAX_PROMPT_BYTES
+      || (value.deliverAs !== undefined && value.deliverAs !== "steer" && value.deliverAs !== "followUp")
+      || (value.expandPromptTemplates !== undefined && value.expandPromptTemplates !== false)) return undefined;
+    return {
+      type: "prompt",
+      leaseId: value.leaseId,
+      text: value.text,
+      ...(value.deliverAs === undefined ? {} : { deliverAs: value.deliverAs }),
+      ...(value.expandPromptTemplates === undefined ? {} : { expandPromptTemplates: false }),
+    };
+  }
+
+  return undefined;
+}
+
+export function parseBrokerMessage(value: unknown): BrokerToExtensionMessage | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+
+  if (value.type === "welcome" && hasOnlyKeys(value, ["type", "protocolVersion", "heartbeatMs"])) {
+    if (value.protocolVersion !== LIVE_SESSION_PROTOCOL_VERSION
+      || !Number.isInteger(value.heartbeatMs)
+      || Number(value.heartbeatMs) < 1000
+      || Number(value.heartbeatMs) > 120_000) return undefined;
+    return {
+      type: "welcome",
+      protocolVersion: LIVE_SESSION_PROTOCOL_VERSION,
+      heartbeatMs: Number(value.heartbeatMs),
+    };
+  }
+
+  if (value.type === "reject" && hasOnlyKeys(value, ["type", "code", "message"])) {
+    if (!isBoundedString(value.code, 256) || !isBoundedString(value.message, 4096)) return undefined;
+    return { type: "reject", code: value.code, message: value.message };
+  }
+
+  if (value.type === "command" && hasOnlyKeys(value, ["type", "requestId", "processInstanceId", "command"])) {
+    if (!isBoundedString(value.requestId, 256) || !isBoundedString(value.processInstanceId, 256)) return undefined;
+    const command = parseCommand(value.command);
+    if (!command) return undefined;
+    return {
+      type: "command",
+      requestId: value.requestId,
+      processInstanceId: value.processInstanceId,
+      command,
+    };
+  }
+
+  return undefined;
+}
+
+export function encodedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+export function success(requestId: string, result: JsonValue): CommandResultMessage {
+  return { type: "command_result", requestId, ok: true, result };
+}
+
+export function failure(requestId: string, code: string, message: string): CommandResultMessage {
+  return { type: "command_result", requestId, ok: false, error: { code, message } };
+}
