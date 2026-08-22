@@ -3,7 +3,7 @@ import {
   type AgentSessionEvent,
   createAgentSession,
   DefaultResourceLoader,
-  type ExtensionCommandContext,
+  type ExtensionContext,
   getAgentDir,
   ModelRuntime,
   SessionManager,
@@ -38,14 +38,25 @@ export type BtwConversationItem = {
   text: string;
 };
 
-function snapshotParentMessages(ctx: ExtensionCommandContext): ParentMessages {
+export type BtwSnapshot = {
+  apiVersion: 1;
+  revision: number;
+  generatedAt: number;
+  status: "ready" | "busy" | "closed";
+  parentMessageCount: number;
+  model: string;
+  activity: string;
+  conversation: BtwConversationItem[];
+};
+
+function snapshotParentMessages(ctx: ExtensionContext): ParentMessages {
   const messages = ctx.sessionManager
     .buildContextEntries()
     .flatMap((entry) => sessionEntryToContextMessages(entry));
   return structuredClone(messages);
 }
 
-function snapshotParentHistory(ctx: ExtensionCommandContext): SessionHistorySnapshot {
+function snapshotParentHistory(ctx: ExtensionContext): SessionHistorySnapshot {
   return snapshotSessionHistory(ctx.sessionManager.getBranch());
 }
 
@@ -86,7 +97,7 @@ export class BtwSessionController {
   onChange?: () => void;
 
   private readonly session: AgentSession;
-  private readonly ctx: ExtensionCommandContext;
+  private readonly ctx: ExtensionContext;
   private readonly historySnapshot: SessionHistorySnapshot;
   private readonly unsubscribe: () => void;
   private disposed = false;
@@ -94,9 +105,11 @@ export class BtwSessionController {
   private cancelRequested = false;
   private currentSubmit: Promise<void> | undefined;
   private activeAssistant: BtwConversationItem | undefined;
+  private readonly listeners = new Set<(snapshot: BtwSnapshot) => void>();
+  private revision = 0;
 
   private constructor(
-    ctx: ExtensionCommandContext,
+    ctx: ExtensionContext,
     session: AgentSession,
     parentMessageCount: number,
     historySnapshot: SessionHistorySnapshot,
@@ -109,7 +122,7 @@ export class BtwSessionController {
   }
 
   static async create(
-    ctx: ExtensionCommandContext,
+    ctx: ExtensionContext,
     cancellationSignal?: AbortSignal,
   ): Promise<BtwSessionController> {
     if (!ctx.model) throw new Error("当前没有可用模型");
@@ -198,6 +211,24 @@ export class BtwSessionController {
     return model ? `${model.provider}/${model.id}` : "unknown model";
   }
 
+  getSnapshot(): BtwSnapshot {
+    return {
+      apiVersion: 1,
+      revision: this.revision,
+      generatedAt: Date.now(),
+      status: this.disposed ? "closed" : this.busy ? "busy" : "ready",
+      parentMessageCount: this.parentMessageCount,
+      model: this.modelLabel,
+      activity: this.activity,
+      conversation: this.conversation.map(item => ({ ...item })),
+    };
+  }
+
+  subscribe(listener: (snapshot: BtwSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
   get lastAnswer(): string | undefined {
     return [...this.conversation]
       .reverse()
@@ -268,6 +299,8 @@ export class BtwSessionController {
     this.unsubscribe();
     this.session.dispose();
     this.onChange = undefined;
+    this.emitChange();
+    this.listeners.clear();
   }
 
   private handleEvent(event: AgentSessionEvent): void {
@@ -328,6 +361,9 @@ export class BtwSessionController {
   }
 
   private emitChange(): void {
+    this.revision += 1;
     this.onChange?.();
+    const snapshot = this.getSnapshot();
+    for (const listener of this.listeners) listener(snapshot);
   }
 }
