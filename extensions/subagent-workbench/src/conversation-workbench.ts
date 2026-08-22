@@ -144,9 +144,11 @@ export interface ConversationWorkbenchOptions {
 }
 
 function statusSymbol(
-  conversation: Pick<ConversationRecord, "status">,
+  item: {
+    readonly status: ConversationRecord["status"] | WorkflowTaskRecord["status"];
+  },
 ): string {
-  switch (conversation.status) {
+  switch (item.status) {
     case "running":
       return "●";
     case "completed":
@@ -158,6 +160,8 @@ function statusSymbol(
       return "‖";
     case "cancelled":
       return "×";
+    case "skipped":
+      return "-";
     default:
       return "○";
   }
@@ -1084,7 +1088,7 @@ class ConversationWorkbenchComponent implements Component, Focusable {
     const tasks = (workflow.stages ?? []).flatMap((stage) => stage.tasks);
     rows.push(
       frame(
-        ` running ${tasks.filter((task) => task.status === "running").length} · queued ${tasks.filter((task) => task.status === "queued").length} · completed ${tasks.filter((task) => task.status === "completed").length}`,
+        ` running ${tasks.filter((task) => task.status === "running").length} · queued ${tasks.filter((task) => task.status === "queued").length} · completed ${tasks.filter((task) => task.status === "completed").length} · skipped ${tasks.filter((task) => task.status === "skipped").length}`, 
       ),
     );
     if (workflow.error) {

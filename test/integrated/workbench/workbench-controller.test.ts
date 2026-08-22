@@ -705,6 +705,165 @@ describe("WorkbenchController", () => {
     expect(result.stages[1]?.tasks[0]?.output).toContain("source-value");
   });
 
+  it("parses and validates structured JSON task outputs", async () => {
+    const { controller } = setup();
+    const schema = {
+      type: "object",
+      properties: {
+        country: { type: "string" },
+        valid: { type: "boolean" },
+      },
+      required: ["country", "valid"],
+      additionalProperties: false,
+    };
+    const valid = await controller.runWorkflow({
+      label: "Structured output",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            {
+              key: "parsed",
+              task: 'json-output:{"country":"IQ","valid":true}',
+              outputSchema: schema,
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+    expect(valid).toMatchObject({
+      status: "completed",
+      stages: [
+        {
+          tasks: [
+            {
+              key: "parsed",
+              json: { country: "IQ", valid: true },
+            },
+          ],
+        },
+      ],
+    });
+
+    const invalid = await controller.runWorkflow({
+      label: "Invalid structured output",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            {
+              task: 'json-output:{"country":"IQ","valid":"yes"}',
+              outputSchema: schema,
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+    expect(invalid).toMatchObject({
+      status: "failed",
+      stages: [
+        {
+          status: "failed",
+          tasks: [
+            {
+              status: "failed",
+              error: "Task JSON output does not match outputSchema.",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("resolves parameters, conditions, and bounded foreach fan-out", async () => {
+    const { runtime, controller } = setup();
+    const result = await controller.runWorkflow({
+      label: "Declarative control",
+      cwd: process.cwd(),
+      parameters: {
+        country: "IQ",
+        enabled: true,
+      },
+      stages: [
+        {
+          tasks: [
+            {
+              key: "discover",
+              task: 'json-output:{"documents":["passport","id-card"]}',
+              outputSchema: {
+                type: "object",
+                properties: {
+                  documents: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                },
+                required: ["documents"],
+              },
+              cwd: process.cwd(),
+            },
+          ],
+        },
+        {
+          tasks: [
+            {
+              key: "disabled",
+              when: "{{parameters.enabled}} == false",
+              task: "must-not-run",
+              cwd: process.cwd(),
+            },
+            {
+              key: "inspect",
+              when: "{{parameters.enabled}}",
+              foreach: "{{tasks.discover.json.documents}}",
+              maxItems: 2,
+              task: "inspect {{item}} at {{index}} for {{parameters.country}}",
+              label: "Inspect {{item}}",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.stages[1]?.tasks[0]).toMatchObject({
+      key: "disabled",
+      status: "skipped",
+    });
+    expect(result.stages[1]?.tasks[1]).toMatchObject({
+      key: "inspect",
+      status: "completed",
+      json: [
+        expect.stringContaining("inspect passport at 0 for IQ"),
+        expect.stringContaining("inspect id-card at 1 for IQ"),
+      ],
+      iterations: [
+        {
+          index: 0,
+          item: "passport",
+          status: "completed",
+          output: expect.stringContaining("inspect passport at 0 for IQ"),
+        },
+        {
+          index: 1,
+          item: "id-card",
+          status: "completed",
+          output: expect.stringContaining("inspect id-card at 1 for IQ"),
+        },
+      ],
+    });
+    expect(
+      runtime
+        .getSnapshot()
+        .conversations.items.some((conversation) =>
+          conversation.label.includes("must-not-run"),
+        ),
+    ).toBe(false);
+  });
+
   it("rejects same-stage inputs and capacity overflow before creating a job", () => {
     const { controller } = setup();
     const sameStage = {
@@ -862,6 +1021,92 @@ describe("WorkbenchController", () => {
     await expect(retry?.completion).resolves.toMatchObject({
       status: "completed",
     });
+  });
+
+  it("retries from the first incomplete Stage and reuses earlier outputs", async () => {
+    const { runtime, controller } = setup();
+    const first = controller.submitWorkflow({
+      label: "Resume failed attempt",
+      cwd: process.cwd(),
+      stages: [
+        {
+          label: "Reusable",
+          tasks: [
+            { key: "source", task: "stable-source", cwd: process.cwd() },
+          ],
+        },
+        {
+          label: "Interrupted",
+          tasks: [{ task: "wait-for-abort", cwd: process.cwd() }],
+        },
+        {
+          label: "After retry",
+          tasks: [
+            {
+              inputs: ["source"],
+              task: "consume-reused-source",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      const stages = runtime.getSnapshot().workflows.items[0]?.stages;
+      expect(stages?.[0]?.status).toBe("completed");
+      expect(stages?.[1]?.status).toBe("running");
+    });
+    controller.cancelJob(first.handle.workId, "retry test");
+    const cancelled = await first.completion;
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      attempt: 1,
+      stages: [
+        { status: "completed" },
+        { status: "cancelled" },
+        { status: "cancelled" },
+      ],
+    });
+
+    const startedTasks: string[] = [];
+    const originalStart = controller.service.start.bind(controller.service);
+    vi.spyOn(controller.service, "start").mockImplementation((request) => {
+      startedTasks.push(request.task);
+      return originalStart({
+        ...request,
+        task: request.task === "wait-for-abort" ? "recovered-stage" : request.task,
+      });
+    });
+    const retry = controller.retryWorkflowJob(first.handle.workId)!;
+    expect(controller.getJobs([retry.handle.workId]).pending[0]).toMatchObject({
+      attempt: 2,
+      sourceWorkId: first.handle.workId,
+    });
+    const retried = await retry.completion;
+
+    expect(startedTasks).toEqual(["wait-for-abort", "consume-reused-source"]);
+    expect(retried).toMatchObject({
+      status: "completed",
+      attempt: 2,
+      sourceWorkId: first.handle.workId,
+      resumedFromStage: 2,
+      stages: [
+        {
+          status: "completed",
+          reused: true,
+          tasks: [
+            {
+              key: "source",
+              reused: true,
+              output: cancelled.stages[0]?.tasks[0]?.output,
+            },
+          ],
+        },
+        { status: "completed" },
+        { status: "completed" },
+      ],
+    });
+    expect(retried.stages[2]?.tasks[0]?.output).toContain("stable-source");
   });
 
   it("interrupts an active workflow from the runtime command", async () => {

@@ -122,11 +122,13 @@ export type WorkflowStatus =
   | "failed"
   | "cancelled";
 
+export type WorkflowTaskStatus = ConversationStatus | "skipped";
+
 export interface WorkflowTaskRecord {
   readonly id: string;
   readonly key?: string;
   readonly label: string;
-  readonly status: ConversationStatus;
+  readonly status: WorkflowTaskStatus;
   readonly sessionId?: string;
   readonly runId?: string;
   readonly error?: string;

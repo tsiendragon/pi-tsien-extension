@@ -85,7 +85,9 @@ function cleanLabel(label: string): string {
 function workflowProgress(workflow: WorkflowRecord): string {
   const tasks = (workflow.stages ?? []).flatMap((stage) => stage.tasks);
   if (tasks.length === 0) return "";
-  const completed = tasks.filter((task) => task.status === "completed").length;
+  const completed = tasks.filter(
+    (task) => task.status === "completed" || task.status === "skipped",
+  ).length;
   return ` ${completed}/${tasks.length}`;
 }
 

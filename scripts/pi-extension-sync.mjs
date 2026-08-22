@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -51,24 +51,34 @@ function packageIdentity(entry, baseDir) {
 	return `local:${resolve(baseDir, source)}`;
 }
 
-function discoverEagleEyeRoot(repoRoot, env) {
-	const candidates = [
-		env.EAGLEEYE_AI_DEV_ROOT,
-		resolve(repoRoot, "..", "eagleeye-ai-dev"),
-	].filter(Boolean);
-	const found = candidates.find((candidate) => existsSync(candidate));
-	if (!found) {
-		throw new Error(
-			"Cannot resolve ${EAGLEEYE_AI_DEV_ROOT}; set EAGLEEYE_AI_DEV_ROOT or clone eagleeye-ai-dev beside this repo",
-		);
-	}
+function firstExisting(candidates, label) {
+	const found = candidates.filter(Boolean).find((candidate) => existsSync(candidate));
+	if (!found) throw new Error(`Cannot resolve ${label}`);
 	return resolve(found);
+}
+
+function createContext({ repoRoot, agentDir, env }) {
+	const piTsienRoot = firstExisting(
+		[env.PI_TSIEN_EXTENSION_ROOT, repoRoot],
+		"${PI_TSIEN_EXTENSION_ROOT}; set PI_TSIEN_EXTENSION_ROOT",
+	);
+	const eagleeyeRoot = firstExisting(
+		[env.EAGLEEYE_AI_DEV_ROOT, resolve(piTsienRoot, "..", "eagleeye-ai-dev")],
+		"${EAGLEEYE_AI_DEV_ROOT}; set EAGLEEYE_AI_DEV_ROOT or clone eagleeye-ai-dev beside pi-tsien-extension",
+	);
+	return {
+		piTsienRoot,
+		eagleeyeRoot,
+		agentDir,
+		home: env.HOME ? resolve(env.HOME) : homedir(),
+	};
 }
 
 function expandString(value, context) {
 	return value
-		.replaceAll("${REPO_ROOT}", context.repoRoot)
+		.replaceAll("${PI_TSIEN_EXTENSION_ROOT}", context.piTsienRoot)
 		.replaceAll("${EAGLEEYE_AI_DEV_ROOT}", context.eagleeyeRoot)
+		.replaceAll("${PI_AGENT_DIR}", context.agentDir)
 		.replaceAll("${HOME}", context.home);
 }
 
@@ -76,6 +86,14 @@ function expandPackage(entry, context) {
 	if (typeof entry === "string") return expandString(entry, context);
 	if (!entry || typeof entry !== "object" || typeof entry.source !== "string") {
 		throw new Error(`Invalid package entry: ${JSON.stringify(entry)}`);
+	}
+	if (!Array.isArray(entry.extensions)) {
+		throw new Error(`Package must declare an extensions allowlist: ${entry.source}`);
+	}
+	for (const pattern of entry.extensions) {
+		if (typeof pattern !== "string" || !pattern.startsWith("+") || pattern.length === 1) {
+			throw new Error(`Extension allowlist entries must use +relative/path: ${String(pattern)}`);
+		}
 	}
 	return { ...entry, source: expandString(entry.source, context) };
 }
@@ -89,21 +107,18 @@ function assertUniquePackages(packages, baseDir) {
 	}
 }
 
-function normalizeStandalone(entries, context) {
+function normalizeDirectExtensions(entries, context) {
 	const seen = new Set();
 	return entries.map((entry) => {
-		if (!entry || typeof entry !== "object" || typeof entry.target !== "string" || typeof entry.source !== "string") {
-			throw new Error(`Invalid standalone extension: ${JSON.stringify(entry)}`);
-		}
-		if (basename(entry.target) !== entry.target || !EXTENSION_FILE.test(entry.target)) {
-			throw new Error(`Unsafe standalone extension target: ${entry.target}`);
-		}
-		if (seen.has(entry.target)) throw new Error(`Duplicate standalone extension target: ${entry.target}`);
-		seen.add(entry.target);
-		const source = expandString(entry.source, context);
-		if (!isAbsolute(source)) throw new Error(`Standalone source must resolve to an absolute path: ${entry.source}`);
-		if (!existsSync(source)) throw new Error(`Standalone source does not exist: ${source}`);
-		return { target: entry.target, source };
+		if (typeof entry !== "string") throw new Error(`Direct extension path must be a string: ${JSON.stringify(entry)}`);
+		const expanded = expandString(entry, context);
+		if (!isAbsolute(expanded)) throw new Error(`Direct extension must resolve to an absolute path: ${entry}`);
+		const absolute = resolve(expanded);
+		if (!EXTENSION_FILE.test(absolute)) throw new Error(`Unsupported extension file: ${entry}`);
+		if (!existsSync(absolute)) throw new Error(`Direct extension does not exist: ${absolute}`);
+		if (seen.has(absolute)) throw new Error(`Duplicate direct extension: ${absolute}`);
+		seen.add(absolute);
+		return absolute;
 	});
 }
 
@@ -116,32 +131,31 @@ function timestamp(date = new Date()) {
 }
 
 export function buildSyncPlan({
-	configPath = join(DEFAULT_REPO_ROOT, "config", "pi-extensions.json"),
+	configPath,
 	agentDir = join(homedir(), ".pi", "agent"),
 	repoRoot = DEFAULT_REPO_ROOT,
 	env = process.env,
 } = {}) {
-	const absoluteConfigPath = resolve(configPath);
 	const absoluteAgentDir = resolve(agentDir);
 	const absoluteRepoRoot = resolve(repoRoot);
+	const absoluteConfigPath = resolve(configPath ?? join(absoluteAgentDir, "extensions.config.json"));
 	const config = readJson(absoluteConfigPath);
 	if (config.version !== 1) throw new Error(`Unsupported config version: ${String(config.version)}`);
-	if (!Array.isArray(config.packages) || !Array.isArray(config.standaloneExtensions)) {
-		throw new Error("Config must contain packages and standaloneExtensions arrays");
+	if (!Array.isArray(config.packages) || !Array.isArray(config.extensions)) {
+		throw new Error("Config must contain packages and extensions arrays");
 	}
-	if (config.prune?.packages !== true || config.prune?.standaloneExtensions !== "quarantine") {
-		throw new Error("Strict management requires prune.packages=true and prune.standaloneExtensions=quarantine");
+	if (
+		config.prune?.packages !== true ||
+		config.prune?.extensions !== true ||
+		config.prune?.autoDiscoveredExtensions !== "quarantine"
+	) {
+		throw new Error("Strict management requires package/direct-extension pruning and auto-extension quarantine");
 	}
 
-	const context = {
-		repoRoot: absoluteRepoRoot,
-		eagleeyeRoot: discoverEagleEyeRoot(absoluteRepoRoot, env),
-		home: env.HOME ? resolve(env.HOME) : homedir(),
-	};
+	const context = createContext({ repoRoot: absoluteRepoRoot, agentDir: absoluteAgentDir, env });
 	const desiredPackages = config.packages.map((entry) => expandPackage(entry, context));
+	const desiredExtensions = normalizeDirectExtensions(config.extensions, context);
 	assertUniquePackages(desiredPackages, absoluteAgentDir);
-	const desiredStandalone = normalizeStandalone(config.standaloneExtensions, context);
-
 	for (const entry of desiredPackages) {
 		const source = packageSource(entry);
 		if (isAbsolute(source) && !existsSync(source)) throw new Error(`Local package does not exist: ${source}`);
@@ -150,14 +164,11 @@ export function buildSyncPlan({
 	const settingsPath = join(absoluteAgentDir, "settings.json");
 	const settings = existsSync(settingsPath) ? readJson(settingsPath) : {};
 	const currentPackages = Array.isArray(settings.packages) ? settings.packages : [];
+	const currentExtensions = Array.isArray(settings.extensions) ? settings.extensions : [];
 	assertUniquePackages(currentPackages, absoluteAgentDir);
 
-	const currentByIdentity = new Map(
-		currentPackages.map((entry) => [packageIdentity(entry, absoluteAgentDir), entry]),
-	);
-	const desiredByIdentity = new Map(
-		desiredPackages.map((entry) => [packageIdentity(entry, absoluteAgentDir), entry]),
-	);
+	const currentByIdentity = new Map(currentPackages.map((entry) => [packageIdentity(entry, absoluteAgentDir), entry]));
+	const desiredByIdentity = new Map(desiredPackages.map((entry) => [packageIdentity(entry, absoluteAgentDir), entry]));
 	const packageAdds = [];
 	const packageUpdates = [];
 	const packageRemovals = [];
@@ -170,42 +181,40 @@ export function buildSyncPlan({
 		if (!desiredByIdentity.has(identity)) packageRemovals.push(entry);
 	}
 
-	const extensionsDir = join(absoluteAgentDir, "extensions");
-	const currentStandalone = existsSync(extensionsDir)
-		? readdirSync(extensionsDir, { withFileTypes: true })
-			.filter((entry) => entry.isFile() && EXTENSION_FILE.test(entry.name))
-			.map((entry) => entry.name)
-			.sort()
-		: [];
-	const desiredTargets = new Set(desiredStandalone.map((entry) => entry.target));
-	const standaloneChanges = desiredStandalone.flatMap((entry) => {
-		const targetPath = join(extensionsDir, entry.target);
-		if (!existsSync(targetPath)) return [{ action: "install", ...entry, targetPath }];
-		const current = readFileSync(targetPath);
-		const desired = readFileSync(entry.source);
-		return current.equals(desired) ? [] : [{ action: "update", ...entry, targetPath }];
-	});
-	const standaloneRemovals = currentStandalone
-		.filter((name) => !desiredTargets.has(name))
-		.map((name) => ({ name, path: join(extensionsDir, name) }));
+	const normalizedCurrentExtensions = currentExtensions.map((entry) => resolve(absoluteAgentDir, entry));
+	const currentExtensionSet = new Set(normalizedCurrentExtensions);
+	const desiredExtensionSet = new Set(desiredExtensions);
+	const extensionAdds = desiredExtensions.filter((entry) => !currentExtensionSet.has(entry));
+	const extensionRemovals = currentExtensions.filter(
+		(_entry, index) => !desiredExtensionSet.has(normalizedCurrentExtensions[index]),
+	);
+	const extensionConfigChanged = !sameEntry(currentExtensions, desiredExtensions);
 
+	const autoExtensionsDir = join(absoluteAgentDir, "extensions");
+	const allowedAutoPaths = new Set(desiredExtensions);
+	const autoExtensionRemovals = existsSync(autoExtensionsDir)
+		? readdirSync(autoExtensionsDir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() && EXTENSION_FILE.test(entry.name))
+			.map((entry) => ({ name: entry.name, path: join(autoExtensionsDir, entry.name) }))
+			.filter((entry) => !allowedAutoPaths.has(resolve(entry.path)))
+			.sort((left, right) => left.name.localeCompare(right.name))
+		: [];
+
+	const packageConfigChanged = !sameEntry(currentPackages, desiredPackages);
 	return {
 		configPath: absoluteConfigPath,
 		agentDir: absoluteAgentDir,
 		settingsPath,
 		settings,
 		desiredPackages,
+		desiredExtensions,
 		packageAdds,
 		packageUpdates,
 		packageRemovals,
-		standaloneChanges,
-		standaloneRemovals,
-		changed:
-			packageAdds.length > 0 ||
-			packageUpdates.length > 0 ||
-			packageRemovals.length > 0 ||
-			standaloneChanges.length > 0 ||
-			standaloneRemovals.length > 0,
+		extensionAdds,
+		extensionRemovals,
+		autoExtensionRemovals,
+		changed: packageConfigChanged || extensionConfigChanged || autoExtensionRemovals.length > 0,
 	};
 }
 
@@ -222,29 +231,21 @@ export function applySyncPlan(plan, { now = new Date() } = {}) {
 	const backupDir = join(plan.agentDir, "extension-sync-backups", stamp);
 	const quarantineDir = join(plan.agentDir, "extension-quarantine", stamp);
 	mkdirSync(backupDir, { recursive: true });
-
 	if (existsSync(plan.settingsPath)) copyFileSync(plan.settingsPath, join(backupDir, "settings.json"));
-	atomicWriteJson(plan.settingsPath, { ...plan.settings, packages: plan.desiredPackages });
-
-	for (const change of plan.standaloneChanges) {
-		mkdirSync(dirname(change.targetPath), { recursive: true });
-		if (existsSync(change.targetPath)) {
-			const extensionBackupDir = join(backupDir, "extensions");
-			mkdirSync(extensionBackupDir, { recursive: true });
-			copyFileSync(change.targetPath, join(extensionBackupDir, change.target));
-		}
-		const temporary = `${change.targetPath}.tmp-${process.pid}`;
-		copyFileSync(change.source, temporary);
-		renameSync(temporary, change.targetPath);
-	}
-
-	if (plan.standaloneRemovals.length > 0) {
+	atomicWriteJson(plan.settingsPath, {
+		...plan.settings,
+		packages: plan.desiredPackages,
+		extensions: plan.desiredExtensions,
+	});
+	if (plan.autoExtensionRemovals.length > 0) {
 		mkdirSync(quarantineDir, { recursive: true });
-		for (const removal of plan.standaloneRemovals) {
-			renameSync(removal.path, join(quarantineDir, removal.name));
-		}
+		for (const removal of plan.autoExtensionRemovals) renameSync(removal.path, join(quarantineDir, removal.name));
 	}
-	return { changed: true, backupDir, quarantineDir: plan.standaloneRemovals.length ? quarantineDir : undefined };
+	return {
+		changed: true,
+		backupDir,
+		quarantineDir: plan.autoExtensionRemovals.length ? quarantineDir : undefined,
+	};
 }
 
 function describeEntry(entry) {
@@ -252,23 +253,20 @@ function describeEntry(entry) {
 }
 
 export function formatSyncPlan(plan) {
-	const lines = [plan.changed ? "Pi extension sync changes:" : "Pi extensions already match the config."];
+	const lines = [plan.changed ? "Pi extension sync changes:" : "Pi extensions already match the user config."];
 	for (const entry of plan.packageAdds) lines.push(`  package + ${describeEntry(entry)}`);
 	for (const update of plan.packageUpdates) {
-		lines.push(`  package ~ ${describeEntry(update.from)} -> ${describeEntry(update.to)}`);
+		lines.push(`  package ~ filters/source: ${describeEntry(update.to)}`);
 	}
 	for (const entry of plan.packageRemovals) lines.push(`  package - ${describeEntry(entry)}`);
-	for (const change of plan.standaloneChanges) lines.push(`  standalone ${change.action === "install" ? "+" : "~"} ${change.target}`);
-	for (const removal of plan.standaloneRemovals) lines.push(`  standalone - ${removal.name} -> quarantine`);
+	for (const entry of plan.extensionAdds) lines.push(`  extension + ${entry}`);
+	for (const entry of plan.extensionRemovals) lines.push(`  extension - ${entry}`);
+	for (const removal of plan.autoExtensionRemovals) lines.push(`  auto extension - ${removal.name} -> quarantine`);
 	return lines.join("\n");
 }
 
 function parseArgs(argv) {
-	const options = {
-		apply: false,
-		configPath: join(DEFAULT_REPO_ROOT, "config", "pi-extensions.json"),
-		agentDir: join(homedir(), ".pi", "agent"),
-	};
+	const options = { apply: false, configPath: undefined, agentDir: join(homedir(), ".pi", "agent") };
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "--apply") options.apply = true;
@@ -277,12 +275,13 @@ function parseArgs(argv) {
 		else if (arg === "--help" || arg === "-h") options.help = true;
 		else throw new Error(`Unknown argument: ${arg}`);
 	}
+	if (options.configPath === undefined) options.configPath = join(options.agentDir, "extensions.config.json");
 	if (!options.configPath || !options.agentDir) throw new Error("--config and --agent-dir require values");
 	return options;
 }
 
 function printHelp() {
-	console.log(`Usage: node scripts/pi-extension-sync.mjs [options]\n\nOptions:\n  --apply              Apply the plan (default is dry-run)\n  --config <path>      Manifest path\n  --agent-dir <path>   Pi agent directory\n  -h, --help           Show this help`);
+	console.log(`Usage: node scripts/pi-extension-sync.mjs [options]\n\nOptions:\n  --apply              Apply the user config (default is dry-run)\n  --config <path>      Config path (default: ~/.pi/agent/extensions.config.json)\n  --agent-dir <path>   Pi agent directory\n  -h, --help           Show this help`);
 }
 
 function main() {
@@ -302,7 +301,7 @@ function main() {
 		if (result.changed) {
 			console.log(`Applied. Backup: ${result.backupDir}`);
 			if (result.quarantineDir) console.log(`Quarantine: ${result.quarantineDir}`);
-			console.log("Restart Pi to load the reconciled extensions.");
+			console.log("Reload or restart Pi to load the user-selected extensions.");
 		}
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
