@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-15T12:53:52.880Z",
+  "target": {
+    "repository": "pi-subagent-workbench",
+    "commit": "0ae97227aa1f63dd727f937c78439de1b13b48fe",
+    "node": "v26.5.0",
+    "platform": "linux/x64",
+    "gcExposed": true
+  },
+  "summary": {
+    "total": 14,
+    "passed": 14,
+    "failed": 0
+  },
+  "results": [
+    {
+      "id": "S1",
+      "name": "单次 Run 生命周期",
+      "complexity": "simple",
+      "status": "PASS",
+      "durationMs": 1.6,
+      "metrics": {
+        "sessionCount": 1,
+        "runStatus": "completed",
+        "activeAfterCompletion": 0
+      },
+      "conclusion": "单次任务从 queued→running→completed，资源租约正常释放。"
+    },
+    {
+      "id": "S2",
+      "name": "稳定 ChildSession 连续 20 次 Run",
+      "complexity": "simple",
+      "status": "PASS",
+      "durationMs": 0.88,
+      "metrics": {
+        "sessionCount": 1,
+        "runCount": 20,
+        "uniqueRunIds": 20
+      },
+      "conclusion": "一个 ChildSession 可稳定承载多个独立 Run，身份没有漂移。"
+    },
+    {
+      "id": "S3",
+      "name": "缺失 provider 明确失败",
+      "complexity": "simple",
+      "status": "PASS",
+      "durationMs": 0.21,
+      "metrics": {
+        "errorName": "ProviderUnavailableError",
+        "sessionCount": 0
+      },
+      "conclusion": "未注册 process provider 时 fail-loud，没有静默降级为 native。"
+    },
+    {
+      "id": "C1",
+      "name": "200 Run 并发压力与资源回收",
+      "complexity": "complex",
+      "status": "PASS",
+      "durationMs": 192.58,
+      "metrics": {
+        "submitted": 200,
+        "completed": 200,
+        "activeLimit": 4,
+        "maxProviderActive": 4,
+        "maxQueued": 196,
+        "elapsedMs": 185.91,
+        "throughputPerSecond": 1075.8,
+        "latencyP50Ms": 93.62,
+        "latencyP95Ms": 173.21,
+        "rssBeforeBytes": 89284608,
+        "rssAfterBytes": 91566080,
+        "rssDeltaBytes": 2281472,
+        "activeAfterCompletion": 0,
+        "queuedAfterCompletion": 0
+      },
+      "conclusion": "200 个并发提交严格受 active=4 约束，并在结束后清空 active/queue。"
+    },
+    {
+      "id": "C2",
+      "name": "严格优先级与同优先级公平性",
+      "complexity": "complex",
+      "status": "PASS",
+      "durationMs": 0.28,
+      "metrics": {
+        "observedOrder": [
+          "P0-C1",
+          "P1-B1",
+          "P2-A1",
+          "P2-D1",
+          "P2-A2"
+        ],
+        "expectedOrder": [
+          "P0-C1",
+          "P1-B1",
+          "P2-A1",
+          "P2-D1",
+          "P2-A2"
+        ]
+      },
+      "conclusion": "P0>P1>P2 严格生效，P2 的 workflow-a/workflow-d 发生 round-robin。"
+    },
+    {
+      "id": "C3",
+      "name": "有界队列、取消与超载保护",
+      "complexity": "complex",
+      "status": "PASS",
+      "durationMs": 0.55,
+      "metrics": {
+        "overflowReason": "queue_full",
+        "abortReason": "aborted",
+        "activeAfterRecovery": 0,
+        "queuedAfterRecovery": 0
+      },
+      "conclusion": "队列满时结构化拒绝；排队任务可取消；恢复后无遗留 permit。"
+    },
+    {
+      "id": "C4",
+      "name": "同步嵌套任务防死锁",
+      "complexity": "complex",
+      "status": "PASS",
+      "durationMs": 0.08,
+      "metrics": {
+        "code": "nested_resource_exhausted",
+        "reason": "nested_capacity_unavailable",
+        "queuedAfterRejection": 0
+      },
+      "conclusion": "permit 已耗尽时同步后代立即失败，不进入可能自锁的队列。"
+    },
+    {
+      "id": "C5",
+      "name": "Provider 失败隔离与后续恢复",
+      "complexity": "complex",
+      "status": "PASS",
+      "durationMs": 0.34,
+      "metrics": {
+        "failureType": "SubagentExecutionError",
+        "recoveredOutput": "recovered",
+        "activeAfterRecovery": 0,
+        "needsAttention": 1
+      },
+      "conclusion": "单个 provider 异常不会破坏 governor，后续 Run 可正常执行。"
+    },
+    {
+      "id": "C6",
+      "name": "运行中断与观察者错误隔离",
+      "complexity": "complex",
+      "status": "PASS",
+      "durationMs": 1.48,
+      "metrics": {
+        "interruptAccepted": true,
+        "runStatus": "interrupted",
+        "errorType": "SubagentExecutionError",
+        "healthyNotifications": 5,
+        "activeAfterInterrupt": 0
+      },
+      "conclusion": "中断能终止 active Run；坏 listener 不阻塞其他订阅者或资源释放。"
+    },
+    {
+      "id": "E1",
+      "name": "非法提交参数在创建 Session 前拒绝",
+      "complexity": "edge",
+      "status": "PASS",
+      "durationMs": 0.25,
+      "metrics": {
+        "invalidCases": 7,
+        "rejectedCases": 7,
+        "providerCalls": 0,
+        "sessionCount": 0,
+        "errorCodes": [
+          "invalid_request",
+          "invalid_task",
+          "invalid_task",
+          "invalid_task",
+          "invalid_context",
+          "invalid_timeout",
+          "invalid_parameter"
+        ]
+      },
+      "conclusion": "非法类型、空 task 和非法 timeout 在 Session/provider 之前结构化拒绝。"
+    },
+    {
+      "id": "E2",
+      "name": "默认 task 上限与 UTF-8 字节计数",
+      "complexity": "edge",
+      "status": "PASS",
+      "durationMs": 1.18,
+      "metrics": {
+        "defaultLimitBytes": 1048576,
+        "exactBoundaryAccepted": true,
+        "overLimitCode": "task_too_large",
+        "overLimitActualBytes": 1048577,
+        "twoEmojiBytes": 8,
+        "oversizedProviderCalls": 0
+      },
+      "conclusion": "1 MiB task 边界可用；超 1 字节即拒绝；emoji 按 UTF-8 字节计算。"
+    },
+    {
+      "id": "E3",
+      "name": "默认 context 上限",
+      "complexity": "edge",
+      "status": "PASS",
+      "durationMs": 3.73,
+      "metrics": {
+        "defaultLimitBytes": 8388608,
+        "actualBytes": 8388609,
+        "errorCode": "context_too_large",
+        "providerCalls": 0,
+        "sessionCount": 0
+      },
+      "conclusion": "超过默认 8 MiB 的 explicit context 在 admission 前拒绝。"
+    },
+    {
+      "id": "E4",
+      "name": "超大 provider 输出限制与 lease 回收",
+      "complexity": "edge",
+      "status": "PASS",
+      "durationMs": 1.35,
+      "metrics": {
+        "defaultLimitBytes": 8388608,
+        "actualBytes": 8388609,
+        "causeCode": "output_too_large",
+        "activeAfterRejection": 0,
+        "queuedAfterRejection": 0
+      },
+      "conclusion": "超过 8 MiB 的 provider 输出被拒绝，异常路径没有泄漏 permit。"
+    },
+    {
+      "id": "E5",
+      "name": "提交前已取消的 signal",
+      "complexity": "edge",
+      "status": "PASS",
+      "durationMs": 0.26,
+      "metrics": {
+        "reason": "aborted",
+        "providerCalls": 0,
+        "sessionCount": 0,
+        "activeAfterRejection": 0,
+        "queuedAfterRejection": 0
+      },
+      "conclusion": "预先取消的提交不会创建 Session、进入 provider 或占用 active/queue。"
+    }
+  ]
+}

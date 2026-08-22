@@ -1,5 +1,5 @@
 {
-  "schema": "pi.ptc-full-tool-config/v1",
+  "schema": "pi.ptc-full-tool-config/v2",
   "generatedAt": "2026-08-15T03:23:24.750Z",
   "advisoryOnly": false,
   "partiallyEnforced": true,
@@ -9,18 +9,20 @@
       "maxOuterRunCodeCalls",
       "maxNestedWrites",
       "maxNestedRuns",
-      "maxWallTimeMs",
+      "maxRunComputeTimeMs",
+      "maxRunWallTimeMs",
       "maxAssistantOutputTokens"
     ],
     "advisory": [
       "maxModules"
     ],
-    "tokenBoundary": "Checked between assistant turns and before run_code/nested calls; an in-flight provider response cannot be interrupted at an exact token.",
+    "tokenBoundary": "Checked before run_code and nested calls; an in-flight provider response cannot be interrupted at an exact token, and this budget never aborts the outer Agent.",
     "tokenMetric": "Runtime charges only newly generated assistant Usage.output tokens, including reasoning. recommended.maxTotalTokens is retained as the legacy benchmark config key; input and cached context do not consume the per-task budget."
   },
   "common": {
     "mode": "full",
     "perProgramSubCallHardLimit": 32,
+    "maxRunComputeTimeMs": 15000,
     "maxWriteBytes": 262144,
     "maxRunOutputBytes": 131072,
     "maxRunTimeoutMs": 15000,
@@ -34,7 +36,7 @@
     "childProcessAvailable": false,
     "requireProjectTrust": true,
     "requireIndependentTests": true,
-    "note": "Runtime budgets are enforced by model ID. maxModules remains advisory because arbitrary code does not expose a reliable module count."
+    "note": "Task call/token budgets and independent per-run compute/wall ceilings are enforced by model ID. Model thinking and ordinary tools do not consume run time. maxModules remains advisory because arbitrary code does not expose a reliable module count."
   },
   "models": {
     "openai-codex/gpt-5.6-sol": {
@@ -48,7 +50,7 @@
         "maxOuterRunCodeCalls": 12,
         "maxNestedWrites": 160,
         "maxNestedRuns": 3,
-        "maxWallTimeMs": 130000,
+        "maxRunWallTimeMs": 130000,
         "maxTotalTokens": 150000
       },
       "rationale": "Passed every tested level; F7 completed with 128 writes, one test run, about 97k tokens."
@@ -64,7 +66,7 @@
         "maxOuterRunCodeCalls": 8,
         "maxNestedWrites": 100,
         "maxNestedRuns": 3,
-        "maxWallTimeMs": 120000,
+        "maxRunWallTimeMs": 120000,
         "maxTotalTokens": 120000
       },
       "rationale": "Passed F7, but F7 rose to about 190k tokens; F6 is the practical unattended limit."
@@ -80,7 +82,7 @@
         "maxOuterRunCodeCalls": 6,
         "maxNestedWrites": 60,
         "maxNestedRuns": 3,
-        "maxWallTimeMs": 90000,
+        "maxRunWallTimeMs": 90000,
         "maxTotalTokens": 80000
       },
       "rationale": "F1-F5 passed, while both F6 and F7 were 2/3. Bulk-write planning becomes stochastic above 48 modules."
@@ -96,10 +98,10 @@
         "maxOuterRunCodeCalls": 8,
         "maxNestedWrites": 60,
         "maxNestedRuns": 3,
-        "maxWallTimeMs": 90000,
+        "maxRunWallTimeMs": 90000,
         "maxTotalTokens": 100000
       },
-      "rationale": "Passed F7 historically, but token use climbed from about 51k at F5 to 119k at F6 and 283k at F7. A monitored F3 correction needed a seventh run_code and about 81k tokens; the revised call/token/time budget permits that correction while the 60-write cap still prevents repeated full rewrites at the 48-module recommendation."
+      "rationale": "Passed F7 historically, but token use climbed from about 51k at F5 to 119k at F6 and 283k at F7. A monitored F3 correction needed a seventh run_code and about 81k tokens; the revised call/token budget permits that correction, the per-run wall ceiling covers nested-tool waits, and the 60-write cap still prevents repeated full rewrites at the 48-module recommendation."
     },
     "dashscope/deepseek-v4-pro": {
       "capabilityMaxTested": {
@@ -112,7 +114,7 @@
         "maxOuterRunCodeCalls": 8,
         "maxNestedWrites": 100,
         "maxNestedRuns": 3,
-        "maxWallTimeMs": 100000,
+        "maxRunWallTimeMs": 100000,
         "maxTotalTokens": 100000
       },
       "rationale": "F6 completed near 70k tokens. F7 passed but rewrote all 128 modules twice and used about 185k tokens."

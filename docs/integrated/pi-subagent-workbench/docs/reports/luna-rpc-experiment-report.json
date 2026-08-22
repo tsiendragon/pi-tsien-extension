@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-15T16:07:00.670Z",
+  "target": {
+    "repository": "pi-subagent-workbench",
+    "commit": "d802891c5dd2ba81468b51dd677cbaf6a2792853",
+    "piVersion": "0.84.1",
+    "provider": "openai-codex",
+    "model": "gpt-5.6-luna",
+    "thinking": "minimal",
+    "transport": "pi --mode rpc",
+    "node": "v26.5.0",
+    "platform": "linux/x64"
+  },
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "serviceRunAttempts": 10,
+    "acceptedModelRuns": 10,
+    "completedModelRuns": 8,
+    "inputTokens": 519,
+    "outputTokens": 120,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 0,
+    "costUsd": 0.0002478,
+    "providerBeforeDispose": {
+      "sessions": 7,
+      "active": 0,
+      "unavailable": 1,
+      "limit": 8,
+      "acceptedRuns": 10,
+      "processIds": [
+        3962971,
+        3963125,
+        3963156,
+        3963157,
+        3963201,
+        3963208,
+        3963247
+      ]
+    },
+    "providerAfterDispose": {
+      "sessions": 0,
+      "active": 0,
+      "unavailable": 8,
+      "limit": 8,
+      "acceptedRuns": 10,
+      "processIds": []
+    }
+  },
+  "results": [
+    {
+      "id": "R1",
+      "name": "同一 RPC ChildSession 两轮续聊",
+      "status": "PASS",
+      "durationMs": 8226.58,
+      "metrics": {
+        "sessionId": "session_6a841a6e16d1",
+        "firstRunId": "run_829214e38b81",
+        "secondRunId": "run_3fcd69ae264c",
+        "processPid": 3962971,
+        "sameProcess": true,
+        "firstOutput": "ACK_7319",
+        "secondOutput": "LUNA_RPC_MEMORY_7319",
+        "firstUsage": {
+          "input": 62,
+          "output": 8,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0.000022
+        },
+        "secondUsage": {
+          "input": 91,
+          "output": 48,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0.0000758
+        }
+      },
+      "conclusion": "同一 Workbench ChildSession 的两个 Run 复用同一 Pi RPC 进程并保留模型上下文。"
+    },
+    {
+      "id": "R2",
+      "name": "真实 Luna explicit context",
+      "status": "PASS",
+      "durationMs": 3984.67,
+      "metrics": {
+        "sessionId": "session_33914a75744f",
+        "runId": "run_4338faf28110",
+        "output": "LUNA_EXPLICIT_8842",
+        "usage": {
+          "input": 72,
+          "output": 11,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0.0000276
+        }
+      },
+      "conclusion": "explicit context envelope 经持久 RPC provider 到达真实 Luna。"
+    },
+    {
+      "id": "R3",
+      "name": "activeLimit=2 的四 Session 真实并发",
+      "status": "PASS",
+      "durationMs": 9297.05,
+      "metrics": {
+        "submitted": 4,
+        "completed": 4,
+        "outputs": [
+          "LUNA_RPC_A_1101",
+          "LUNA_RPC_B_2202",
+          "LUNA_RPC_C_3303",
+          "LUNA_RPC_D_4404"
+        ],
+        "activeLimit": 2,
+        "peakProviderActive": 2,
+        "peakGovernorActive": 2,
+        "peakQueued": 2,
+        "elapsedMs": 9296.87,
+        "finalActive": 0,
+        "finalQueued": 0
+      },
+      "conclusion": "四个真实 Luna RPC Session 全部完成，provider 与 governor 峰值均严格为 2。"
+    },
+    {
+      "id": "R4",
+      "name": "RPC abort 后同 Session 继续",
+      "status": "PASS",
+      "durationMs": 4134.34,
+      "metrics": {
+        "sessionId": "session_02aab16be378",
+        "interruptedRunId": "run_f51af8f76ed1",
+        "interruptedStatus": "interrupted",
+        "resumedRunId": "run_609d337b3f00",
+        "resumedOutput": "LUNA_AFTER_ABORT_OK",
+        "resumedUsage": {
+          "input": 82,
+          "output": 9,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0.000027200000000000004
+        }
+      },
+      "conclusion": "RPC abort 将当前 Run 标为 interrupted，但 ChildSession 保持可继续使用。"
+    },
+    {
+      "id": "R5",
+      "name": "强制 RPC 退出后的 tombstone",
+      "status": "PASS",
+      "durationMs": 2399.71,
+      "metrics": {
+        "sessionId": "session_c5ff5742c17f",
+        "failedRunId": "run_f5d49dbcdb5c",
+        "failedStatus": "failed",
+        "continuationErrorCode": "session_unavailable",
+        "retainedSessions": 7,
+        "unavailableSessions": 1,
+        "finalActive": 0,
+        "finalQueued": 0
+      },
+      "conclusion": "RPC 子进程被强制关闭后 Session 被 tombstone，后续 Run 明确失败而不丢上下文静默重启。"
+    }
+  ]
+}

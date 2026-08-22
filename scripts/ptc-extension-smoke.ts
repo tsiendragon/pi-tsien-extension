@@ -1,13 +1,15 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ptcExtension from "../extensions/ptc.ts";
+import ptcExtension, { runPtcProgramForTest } from "../extensions/ptc.ts";
+import { createBudgetState, resolvePtcPolicy } from "../extensions/ptc/policy.ts";
 
 let registeredTool: any;
 let registeredCommand: any;
 const handlers = new Map<string, Function[]>();
 const statusTexts: Array<string | undefined> = [];
 let activeTools = ["read", "bash", "edit", "write"];
+let abortCalls = 0;
 
 const pi = {
   registerTool(tool: any) {
@@ -44,7 +46,7 @@ const ctx = {
   ui,
   model: { provider: "openai-codex", id: "gpt-5.6-sol" },
   isProjectTrusted: () => true,
-  abort() {},
+  abort() { abortCalls += 1; },
 } as any;
 
 ptcExtension(pi);
@@ -68,10 +70,16 @@ if (
   !strictSystemPrompt.includes("validate whether the parsed value is an array or object")
   || !strictSystemPrompt.includes("compute-only merge program still consumes one outer")
   || !strictSystemPrompt.includes("strict read-only PTC mode")
+  || !strictSystemPrompt.includes("model thinking and ordinary tools do not consume")
+  || !strictSystemPrompt.includes("\"runWallTimeMs\"")
 ) {
   throw new Error("PTC strict system prompt is missing usage or budget guidance");
 }
+if ((handlers.get("turn_start") ?? []).length !== 0) {
+  throw new Error("PTC still installs a task-wide turn_start budget abort handler");
+}
 for (const handler of handlers.get("agent_settled") ?? []) await handler({}, ctx);
+if (abortCalls !== 0) throw new Error("PTC task lifecycle unexpectedly aborted the Agent");
 await registeredCommand.handler("on", ctx);
 
 const result = await registeredTool.execute(
@@ -108,8 +116,14 @@ if (
 if (result.details?.subCalls !== 1) {
   throw new Error(`Unexpected sub-call count: ${String(result.details?.subCalls)}`);
 }
-if (result.details?.resultValidation?.contractApplied !== true || result.details?.budget?.policySource !== "configured") {
-  throw new Error(`PTC policy or result contract was not applied: ${JSON.stringify(result.details)}`);
+if (
+  result.details?.resultValidation?.contractApplied !== true
+  || result.details?.budget?.policySource !== "configured"
+  || result.details?.budget?.runComputeTimeMs?.limitPerRun !== 15_000
+  || result.details?.budget?.runWallTimeMs?.limitPerRun !== 90_000
+  || result.details?.budget?.runWallTimeMs?.lastUsed <= 0
+) {
+  throw new Error(`PTC policy, per-run timing, or result contract was not applied: ${JSON.stringify(result.details)}`);
 }
 
 let rejectedWrite = false;
@@ -277,9 +291,9 @@ if (!rejectedContract) throw new Error("PTC result contract accepted a wrong che
 
 const deepSeekCtx = { ...ctx, model: { provider: "dashscope", id: "deepseek-v4-flash" } };
 for (const handler of handlers.get("model_select") ?? []) {
-  await handler({ model: deepSeekCtx.model, previousModel: ctx.model, source: "set" }, deepSeekCtx);
+  // The event is authoritative even if a runtime supplies a context whose model has not updated yet.
+  await handler({ model: deepSeekCtx.model, previousModel: ctx.model, source: "set" }, ctx);
 }
-await registeredCommand.handler("on", deepSeekCtx);
 const fencedResult = await registeredTool.execute(
   "fenced-result",
   {
@@ -296,8 +310,13 @@ const fencedResult = await registeredTool.execute(
   undefined,
   deepSeekCtx,
 );
-if (fencedResult.details?.resultValidation?.normalizedJson !== true) {
-  throw new Error(`PTC fenced tool result was not normalized: ${JSON.stringify(fencedResult.details)}`);
+if (
+  fencedResult.details?.resultValidation?.normalizedJson !== true
+  || fencedResult.details?.budget?.model !== "dashscope/deepseek-v4-flash"
+  || fencedResult.details?.budget?.outerRunCodeCalls?.used !== 2
+  || fencedResult.details?.budget?.runWallTimeMs?.limitPerRun !== 120_000
+) {
+  throw new Error(`PTC model retargeting or fenced result normalization failed: ${JSON.stringify(fencedResult.details)}`);
 }
 
 let normalizedAssistant: any;
@@ -370,6 +389,33 @@ try {
   clearTimeout(cancelTimer);
 }
 if (!cancelledLoop) throw new Error("PTC runtime did not cancel an infinite loop cleanly");
+
+const computeBudget = createBudgetState({
+  ...resolvePtcPolicy("readOnly", ctx.model),
+  maxRunComputeTimeMs: 100,
+  maxRunWallTimeMs: 2_000,
+});
+const computeStartedAt = Date.now();
+let rejectedAsyncBusyLoop = false;
+try {
+  await runPtcProgramForTest(
+    `
+      await tools.read({ path: "package.json", offset: 1, limit: 1 });
+      while (true) {}
+    `,
+    ctx.cwd,
+    undefined,
+    false,
+    computeBudget,
+  );
+} catch (error) {
+  rejectedAsyncBusyLoop = error instanceof Error
+    && error.message.includes("PTC_BUDGET_EXCEEDED")
+    && error.message.includes("runComputeTimeMs");
+}
+if (!rejectedAsyncBusyLoop || Date.now() - computeStartedAt >= 2_000 || computeBudget.violation) {
+  throw new Error("PTC compute watchdog did not stop an async-resumed busy loop independently");
+}
 
 await registeredCommand.handler("both", ctx);
 let mixedSystemPrompt = "";

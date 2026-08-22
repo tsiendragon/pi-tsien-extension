@@ -1,13 +1,16 @@
 import {
   assertBudgetAvailable,
+  budgetSnapshot,
   createBudgetState,
+  createRunBudgetError,
   normalizeAndValidateResult,
   normalizeFencedJsonText,
   recordAssistantTokens,
+  recordRunUsage,
   reserveNestedCall,
   reserveOuterRunCode,
   resolvePtcPolicy,
-  stopBudgetState,
+  retargetBudgetState,
 } from "../extensions/ptc/policy.ts";
 
 function expectPolicyError(action: () => unknown, code: string): void {
@@ -28,6 +31,8 @@ if (
   readPolicy.source !== "configured"
   || readPolicy.maxOuterRunCodeCalls !== 5
   || readPolicy.maxTotalSubCalls !== 40
+  || readPolicy.maxRunComputeTimeMs !== 15_000
+  || readPolicy.maxRunWallTimeMs !== 120_000
   || readPolicy.normalizeJsonFence !== true
 ) {
   throw new Error(`Unexpected read-only policy: ${JSON.stringify(readPolicy)}`);
@@ -41,12 +46,31 @@ const tokenBudget = createBudgetState(readPolicy);
 recordAssistantTokens(tokenBudget, readPolicy.maxAssistantOutputTokens + 1);
 expectPolicyError(() => assertBudgetAvailable(tokenBudget), "PTC_BUDGET_EXCEEDED");
 
-const wallBudget = createBudgetState({ ...readPolicy, maxActiveWallTimeMs: 1 }, true);
-wallBudget.startedAt -= 10;
-expectPolicyError(() => assertBudgetAvailable(wallBudget), "PTC_BUDGET_EXCEEDED");
-const frozenBudget = createBudgetState(readPolicy, true);
-stopBudgetState(frozenBudget);
-if (frozenBudget.running || frozenBudget.endedAt === undefined) throw new Error("Budget wall time did not freeze");
+const runBudgetState = createBudgetState(readPolicy);
+recordRunUsage(runBudgetState, { computeTimeMs: 7.6, wallTimeMs: 42.4 });
+const runSnapshot = budgetSnapshot(runBudgetState) as any;
+if (
+  runSnapshot.runComputeTimeMs.lastUsed !== 8
+  || runSnapshot.runComputeTimeMs.totalUsed !== 8
+  || runSnapshot.runComputeTimeMs.limitPerRun !== 15_000
+  || runSnapshot.runWallTimeMs.lastUsed !== 42
+  || runSnapshot.runWallTimeMs.totalUsed !== 42
+  || runSnapshot.runWallTimeMs.limitPerRun !== 120_000
+) {
+  throw new Error(`Unexpected per-run budget accounting: ${JSON.stringify(runSnapshot)}`);
+}
+const runTimeout = createRunBudgetError(runBudgetState, "runWallTimeMs", 120_001, 120_000);
+if (!runTimeout.message.includes("runWallTimeMs") || runBudgetState.violation) {
+  throw new Error("A per-run timeout should fail only that execution without poisoning task budget");
+}
+assertBudgetAvailable(runBudgetState);
+
+const lunaPolicy = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "gpt-5.6-luna" });
+reserveOuterRunCode(runBudgetState);
+const retargeted = retargetBudgetState(runBudgetState, lunaPolicy);
+if (retargeted.policy.modelKey !== "openai-codex/gpt-5.6-luna" || retargeted.outerRunCodeCalls !== 1) {
+  throw new Error(`Model retargeting lost usage: ${JSON.stringify(budgetSnapshot(retargeted))}`);
+}
 
 const fullPolicy = resolvePtcPolicy("full", {
   provider: "openai-codex",

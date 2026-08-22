@@ -40,10 +40,9 @@ The extension resolves the active model from `ctx.model` and loads the matching 
 - outer `run_code` calls;
 - read-only total nested calls;
 - full-mode nested writes and runs;
-- active task wall time;
-- accumulated assistant tokens at turn/tool boundaries.
+- accumulated assistant tokens before later `run_code` or nested calls.
 
-The per-program 32-call and 15-second hard limits remain independent. Workload descriptors such as shard, record, or module count remain advisory because arbitrary PTC code does not expose those counts reliably. Token enforcement is boundary-based: an already streaming provider response cannot be stopped at an exact token.
+Each `run_code` execution independently receives a 15-second compute-time limit and a model-specific 90–130 second wall-time ceiling. Waiting for nested tools consumes wall time but not compute time. Model thinking, assistant text generation, ordinary tools, and failed earlier programs do not consume the next execution's time allowance. A timeout fails only the current `run_code`; it does not abort the Agent or poison a later correction. The per-program 32-call limit remains independent. Workload descriptors such as shard, record, or module count remain advisory because arbitrary PTC code does not expose those counts reliably. Token enforcement is boundary-based: an already streaming provider response cannot be stopped at an exact token.
 
 For structured tasks, `run_code` accepts an optional result contract:
 
@@ -70,7 +69,9 @@ Each `run_code` starts a fresh Node child process with:
 - no filesystem, network, child-process, Worker, inspector, FFI, or WASI permission;
 - empty environment;
 - a 128 MiB old-generation heap cap;
-- 15 second wall timeout;
+- 15 second event-loop compute-time limit;
+- model-specific 90–130 second per-run wall-time ceiling;
+- parent heartbeat watchdog for busy loops that continue after an `await`;
 - 32 sub-call limit;
 - 256 KiB total protocol/output cap;
 - no `process`, `require`, or module loader in the program VM context;

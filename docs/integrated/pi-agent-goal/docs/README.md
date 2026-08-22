@@ -1,0 +1,43 @@
+# Pi `/goal` docs
+
+Start with the root [`README.md`](../README.md). It has the install path, command reference, model tools, autonomy behavior, known Codex gaps, and troubleshooting.
+
+Use these docs when you need more detail:
+
+| Doc                                                | Use it for                                                                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| [`setup.md`](setup.md)                             | Install options, settings.json examples, one-off runs, and local checkout development.                                               |
+| [`implementation.md`](implementation.md)           | Architecture reference for state, commands, import, tools, context, compaction, continuation, UI, and intentional Codex parity gaps. |
+| [`acceptance-criteria.md`](acceptance-criteria.md) | Release checklist, validation commands, automated coverage status, and manual TUI smoke checklist.                                   |
+
+## Release facts to keep true
+
+- Release version: `2026.8.13`.
+- Runtime: Node.js `>=22.19.0`.
+- Pi peers: coding agent `>=0.80.5 <0.81.0`; TUI `>=0.79.3 <0.81.0`.
+- Development validation: Pi packages `^0.80.10`.
+- Package smoke: minimum peers and the 0.80.10 development baseline.
+- Package contents: `extensions`, `src`, `README.md`, `docs`, `CHANGELOG.md`, `VERSION`, and `LICENSE`.
+- Docs links: relative, so they work in GitHub and npm tarballs.
+
+## Shipped behavior
+
+- Branch-aware goal state stored in Pi session custom entries named `goal-state`.
+- `/goal` lifecycle for drafting, review, start, status, edit, pause, resume, complete, clear, import, and blocker reports.
+- Plain `/goal <objective>` asks the chat agent to draft through `propose_goal_draft`; Start/Edit/Cancel review runs before anything is saved.
+- Markdown/text PRD and docs-folder import with workspace realpath checks, symlink escape rejection, size/binary checks, generated/vendor ignores, and directory overflow errors.
+- Import creates a goal when none exists, then merges source docs, constraints, and criteria into an existing active goal without rewriting the objective.
+- Narrow model tools: `get_goal`, `create_goal`, `propose_goal_draft`, `complete_goal`, `update_goal_progress`, and structured `update_goal_graph`.
+- Hidden active-goal context and `session_before_compact` preservation.
+- Compact active-goal widget, Powerline progress status, readable `/goal status`, blocker overlay/Markdown fallback, actionable errors, and concise tool renderers.
+- Default-on local-fork continuation (explicitly disable with `--goal-continuation=false`); Pi's `agent_settled` event finalizes state but never queues a new turn.
+- Default-on 30-minute silence watchdog, the sole automatic wake-up path, using the concise `继续目标` prompt.
+- Branch-canonical work items/blockers plus a user-private rebuildable SQLite ledger for audit and reports.
+
+## Verification
+
+Use the canonical validation list in [`acceptance-criteria.md`](acceptance-criteria.md#validation-commands). Live TUI lifecycle smoke is still manual and release-blocking; use the checklist in [`acceptance-criteria.md`](acceptance-criteria.md#manual-session-lifecycle-smoke-checklist).
+
+## Future work
+
+Strict Codex compatibility is not part of this rollout. That includes app-server RPC compatibility, exact token/time accounting, and Codex's exact goal menu UI.

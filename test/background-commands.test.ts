@@ -14,6 +14,7 @@ import {
   BackgroundCommandManager,
 } from "../extensions/lib/background-commands/manager.ts";
 import { registerBackgroundCommandTools } from "../extensions/lib/background-commands/tools.ts";
+import { BackgroundCommandsDashboardAdapter } from "../extensions/lib/background-commands/dashboard-bridge.ts";
 
 const cwd = "/mnt/workspace/lilong/repos/pi-tsien-extension";
 
@@ -509,7 +510,7 @@ test("four Tools provide consistent start, status, output, and cancel behavior",
   }
 });
 
-test("completion is queued exactly once for nextTurn without triggering a model turn", async () => {
+test("terminal completions wake the agent exactly once with concise follow-up summaries", async () => {
   const { manager, outputRoot } = await createManager();
   const globals = globalThis as unknown as Record<symbol, unknown>;
   const managerSymbol = Symbol.for(BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY);
@@ -547,29 +548,97 @@ test("completion is queued exactly once for nextTurn without triggering a model 
   try {
     runningCommandsExtension(api);
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    const startResult = await tools.get("background_command_start")!.execute(
-      "summary-start",
-      { command: "printf 'complete\\n'", title: "Quick health check" },
+    const startAndWait = async (toolCallId: string, command: string, title: string, timeout?: number) => {
+      const startResult = await tools.get("background_command_start")!.execute(
+        toolCallId,
+        { command, title, ...(timeout === undefined ? {} : { timeout }) },
+        undefined,
+        undefined,
+        ctx,
+      );
+      const taskId = (JSON.parse(startResult.content[0]!.text) as { taskId: string }).taskId;
+      await manager.waitForTask(taskId);
+      return taskId;
+    };
+
+    const successfulTaskId = await startAndWait(
+      "summary-success",
+      "printf 'complete\\n'",
+      "Quick health check",
+    );
+    const failedTaskId = await startAndWait(
+      "summary-failed",
+      "printf 'failure\\n' >&2; exit 2",
+      "Leak scan",
+    );
+    const timedOutTaskId = await startAndWait(
+      "summary-timeout",
+      "sleep 30",
+      "Slow scan",
+      0.05,
+    );
+    const cancelledStartResult = await tools.get("background_command_start")!.execute(
+      "summary-cancelled",
+      { command: "sleep 30", title: "Cancelled scan" },
       undefined,
       undefined,
       ctx,
     );
-    const taskId = (JSON.parse(startResult.content[0]!.text) as { taskId: string }).taskId;
-    await manager.waitForTask(taskId);
+    const cancelledTaskId = (JSON.parse(cancelledStartResult.content[0]!.text) as { taskId: string }).taskId;
+    await manager.cancel(cancelledTaskId);
 
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0]?.message.customType, "background-command-completion");
-    assert.equal(String(sent[0]?.message.content).includes("Quick health check"), true);
-    assert.equal(sent[0]?.message.display, false);
-    assert.deepEqual(sent[0]?.options, { triggerTurn: false, deliverAs: "nextTurn" });
+    const expectedCompletions = [
+      { taskId: successfulTaskId, title: "Quick health check", result: "exit=0" },
+      { taskId: failedTaskId, title: "Leak scan", result: "exit=2" },
+      { taskId: timedOutTaskId, title: "Slow scan", result: "timed out" },
+      { taskId: cancelledTaskId, title: "Cancelled scan", result: "cancelled" },
+    ];
+    assert.equal(sent.length, expectedCompletions.length);
+    for (const [index, expected] of expectedCompletions.entries()) {
+      const delivery = sent[index];
+      assert.equal(delivery?.message.customType, "background-command-completion");
+      const completionContent = String(delivery?.message.content);
+      assert.equal(completionContent.includes(expected.taskId), true);
+      assert.equal(completionContent.includes(expected.title), true);
+      assert.equal(completionContent.includes(expected.result), true);
+      assert.equal(completionContent.includes("background_command_output"), true);
+      assert.equal(completionContent.includes("output="), false);
+      assert.equal(delivery?.message.display, false);
+      assert.deepEqual(delivery?.options, { triggerTurn: true, deliverAs: "followUp" });
+    }
     assert.equal(manager.pendingCompletions().length, 0);
 
     await handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, ctx);
-    assert.equal(sent.length, 1, "rebinding must not duplicate the completion summary");
+    assert.equal(sent.length, expectedCompletions.length, "rebinding must not duplicate completion summaries");
     await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
   } finally {
     await manager.shutdown();
     delete globals[managerSymbol];
     await rm(outputRoot, { recursive: true, force: true });
+  }
+});
+
+test("dashboard adapter streams public snapshots and only allows refresh/output/cancel", async () => {
+  const { manager, outputRoot } = await createManager();
+  const adapter = new BackgroundCommandsDashboardAdapter(manager);
+  const snapshots: unknown[] = [];
+  const unsubscribe = adapter.subscribe((snapshot) => snapshots.push(snapshot));
+  try {
+    const started = await manager.start(startRequest("printf 'dashboard-output\\n'", undefined, "Dashboard task"));
+    await manager.waitForTask(started.id);
+    await waitUntil(() => snapshots.length > 0);
+
+    const snapshot = adapter.getSnapshot();
+    assert.equal(snapshot.tasks.length, 1);
+    assert.equal(snapshot.tasks[0]?.taskId, started.id);
+    assert.equal(snapshot.tasks[0]?.outputTail.includes("dashboard-output"), true);
+
+    const output = await adapter.dispatch({ type: "output", taskId: started.id, tailLines: 20 }) as { output: string };
+    assert.equal(output.output.includes("dashboard-output"), true);
+    await assert.rejects(() => adapter.dispatch({ type: "start", command: "echo forbidden" }), /invalid_background_command/);
+  } finally {
+    unsubscribe();
+    adapter.dispose();
+    await cleanupManager(manager, outputRoot);
   }
 });

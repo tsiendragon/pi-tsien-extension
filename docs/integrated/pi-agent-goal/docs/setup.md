@@ -1,0 +1,173 @@
+# Setup
+
+Use this guide to install `pi-agent-goal` or load a local checkout while developing the extension.
+
+## Requirements
+
+- macOS or Linux.
+- Node.js `>=22.19.0`.
+- `pi-agent-goal` release `2026.8.13`.
+- `@earendil-works/pi-coding-agent` `>=0.80.5 <0.81.0`.
+- `@earendil-works/pi-tui` `>=0.79.3 <0.81.0`.
+
+The coding-agent floor is required for the `agent_settled` lifecycle event. The published package uses peer dependencies so the extension shares the host Pi runtime instead of bundling another copy.
+
+## Install from npm
+
+Global install:
+
+```bash
+pi install npm:pi-agent-goal
+```
+
+Project-local install:
+
+```bash
+pi install -l npm:pi-agent-goal
+```
+
+One-off run without writing settings:
+
+```bash
+pi -e npm:pi-agent-goal
+```
+
+Then start Pi and check the command:
+
+```text
+/goal
+```
+
+With no saved goal, you should see command help.
+
+## Start a goal
+
+Interactive flow:
+
+```text
+/goal Ship the onboarding cleanup
+```
+
+Plain goal text asks the chat agent to call `propose_goal_draft`. The TUI review then offers Start, Edit, and Cancel. Start saves and queues one agent handoff. Edit opens a prefilled markdown editor. Cancel saves nothing.
+
+To start an already active goal:
+
+```text
+/goal start
+```
+
+This queues one explicit handoff. It is not automatic idle continuation.
+
+## Non-interactive starts
+
+Use import or resume when a non-interactive run should save state and start immediately:
+
+```bash
+pi -e npm:pi-agent-goal -p "/goal import docs/prd.md --yes --start"
+pi -e npm:pi-agent-goal -p "/goal resume --start"
+```
+
+Plain `/goal <objective> --start` in non-interactive mode only queues the draft/review path. It does not persist or start work by itself.
+
+## Silence watchdog
+
+Automatic continuation is driven only by the silence watchdog; `agent_settled` finalizes state but does not queue work. After 30 minutes without a new session entry, the watchdog queues the concise `继续目标` follow-up only when the goal is active, Pi is idle, no messages are pending, and all normal continuation gates pass.
+
+```bash
+pi --goal-continuation-watchdog=false
+pi --goal-continuation-watchdog-silence-minutes 90
+```
+
+The visible `EagleEye task settled` notification is UI-only and does not reset this timer.
+
+## Settings.json form
+
+Global settings live at `~/.pi/agent/settings.json`:
+
+```json
+{
+	"packages": ["npm:pi-agent-goal"]
+}
+```
+
+Project settings live at `.pi/settings.json`:
+
+```json
+{
+	"packages": ["npm:pi-agent-goal"]
+}
+```
+
+Use project settings when a repo should always load the extension.
+
+## Local checkout development
+
+```bash
+git clone git@github.com:KristjanPikhof/Pi-Agent-Goal.git
+cd Pi-Agent-Goal
+npm install
+pi --no-extensions -e ./extensions/index.ts
+```
+
+To link the checkout globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-agent-goal.ts
+```
+
+To link it into another project:
+
+```bash
+mkdir -p /path/to/project/.pi/extensions
+ln -s "$PWD/extensions/index.ts" /path/to/project/.pi/extensions/pi-agent-goal.ts
+```
+
+## Package entry point
+
+Published and local installs load the source extension entry:
+
+```json
+{
+	"pi": {
+		"extensions": ["./extensions/index.ts"]
+	}
+}
+```
+
+Layout:
+
+```text
+extensions/index.ts
+extensions/pi-goal/index.ts
+```
+
+`extensions/index.ts` re-exports the plugin from `extensions/pi-goal/index.ts`, which imports the implementation from `src/index.ts`.
+
+## Package policy
+
+Keep `README.md`, `docs`, `extensions`, `src`, and `LICENSE` in the npm package. Keep docs links relative so they work after `npm pack` and on GitHub.
+
+Check package contents with:
+
+```bash
+npm pack --dry-run
+npm run smoke:package
+```
+
+The package smoke runs two pairings by default: the minimum versions inferred from the peer ranges (Pi 0.80.5 with Pi TUI 0.79.3), then the development baseline (Pi and Pi TUI 0.80.10). Set `PI_GOAL_PACKAGE_SMOKE_PI_VERSION` and `PI_GOAL_PACKAGE_SMOKE_PI_TUI_VERSION` to run one custom pairing instead. If only one override is set, the other package uses the development baseline.
+
+## Local verification
+
+The canonical release list lives in [`acceptance-criteria.md`](acceptance-criteria.md#validation-commands), so keep this section as a quick local checklist rather than a second source of truth.
+
+```bash
+npm run typecheck
+npm run lint
+npm run format
+npm test
+npm run test:coverage
+npm run smoke:pi
+npm run smoke:package
+npm pack --dry-run
+```

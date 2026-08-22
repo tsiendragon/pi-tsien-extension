@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-15T13:37:15.051Z",
+  "target": {
+    "repository": "pi-subagent-workbench",
+    "commit": "372b371e406934680c7e9a8faa50d838ff2d1db4",
+    "piVersion": "0.84.1",
+    "provider": "openai-codex",
+    "model": "gpt-5.6-luna",
+    "thinking": "minimal",
+    "node": "v26.5.0",
+    "platform": "linux/x64"
+  },
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "realModelCalls": 7,
+    "inputTokens": 12827,
+    "outputTokens": 349,
+    "totalTokens": 13176,
+    "costUsd": 0.0029842
+  },
+  "results": [
+    {
+      "id": "L1",
+      "name": "简单精确指令",
+      "status": "PASS",
+      "durationMs": 34984.74,
+      "metrics": {
+        "output": "LUNA_SIMPLE_OK",
+        "runId": "run_753368023f47",
+        "latencyMs": 34983.73,
+        "inputTokens": 50,
+        "outputTokens": 8,
+        "totalTokens": 58,
+        "costUsd": 0.000019600000000000002,
+        "stopReason": "stop",
+        "eventCount": 16
+      },
+      "conclusion": "Luna 经 Pi CLI provider 和 SubagentService 返回精确结果。"
+    },
+    {
+      "id": "L2",
+      "name": "复杂优先级调度推理",
+      "status": "PASS",
+      "durationMs": 10937.18,
+      "metrics": {
+        "observedOrder": ["C1", "B1", "A1", "D1", "A2"],
+        "expectedOrder": ["C1", "B1", "A1", "D1", "A2"],
+        "runId": "run_9d9a059e53ca",
+        "latencyMs": 10936.8,
+        "inputTokens": 146,
+        "outputTokens": 186,
+        "totalTokens": 332,
+        "costUsd": 0.00025239999999999996,
+        "stopReason": "stop",
+        "eventCount": 55
+      },
+      "conclusion": "Luna 正确应用严格优先级、subject FIFO 和 round-robin。"
+    },
+    {
+      "id": "L3",
+      "name": "64 KiB 长 prompt 保真",
+      "status": "PASS",
+      "durationMs": 5689.38,
+      "metrics": {
+        "taskBytes": 65697,
+        "markers": ["BEGIN_LUNA_64K", "MIDDLE_LUNA_64K", "END_LUNA_64K"],
+        "runId": "run_57b055aad54e",
+        "latencyMs": 5689.03,
+        "inputTokens": 12391,
+        "outputTokens": 30,
+        "totalTokens": 12421,
+        "costUsd": 0.0025142000000000003,
+        "stopReason": "stop",
+        "eventCount": 38
+      },
+      "conclusion": "64 KiB 输入经过 runtime 和真实模型后保留首、中、尾标记。"
+    },
+    {
+      "id": "L4",
+      "name": "超大 prompt 在模型调用前拒绝",
+      "status": "PASS",
+      "durationMs": 0.59,
+      "metrics": {
+        "taskBytes": 1048577,
+        "limitBytes": 1048576,
+        "errorCode": "task_too_large",
+        "modelCalls": 0
+      },
+      "conclusion": "1 MiB+1 prompt 在 Session/provider/model 前拒绝，真实模型调用数为 0。"
+    },
+    {
+      "id": "L5",
+      "name": "activeLimit=2 的四路真实并发",
+      "status": "PASS",
+      "durationMs": 10291.27,
+      "metrics": {
+        "submitted": 4,
+        "completed": 4,
+        "activeLimit": 2,
+        "maxActiveProcesses": 2,
+        "elapsedMs": 10291.11,
+        "outputs": [
+          "LUNA_CONCURRENT_A",
+          "LUNA_CONCURRENT_B",
+          "LUNA_CONCURRENT_C",
+          "LUNA_CONCURRENT_D"
+        ],
+        "activeAfterCompletion": 0,
+        "queuedAfterCompletion": 0
+      },
+      "conclusion": "四次 Luna 调用均完成，真实 Pi 子进程峰值严格受 activeLimit=2 约束。"
+    }
+  ],
+  "calls": [
+    {
+      "runId": "run_753368023f47",
+      "latencyMs": 34983.73,
+      "inputTokens": 50,
+      "outputTokens": 8,
+      "totalTokens": 58,
+      "costUsd": 0.000019600000000000002,
+      "stopReason": "stop",
+      "eventCount": 16
+    },
+    {
+      "runId": "run_9d9a059e53ca",
+      "latencyMs": 10936.8,
+      "inputTokens": 146,
+      "outputTokens": 186,
+      "totalTokens": 332,
+      "costUsd": 0.00025239999999999996,
+      "stopReason": "stop",
+      "eventCount": 55
+    },
+    {
+      "runId": "run_57b055aad54e",
+      "latencyMs": 5689.03,
+      "inputTokens": 12391,
+      "outputTokens": 30,
+      "totalTokens": 12421,
+      "costUsd": 0.0025142000000000003,
+      "stopReason": "stop",
+      "eventCount": 38
+    },
+    {
+      "runId": "run_1321aaf5832c",
+      "latencyMs": 4994.44,
+      "inputTokens": 60,
+      "outputTokens": 28,
+      "totalTokens": 88,
+      "costUsd": 0.0000456,
+      "stopReason": "stop",
+      "eventCount": 19
+    },
+    {
+      "runId": "run_e699fd57ba96",
+      "latencyMs": 5262.41,
+      "inputTokens": 60,
+      "outputTokens": 37,
+      "totalTokens": 97,
+      "costUsd": 0.000056399999999999995,
+      "stopReason": "stop",
+      "eventCount": 19
+    },
+    {
+      "runId": "run_7a16f1f01b3c",
+      "latencyMs": 5225.73,
+      "inputTokens": 60,
+      "outputTokens": 28,
+      "totalTokens": 88,
+      "costUsd": 0.0000456,
+      "stopReason": "stop",
+      "eventCount": 19
+    },
+    {
+      "runId": "run_c0efee4db6e6",
+      "latencyMs": 5025.92,
+      "inputTokens": 60,
+      "outputTokens": 32,
+      "totalTokens": 92,
+      "costUsd": 0.0000504,
+      "stopReason": "stop",
+      "eventCount": 19
+    }
+  ]
+}
