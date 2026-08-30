@@ -23,7 +23,7 @@
 - 支持流式回答和只读工具状态显示。
 - `Esc`：生成时取消，空闲时关闭。
 - `PageUp` / `PageDown`：滚动侧聊记录。
-- `Ctrl+R`：同时刷新主会话当前 context 和完整活动分支历史快照。
+- `F5`：同时刷新主会话当前 context 和完整活动分支历史快照。
 - `Ctrl+Y`：把最后一个 BTW 回答复制到主输入框，但不自动提交。
 
 ### `git-graph.ts`
@@ -50,14 +50,14 @@
 - 输入为空且有运行命令时，`Ctrl+↑/Ctrl+↓` 仍用于浏览输入历史。
 - 命令列表使用 `↑/↓` 选择、`Enter` 查看实时输出、`Esc` 返回输入框。
 - 输出视图使用 `↑/↓` 或 `PageUp/PageDown` 滚动、`←/→` 跨前后台任务切换、`End` 恢复跟随、`Esc` 返回列表。
-- 前台命令默认保持同步；只有 Agent 明确调用 `background_command_start` 才会后台运行。
+- 前台命令默认保持同步；运行中按 `Ctrl+B` 可将原进程转入后台，不会重启命令。只有一个前台命令时直接转换；并行前台命令会先进入命令列表，再对选中项按 `Ctrl+B`。
 - 后台能力提供 `background_command_start`、`background_command_status`、`background_command_output` 和 `background_command_cancel` 四个 Tool；启动时可传可选 `title`，用于列表、输出视图和完成通知，未传时回退到清理后的 Bash 内容。
 - 每个 Session 最多同时运行 4 个后台任务；每条任务内存尾部最多 50KB，完整合并输出写入 Session 隔离日志，单文件上限 1GiB。
 - 后台任务与主 Agent 共享工作目录；首次启动时会提示并发修改风险。
 - `/reload` 会在同一 Pi 进程内重新绑定任务；`/new`、`/resume`、正常退出及扩展失联会终止任务并清理日志。
 - 后台任务结束时只向 Agent 发送任务 ID、标题和结果摘要；Agent 忙碌时排入后续 Turn，空闲时自动唤醒，并读取输出继续工作。
 - 设置 `backgroundCommands.enabled: false` 可仅关闭并清理后台 Tool，保留阶段一界面和普通 Bash；项目级覆盖只在项目已受信任时生效。
-- 当前阶段仍不提供 `Ctrl+B` 动态后台化或 `/tasks` 管理界面。
+- 当前仍不提供 `/tasks` 管理界面；后台任务通过命令列表和四个后台 Tool 管理。
 
 ```json
 {
@@ -97,9 +97,9 @@
 
 已将 `pi-subagent-workbench` 的 Runtime、ResourceGovernor、RPC 子 Agent、Workflow 和 TUI Workbench 迁入本 package。
 
-- Tools：`subagent_start`、`subagent_workflow`、`subagent_results`、`subagent_cancel`
+- Tools：`subagent_start`、`subagent_workflow`、`subagent_workflow_control`、`subagent_results`、`subagent_cancel`
 - `/subagent-workbench open|start|status|close`
-- 支持 Direct Subagent、分阶段 Workflow、后台运行、跟进消息和独立视图；每个任务可设置 `thinking`，跟进消息固定复用初始 `cwd`、模型与 thinking。
+- 支持 Direct Subagent、可恢复的单 task/分阶段 Workflow、后台运行、跟进消息和独立视图；Workflow 默认通过摘要与绝对产物路径交接上下文，支持 `retry_task` 精确重试失败 task，并可显式使用受限 JavaScript 编译动态计划为可持久化结构化定义。每个任务可设置 `thinking`，跟进消息固定复用初始 `cwd`、模型与 thinking。
 - 原生全屏路由需要 Pi 宿主支持 `ctx.ui.custom(..., { fullscreen: true })` 与 `aboveStatus` Widget；缺少增强 UI API 时仍使用兼容的编辑器/Footer fallback，但不能保证原生全屏布局。
 
 ### `goal.ts`
