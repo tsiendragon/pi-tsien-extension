@@ -8,12 +8,14 @@ export interface CommandAwareEditorOptions {
   registry: RunningCommandRegistry;
   focus: CommandFocusController;
   requestRender: () => void;
+  backgroundForeground?: (toolCallId: string) => void;
 }
 
 export class CommandAwareEditor extends CustomEditor {
   private readonly registry: RunningCommandRegistry;
   private readonly commandFocus: CommandFocusController;
   private readonly requestCommandRender: () => void;
+  private readonly backgroundForeground: ((toolCallId: string) => void) | undefined;
   private commandHistoryBrowsing = false;
 
   constructor(
@@ -26,11 +28,14 @@ export class CommandAwareEditor extends CustomEditor {
     this.registry = options.registry;
     this.commandFocus = options.focus;
     this.requestCommandRender = options.requestRender;
+    this.backgroundForeground = options.backgroundForeground;
   }
 
   override handleInput(data: string): void {
     const commands = this.registry.snapshot();
     this.commandFocus.reconcile(commands);
+
+    if (this.handleBackgroundShortcut(data, commands)) return;
 
     if (this.commandFocus.focusMode === "editor") {
       const canBrowseCommandHistory = commands.length > 0 && (
@@ -107,5 +112,27 @@ export class CommandAwareEditor extends CustomEditor {
       return;
     }
     this.requestCommandRender();
+  }
+
+  private handleBackgroundShortcut(data: string, commands: ReturnType<RunningCommandRegistry["snapshot"]>): boolean {
+    if (!this.backgroundForeground || !matchesKey(data, Key.ctrl("b"))) return false;
+    const foregroundCommands = commands.filter((command) => command.mode === "foreground" && command.toolCallId);
+    if (foregroundCommands.length === 0) return false;
+
+    if (this.commandFocus.focusMode === "editor") {
+      if (foregroundCommands.length > 1) {
+        this.commandFocus.enterList(foregroundCommands);
+        this.requestCommandRender();
+        return true;
+      }
+      this.backgroundForeground(foregroundCommands[0]!.toolCallId!);
+      return true;
+    }
+
+    const selected = commands.find((command) => command.id === this.commandFocus.selectedTaskId);
+    if (selected?.mode === "foreground" && selected.toolCallId) {
+      this.backgroundForeground(selected.toolCallId);
+    }
+    return true;
   }
 }
