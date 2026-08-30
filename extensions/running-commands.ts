@@ -6,6 +6,7 @@ import {
   getBackgroundCommandManager,
 } from "./lib/background-commands/manager.ts";
 import { BackgroundCommandsDashboardAdapter } from "./lib/background-commands/dashboard-bridge.ts";
+import { registerForegroundHandoffBashTool } from "./lib/background-commands/foreground-handoff.ts";
 import { registerDashboardFeatureBridge } from "./lib/dashboard-bridge.ts";
 import {
   BACKGROUND_COMMAND_TOOL_NAMES,
@@ -142,14 +143,27 @@ export default function runningCommands(pi: ExtensionAPI): void {
     activeContext = undefined;
   };
 
-  const installEditor = (ctx: ExtensionContext): void => {
+  const moveForegroundToBackground = (toolCallId: string): void => {
+    try {
+      const task = manager.backgroundForeground(toolCallId);
+      activeContext?.ui.notify(`✓ 已转入后台 · ${task.id}`, "info");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      activeContext?.ui.notify(`无法转入后台：${message}`, "error");
+    }
+    focus.reconcile(registry.snapshot());
+    updateElapsedTimer();
+    requestRender(true);
+  };
+
+  const installEditor = (ctx: ExtensionContext): boolean => {
     const existing = ctx.ui.getEditorComponent();
     if (existing && !isRunningCommandsEditorFactory(existing)) {
       ctx.ui.notify(
         "Running commands: another custom editor is active; command display stays enabled, but keyboard focus is disabled.",
         "warning",
       );
-      return;
+      return false;
     }
     if (existing && isRunningCommandsEditorFactory(existing)) ctx.ui.setEditorComponent(undefined);
 
@@ -161,11 +175,13 @@ export default function runningCommands(pi: ExtensionAPI): void {
         registry,
         focus,
         requestRender: () => requestRender(true),
+        backgroundForeground: moveForegroundToBackground,
       },
     );
     markRunningCommandsEditorFactory(factory);
     editorFactory = factory;
     ctx.ui.setEditorComponent(factory);
+    return true;
   };
 
   const deliverPendingCompletions = (): void => {
@@ -265,7 +281,7 @@ export default function runningCommands(pi: ExtensionAPI): void {
         },
       }),
     );
-    installEditor(ctx);
+    if (installEditor(ctx)) registerForegroundHandoffBashTool(pi, manager, ctx.cwd);
     updateElapsedTimer();
     requestRender(true);
   });

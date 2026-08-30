@@ -160,6 +160,49 @@ test("command-aware editor only steals Up for a strictly empty input", () => {
   assert.equal(renders, 1);
 });
 
+test("Ctrl+B backgrounds one foreground command and keeps cursor-left when none is running", () => {
+  setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+  const registry = startedRegistry(1);
+  const focus = new CommandFocusController();
+  const moved: string[] = [];
+  const editor = new CommandAwareEditor(fakeTui, editorTheme, { matches: () => false } as never, {
+    registry,
+    focus,
+    requestRender() {},
+    backgroundForeground: (toolCallId) => moved.push(toolCallId),
+  });
+
+  editor.handleInput("\x02");
+  assert.deepEqual(moved, ["bash-0"]);
+
+  registry.clearForeground();
+  editor.setText("ab");
+  editor.handleInput("\x02");
+  editor.handleInput("X");
+  assert.equal(editor.getText(), "aXb");
+});
+
+test("Ctrl+B with parallel foreground commands enters the list before moving the selected command", () => {
+  setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+  const registry = startedRegistry(2);
+  const focus = new CommandFocusController();
+  const moved: string[] = [];
+  const editor = new CommandAwareEditor(fakeTui, editorTheme, { matches: () => false } as never, {
+    registry,
+    focus,
+    requestRender() {},
+    backgroundForeground: (toolCallId) => moved.push(toolCallId),
+  });
+
+  editor.handleInput("\x02");
+  assert.equal(focus.focusMode, "command-list");
+  assert.equal(focus.selectedTaskId, "foreground:bash-1");
+  assert.deepEqual(moved, []);
+
+  editor.handleInput("\x02");
+  assert.deepEqual(moved, ["bash-1"]);
+});
+
 test("Esc in command focus returns to the editor without invoking Agent interrupt", () => {
   setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
   const registry = startedRegistry(1);
@@ -309,6 +352,7 @@ test("extension lifecycle registers tools, updates UI, and restores the editor",
     ]);
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
     assert.equal(typeof currentEditorFactory, "function");
+    assert.equal(tools.has("bash"), true);
     assert.equal(notifications.length, 0);
 
     handlers.get("tool_execution_start")?.({

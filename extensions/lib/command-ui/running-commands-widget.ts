@@ -112,7 +112,7 @@ export class RunningCommandsWidget implements Component {
     const editorHasText = this.options.getEditorText().length > 0;
     const foregroundCount = commands.filter((command) => command.mode === "foreground").length;
     const backgroundCount = commands.length - foregroundCount;
-    const interruptHint = foregroundCount > 0 ? " · Esc 中断" : "";
+    const interruptHint = foregroundCount > 0 ? " · Ctrl+B 后台 · Esc 中断" : "";
     const hint = focus === "command-list"
       ? "↑↓ 选择 · Enter 输出 · Esc 输入框"
       : editorHasText
@@ -171,7 +171,10 @@ export class RunningCommandsWidget implements Component {
         "accent",
         `${outputIdentity} · running (${formatElapsedDuration(this.now() - command.startedAt)})`,
       ),
-      this.theme.fg("muted", "←→ 切换 · Esc 返回"),
+      this.theme.fg(
+        "muted",
+        command.mode === "foreground" ? "Ctrl+B 后台 · ←→ 切换 · Esc 返回" : "←→ 切换 · Esc 返回",
+      ),
       width,
     );
 
