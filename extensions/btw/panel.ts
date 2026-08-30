@@ -114,7 +114,7 @@ export class BtwPanel implements Component, Focusable {
       return;
     }
 
-    if (matchesKey(data, "ctrl+r")) {
+    if (matchesKey(data, "f5")) {
       void this.controller.refreshParentSnapshot();
       return;
     }
@@ -186,7 +186,7 @@ export class BtwPanel implements Component, Focusable {
       ...visibleTranscript.map((line) => row(` ${line}`)),
       border(`├${"─".repeat(innerWidth)}┤`),
       ...inputLines,
-      row(` ${this.theme.fg("dim", "↑↓ 单行 · Fn+↑↓/Ctrl+↑↓ 翻页 · Enter 发送 · Esc 取消/关闭 · Ctrl+R 刷新 · Ctrl+Y 复制")}`),
+      row(` ${this.theme.fg("dim", "↑↓ 单行 · Fn+↑↓/Ctrl+↑↓ 翻页 · Enter 发送 · Esc 取消/关闭 · F5 刷新 · Ctrl+Y 复制")}`),
       border(`╰${"─".repeat(innerWidth)}╯`),
     ];
     return lines.slice(0, maxPanelRows);

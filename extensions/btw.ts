@@ -3,11 +3,13 @@ import { BtwPanel } from "./btw/panel.ts";
 import { BtwSessionController } from "./btw/session.ts";
 import { BtwDashboardAdapter } from "./btw/bridge.ts";
 import { registerDashboardFeatureBridge } from "./lib/dashboard-bridge.ts";
+import { clearLiveFeature, publishLiveFeature, registerLiveFeatureCommandHandler } from "./lib/live-observer.ts";
 
 type ActiveBtw = {
   cancelled: boolean;
   startupAbort: AbortController;
   controller?: BtwSessionController;
+  unsubscribe?: () => void;
   close?: () => void;
 };
 
@@ -15,13 +17,23 @@ export default function btwExtension(pi: ExtensionAPI): void {
   let activeBtw: ActiveBtw | undefined;
   let dashboardAdapter: BtwDashboardAdapter | undefined;
   let dashboardBridgeCleanup: (() => void) | undefined;
+  let liveCommandCleanup: (() => void) | undefined;
+  let liveSnapshotCleanup: (() => void) | undefined;
 
   pi.on("session_start", async (_event, ctx) => {
-    if (process.env.PI_RUNTIME !== "dashboard" || process.env.PI_SUBAGENT_WORKBENCH_CHILD === "1") return;
+    if (process.env.PI_SUBAGENT_WORKBENCH_CHILD === "1") return;
     dashboardBridgeCleanup?.();
+    liveCommandCleanup?.();
+    liveSnapshotCleanup?.();
     await dashboardAdapter?.dispose();
     dashboardAdapter = new BtwDashboardAdapter(ctx);
-    dashboardBridgeCleanup = registerDashboardFeatureBridge(ctx, dashboardAdapter);
+    if (process.env.PI_RUNTIME === "dashboard") {
+      dashboardBridgeCleanup = registerDashboardFeatureBridge(ctx, dashboardAdapter);
+    } else if (ctx.mode === "tui" || ctx.mode === "rpc") {
+      publishLiveFeature("btw", dashboardAdapter.getSnapshot());
+      liveSnapshotCleanup = dashboardAdapter.subscribe(snapshot => publishLiveFeature("btw", snapshot));
+      liveCommandCleanup = registerLiveFeatureCommandHandler("btw", command => dashboardAdapter!.dispatch(command));
+    }
   });
 
   pi.registerCommand("btw", {
@@ -45,11 +57,14 @@ export default function btwExtension(pi: ExtensionAPI): void {
         startupAbort: new AbortController(),
       };
       activeBtw = state;
+      publishLiveFeature("btw", { status: "starting", conversation: [], generatedAt: Date.now() });
 
       try {
         const controller = await BtwSessionController.create(ctx, state.startupAbort.signal);
         state.controller = controller;
         if (state.cancelled) return;
+        state.unsubscribe = controller.subscribe(snapshot => publishLiveFeature("btw", snapshot));
+        publishLiveFeature("btw", controller.getSnapshot());
 
         await ctx.ui.custom<void>(
           (tui, theme, _keybindings, done) => {
@@ -89,7 +104,9 @@ export default function btwExtension(pi: ExtensionAPI): void {
         }
       } finally {
         state.close?.();
+        state.unsubscribe?.();
         await state.controller?.dispose();
+        clearLiveFeature("btw");
         if (activeBtw === state) activeBtw = undefined;
       }
     },
@@ -98,6 +115,10 @@ export default function btwExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     dashboardBridgeCleanup?.();
     dashboardBridgeCleanup = undefined;
+    liveCommandCleanup?.();
+    liveCommandCleanup = undefined;
+    liveSnapshotCleanup?.();
+    liveSnapshotCleanup = undefined;
     await dashboardAdapter?.dispose();
     dashboardAdapter = undefined;
     const state = activeBtw;
@@ -106,6 +127,8 @@ export default function btwExtension(pi: ExtensionAPI): void {
     state.cancelled = true;
     state.startupAbort.abort(new Error("主会话已关闭"));
     state.close?.();
+    state.unsubscribe?.();
     await state.controller?.dispose();
+    clearLiveFeature("btw");
   });
 }
