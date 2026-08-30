@@ -9,6 +9,31 @@ afterEach(() => {
 });
 
 describe("ResourceGovernor", () => {
+  it("defaults to eight active permits and queues the ninth", async () => {
+    const governor = new ResourceGovernor();
+    const active = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        governor.acquire({ priority: "P1", subject: `active-${index}` }),
+      ),
+    );
+    const ninth = governor.acquire({ priority: "P1", subject: "queued-ninth" });
+
+    expect(governor.snapshot()).toMatchObject({
+      active: 8,
+      queued: 1,
+      activeLimit: 8,
+      queueLimit: 32,
+    });
+
+    active[0]!.release();
+    const admitted = await ninth;
+    expect(governor.snapshot()).toMatchObject({ active: 8, queued: 0 });
+
+    for (const lease of active.slice(1)) lease.release();
+    admitted.release();
+    expect(governor.snapshot()).toMatchObject({ active: 0, queued: 0 });
+  });
+
   it("enforces the active cap and grants queued work on release", async () => {
     const governor = new ResourceGovernor({ activeLimit: 2 });
     const first = await governor.acquire({ priority: "P1", subject: "a" });

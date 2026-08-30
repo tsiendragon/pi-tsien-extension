@@ -21,7 +21,8 @@ function harness(options: PiRpcProcessProviderOptions = {}) {
     executable: process.execPath,
     baseArgs: [fakeRpcPath],
     commandTimeoutMs: 2_000,
-    runTimeoutMs: 5_000,
+    runIdleWarningMs: 5_000,
+    hardRunWallTimeMs: 10_000,
     shutdownTimeoutMs: 500,
     heartbeatIntervalMs: 20,
     ...options,
@@ -464,20 +465,28 @@ describe("PiRpcProcessProvider", () => {
     }
   });
 
-  it("allows meaningful RPC progress to extend the idle deadline", async () => {
+  it("allows meaningful RPC progress to defer idle warnings", async () => {
     const runtime = new WorkbenchRuntimeHost();
     const provider = new PiRpcProcessProvider({
       executable: process.execPath,
       baseArgs: [fakeRpcPath],
       commandTimeoutMs: 2_000,
-      runIdleTimeoutMs: 100,
-      maxRunWallTimeMs: 1_000,
+      runIdleWarningMs: 100,
+      runWallWarningMs: 1_000,
+      warningRepeatMs: 1_000,
+      hardRunWallTimeMs: 2_000,
       timeoutAbortGraceMs: 100,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
     });
     const service = new SubagentService(runtime);
     service.providers.register(provider);
+    const warnings: unknown[] = [];
+    service.subscribe((event) => {
+      if (event.type === "provider-event" && event.event.type === "run-warning") {
+        warnings.push(event.event);
+      }
+    });
     try {
       const result = await service.start({
         task: "progress-for:260:20",
@@ -485,6 +494,7 @@ describe("PiRpcProcessProvider", () => {
         cwd: process.cwd(),
       });
       expect(result.output).toBe("progress complete");
+      expect(warnings).toEqual([]);
       expect(provider.snapshot()).toMatchObject({
         sessions: 1,
         active: 0,
@@ -496,35 +506,46 @@ describe("PiRpcProcessProvider", () => {
     }
   });
 
-  it("does not let RPC heartbeats mask an idle Run", async () => {
+  it("warns repeatedly for an idle Run without letting RPC heartbeats mask it", async () => {
     const runtime = new WorkbenchRuntimeHost();
     const provider = new PiRpcProcessProvider({
       executable: process.execPath,
       baseArgs: [fakeRpcPath],
       commandTimeoutMs: 2_000,
-      runIdleTimeoutMs: 50,
-      maxRunWallTimeMs: 1_000,
+      runIdleWarningMs: 50,
+      runWallWarningMs: 1_000,
+      warningRepeatMs: 40,
+      hardRunWallTimeMs: false,
       timeoutAbortGraceMs: 100,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
     });
     const service = new SubagentService(runtime);
     service.providers.register(provider);
+    const abort = new AbortController();
+    const warnings: Array<{ warning: string; idleMs?: number }> = [];
+    service.subscribe((event) => {
+      if (event.type === "provider-event" && event.event.type === "run-warning") {
+        warnings.push(event.event);
+      }
+    });
     try {
-      const timeout = await executionCause(
-        service.start({
-          task: "wait-for-abort",
-          isolation: "process",
-          cwd: process.cwd(),
-        }),
-      );
-      expect(timeout.code).toBe("run_idle_timeout");
-      expect(timeout.message).toContain("was idle for 50 ms");
-      expect(provider.snapshot()).toMatchObject({
-        sessions: 0,
-        active: 0,
-        unavailable: 1,
+      const run = service.start({
+        task: "wait-for-abort",
+        isolation: "process",
+        cwd: process.cwd(),
+        signal: abort.signal,
       });
+      await vi.waitFor(() => expect(warnings.length).toBeGreaterThanOrEqual(2));
+      expect(warnings[0]).toMatchObject({ warning: "idle" });
+      expect(warnings[0]!.idleMs).toBeGreaterThanOrEqual(40);
+      expect(provider.snapshot()).toMatchObject({
+        sessions: 1,
+        active: 1,
+        unavailable: 0,
+      });
+      abort.abort(new Error("warning test complete"));
+      await expect(run).rejects.toThrow("Run interrupted");
       expect(runtime.getSnapshot().governor.active).toBe(0);
     } finally {
       await provider.dispose();
@@ -532,14 +553,16 @@ describe("PiRpcProcessProvider", () => {
     }
   });
 
-  it("forces shutdown when the timeout abort does not respond within its grace period", async () => {
+  it("forces shutdown only at the hard wall limit when abort does not respond", async () => {
     const runtime = new WorkbenchRuntimeHost();
     const provider = new PiRpcProcessProvider({
       executable: process.execPath,
       baseArgs: [fakeRpcPath],
       commandTimeoutMs: 2_000,
-      runIdleTimeoutMs: 50,
-      maxRunWallTimeMs: 1_000,
+      runIdleWarningMs: 30,
+      runWallWarningMs: 40,
+      warningRepeatMs: 1_000,
+      hardRunWallTimeMs: 100,
       timeoutAbortGraceMs: 30,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
@@ -554,7 +577,8 @@ describe("PiRpcProcessProvider", () => {
           cwd: process.cwd(),
         }),
       );
-      expect(timeout.code).toBe("run_idle_timeout");
+      expect(timeout.code).toBe("run_wall_timeout");
+      expect(timeout.message).toContain("hard wall time 100 ms");
       expect(provider.snapshot()).toMatchObject({
         sessions: 0,
         active: 0,
@@ -567,20 +591,28 @@ describe("PiRpcProcessProvider", () => {
     }
   });
 
-  it("enforces a separate hard wall limit despite continuous progress", async () => {
+  it("emits a wall warning before enforcing the hard wall limit", async () => {
     const runtime = new WorkbenchRuntimeHost();
     const provider = new PiRpcProcessProvider({
       executable: process.execPath,
       baseArgs: [fakeRpcPath],
       commandTimeoutMs: 2_000,
-      runIdleTimeoutMs: 500,
-      maxRunWallTimeMs: 100,
+      runIdleWarningMs: 500,
+      runWallWarningMs: 50,
+      warningRepeatMs: 1_000,
+      hardRunWallTimeMs: 120,
       timeoutAbortGraceMs: 100,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
     });
     const service = new SubagentService(runtime);
     service.providers.register(provider);
+    const warnings: Array<{ warning: string; elapsedMs: number }> = [];
+    service.subscribe((event) => {
+      if (event.type === "provider-event" && event.event.type === "run-warning") {
+        warnings.push(event.event);
+      }
+    });
     try {
       const timeout = await executionCause(
         service.start({
@@ -589,8 +621,11 @@ describe("PiRpcProcessProvider", () => {
           cwd: process.cwd(),
         }),
       );
+      expect(warnings).toEqual([
+        expect.objectContaining({ warning: "wall", elapsedMs: expect.any(Number) }),
+      ]);
       expect(timeout.code).toBe("run_wall_timeout");
-      expect(timeout.message).toContain("maximum wall time 100 ms");
+      expect(timeout.message).toContain("hard wall time 120 ms");
       expect(provider.snapshot()).toMatchObject({
         sessions: 0,
         active: 0,
