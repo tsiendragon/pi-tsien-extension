@@ -10,12 +10,13 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_REPO_ROOT = resolve(dirname(SCRIPT_PATH), "..");
-const EXTENSION_FILE = /\.(?:[cm]?[jt]s)(?:\.disabled)?$/;
+const EXTENSION_FILE = /\.(?:[cm]?[jt]s)$/;
+const PACKAGE_ID = /^[a-z][a-z0-9-]*$/;
 
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
@@ -27,7 +28,7 @@ function packageSource(entry) {
 	throw new Error(`Invalid package entry: ${JSON.stringify(entry)}`);
 }
 
-function npmIdentity(source) {
+function npmName(source) {
 	const spec = source.slice(4);
 	if (spec.startsWith("@")) {
 		const versionAt = spec.indexOf("@", spec.indexOf("/") + 1);
@@ -37,18 +38,50 @@ function npmIdentity(source) {
 	return versionAt <= 0 ? spec : spec.slice(0, versionAt);
 }
 
-function gitIdentity(source) {
-	const withoutPrefix = source.startsWith("git:") ? source.slice(4) : source;
-	const refAt = withoutPrefix.lastIndexOf("@");
-	const authorityAt = withoutPrefix.indexOf("@");
-	return refAt > authorityAt ? withoutPrefix.slice(0, refAt) : withoutPrefix;
+function stripRef(path) {
+	const refAt = path.lastIndexOf("@");
+	return refAt > path.lastIndexOf("/") ? path.slice(0, refAt) : path;
 }
 
-function packageIdentity(entry, baseDir) {
-	const source = packageSource(entry);
-	if (source.startsWith("npm:")) return `npm:${npmIdentity(source)}`;
-	if (/^(?:git:|https?:|ssh:|git:\/\/)/.test(source)) return `git:${gitIdentity(source)}`;
+function gitParts(source) {
+	let raw = source.startsWith("git:") ? source.slice(4) : source;
+	let host;
+	let path;
+	const scp = raw.match(/^[^@]+@([^:]+):(.+)$/);
+	if (scp) {
+		host = scp[1];
+		path = scp[2];
+	} else if (/^[a-z]+:\/\//i.test(raw)) {
+		const parsed = new URL(raw);
+		host = parsed.hostname;
+		path = parsed.pathname.replace(/^\//, "");
+	} else {
+		const slash = raw.indexOf("/");
+		if (slash <= 0) throw new Error(`Invalid git source: ${source}`);
+		host = raw.slice(0, slash);
+		path = raw.slice(slash + 1);
+	}
+	path = stripRef(path).replace(/\.git$/, "");
+	if (!host || !path || path.includes("..")) throw new Error(`Invalid git source: ${source}`);
+	return { host, path };
+}
+
+function packageIdentity(source, baseDir) {
+	if (source.startsWith("npm:")) return `npm:${npmName(source)}`;
+	if (/^(?:git:|https?:|ssh:|git:\/\/)/.test(source)) {
+		const { host, path } = gitParts(source);
+		return `git:${host}/${path}`;
+	}
 	return `local:${resolve(baseDir, source)}`;
+}
+
+function packageInstallRoot(source, agentDir) {
+	if (source.startsWith("npm:")) return join(agentDir, "npm", "node_modules", npmName(source));
+	if (/^(?:git:|https?:|ssh:|git:\/\/)/.test(source)) {
+		const { host, path } = gitParts(source);
+		return join(agentDir, "git", host, path);
+	}
+	return resolve(agentDir, source);
 }
 
 function firstExisting(candidates, label) {
@@ -82,43 +115,59 @@ function expandString(value, context) {
 		.replaceAll("${HOME}", context.home);
 }
 
-function expandPackage(entry, context) {
-	if (typeof entry === "string") return expandString(entry, context);
-	if (!entry || typeof entry !== "object" || typeof entry.source !== "string") {
-		throw new Error(`Invalid package entry: ${JSON.stringify(entry)}`);
-	}
-	if (!Array.isArray(entry.extensions)) {
-		throw new Error(`Package must declare an extensions allowlist: ${entry.source}`);
-	}
-	for (const pattern of entry.extensions) {
-		if (typeof pattern !== "string" || !pattern.startsWith("+") || pattern.length === 1) {
-			throw new Error(`Extension allowlist entries must use +relative/path: ${String(pattern)}`);
-		}
-	}
-	return { ...entry, source: expandString(entry.source, context) };
-}
-
-function assertUniquePackages(packages, baseDir) {
-	const seen = new Set();
-	for (const entry of packages) {
-		const identity = packageIdentity(entry, baseDir);
-		if (seen.has(identity)) throw new Error(`Duplicate package identity: ${identity}`);
-		seen.add(identity);
-	}
-}
-
-function normalizeDirectExtensions(entries, context) {
-	const seen = new Set();
+function normalizePackages(entries, context, agentDir) {
+	const seenIds = new Set();
+	const seenSources = new Set();
 	return entries.map((entry) => {
-		if (typeof entry !== "string") throw new Error(`Direct extension path must be a string: ${JSON.stringify(entry)}`);
-		const expanded = expandString(entry, context);
-		if (!isAbsolute(expanded)) throw new Error(`Direct extension must resolve to an absolute path: ${entry}`);
-		const absolute = resolve(expanded);
-		if (!EXTENSION_FILE.test(absolute)) throw new Error(`Unsupported extension file: ${entry}`);
-		if (!existsSync(absolute)) throw new Error(`Direct extension does not exist: ${absolute}`);
-		if (seen.has(absolute)) throw new Error(`Duplicate direct extension: ${absolute}`);
+		if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || typeof entry.source !== "string") {
+			throw new Error(`Invalid package declaration: ${JSON.stringify(entry)}`);
+		}
+		if (!PACKAGE_ID.test(entry.id)) throw new Error(`Invalid package id: ${entry.id}`);
+		if (seenIds.has(entry.id)) throw new Error(`Duplicate package id: ${entry.id}`);
+		seenIds.add(entry.id);
+		const source = expandString(entry.source, context);
+		const identity = packageIdentity(source, agentDir);
+		if (seenSources.has(identity)) throw new Error(`Duplicate package source: ${source}`);
+		seenSources.add(identity);
+		if (isAbsolute(source) && !existsSync(source)) throw new Error(`Local package does not exist: ${source}`);
+		return { id: entry.id, source, root: packageInstallRoot(source, agentDir) };
+	});
+}
+
+function normalizeLoadOrder(entries, packages, context) {
+	const packageById = new Map(packages.map((entry) => [entry.id, entry]));
+	const seen = new Set();
+	return entries.map((entry, index) => {
+		if (!entry || typeof entry !== "object" || typeof entry.path !== "string") {
+			throw new Error(`Invalid loadOrder entry at index ${index}`);
+		}
+		let absolute;
+		let label;
+		if (entry.package !== undefined) {
+			if (typeof entry.package !== "string" || !packageById.has(entry.package)) {
+				throw new Error(`Unknown package in loadOrder: ${String(entry.package)}`);
+			}
+			if (isAbsolute(entry.path) || entry.path.split(/[\\/]/).includes("..")) {
+				throw new Error(`Package extension path must stay inside its package: ${entry.path}`);
+			}
+			const pkg = packageById.get(entry.package);
+			absolute = resolve(pkg.root, entry.path);
+			if (relative(pkg.root, absolute).startsWith(`..${sep}`)) {
+				throw new Error(`Package extension escapes its package: ${entry.path}`);
+			}
+			label = `${entry.package}:${entry.path}`;
+			if (existsSync(pkg.root) && !existsSync(absolute)) throw new Error(`Extension does not exist: ${label}`);
+		} else {
+			const expanded = expandString(entry.path, context);
+			if (!isAbsolute(expanded)) throw new Error(`Direct extension must resolve to an absolute path: ${entry.path}`);
+			absolute = resolve(expanded);
+			label = absolute;
+			if (!existsSync(absolute)) throw new Error(`Direct extension does not exist: ${absolute}`);
+		}
+		if (!EXTENSION_FILE.test(absolute)) throw new Error(`Unsupported extension file: ${label}`);
+		if (seen.has(absolute)) throw new Error(`Duplicate extension in loadOrder: ${label}`);
 		seen.add(absolute);
-		return absolute;
+		return { absolute, label };
 	});
 }
 
@@ -141,34 +190,33 @@ export function buildSyncPlan({
 	const absoluteConfigPath = resolve(configPath ?? join(absoluteAgentDir, "extensions.config.json"));
 	const config = readJson(absoluteConfigPath);
 	if (config.version !== 1) throw new Error(`Unsupported config version: ${String(config.version)}`);
-	if (!Array.isArray(config.packages) || !Array.isArray(config.extensions)) {
-		throw new Error("Config must contain packages and extensions arrays");
+	if (!Array.isArray(config.packages) || !Array.isArray(config.loadOrder)) {
+		throw new Error("Config must contain ordered packages and loadOrder arrays");
 	}
 	if (
 		config.prune?.packages !== true ||
 		config.prune?.extensions !== true ||
 		config.prune?.autoDiscoveredExtensions !== "quarantine"
 	) {
-		throw new Error("Strict management requires package/direct-extension pruning and auto-extension quarantine");
+		throw new Error("Strict management requires package/extension pruning and auto-extension quarantine");
 	}
 
 	const context = createContext({ repoRoot: absoluteRepoRoot, agentDir: absoluteAgentDir, env });
-	const desiredPackages = config.packages.map((entry) => expandPackage(entry, context));
-	const desiredExtensions = normalizeDirectExtensions(config.extensions, context);
-	assertUniquePackages(desiredPackages, absoluteAgentDir);
-	for (const entry of desiredPackages) {
-		const source = packageSource(entry);
-		if (isAbsolute(source) && !existsSync(source)) throw new Error(`Local package does not exist: ${source}`);
-	}
+	const packages = normalizePackages(config.packages, context, absoluteAgentDir);
+	const orderedExtensions = normalizeLoadOrder(config.loadOrder, packages, context);
+	const desiredPackages = packages.map(({ source }) => ({ source, autoload: false }));
+	const desiredExtensions = orderedExtensions.map(({ absolute }) => absolute);
 
 	const settingsPath = join(absoluteAgentDir, "settings.json");
 	const settings = existsSync(settingsPath) ? readJson(settingsPath) : {};
 	const currentPackages = Array.isArray(settings.packages) ? settings.packages : [];
 	const currentExtensions = Array.isArray(settings.extensions) ? settings.extensions : [];
-	assertUniquePackages(currentPackages, absoluteAgentDir);
-
-	const currentByIdentity = new Map(currentPackages.map((entry) => [packageIdentity(entry, absoluteAgentDir), entry]));
-	const desiredByIdentity = new Map(desiredPackages.map((entry) => [packageIdentity(entry, absoluteAgentDir), entry]));
+	const currentByIdentity = new Map(
+		currentPackages.map((entry) => [packageIdentity(packageSource(entry), absoluteAgentDir), entry]),
+	);
+	const desiredByIdentity = new Map(
+		desiredPackages.map((entry) => [packageIdentity(entry.source, absoluteAgentDir), entry]),
+	);
 	const packageAdds = [];
 	const packageUpdates = [];
 	const packageRemovals = [];
@@ -182,25 +230,24 @@ export function buildSyncPlan({
 	}
 
 	const normalizedCurrentExtensions = currentExtensions.map((entry) => resolve(absoluteAgentDir, entry));
-	const currentExtensionSet = new Set(normalizedCurrentExtensions);
-	const desiredExtensionSet = new Set(desiredExtensions);
-	const extensionAdds = desiredExtensions.filter((entry) => !currentExtensionSet.has(entry));
+	const desiredSet = new Set(desiredExtensions);
+	const currentSet = new Set(normalizedCurrentExtensions);
+	const extensionAdds = orderedExtensions.filter((entry) => !currentSet.has(entry.absolute));
 	const extensionRemovals = currentExtensions.filter(
-		(_entry, index) => !desiredExtensionSet.has(normalizedCurrentExtensions[index]),
+		(_entry, index) => !desiredSet.has(normalizedCurrentExtensions[index]),
 	);
-	const extensionConfigChanged = !sameEntry(currentExtensions, desiredExtensions);
+	const packageOrderChanged = !sameEntry(currentPackages, desiredPackages);
+	const loadOrderChanged = !sameEntry(normalizedCurrentExtensions, desiredExtensions);
 
 	const autoExtensionsDir = join(absoluteAgentDir, "extensions");
-	const allowedAutoPaths = new Set(desiredExtensions);
 	const autoExtensionRemovals = existsSync(autoExtensionsDir)
 		? readdirSync(autoExtensionsDir, { withFileTypes: true })
-			.filter((entry) => entry.isFile() && EXTENSION_FILE.test(entry.name))
+			.filter((entry) => entry.isFile() && /\.(?:[cm]?[jt]s)(?:\.disabled)?$/.test(entry.name))
 			.map((entry) => ({ name: entry.name, path: join(autoExtensionsDir, entry.name) }))
-			.filter((entry) => !allowedAutoPaths.has(resolve(entry.path)))
+			.filter((entry) => !desiredSet.has(resolve(entry.path)))
 			.sort((left, right) => left.name.localeCompare(right.name))
 		: [];
 
-	const packageConfigChanged = !sameEntry(currentPackages, desiredPackages);
 	return {
 		configPath: absoluteConfigPath,
 		agentDir: absoluteAgentDir,
@@ -208,13 +255,16 @@ export function buildSyncPlan({
 		settings,
 		desiredPackages,
 		desiredExtensions,
+		orderedExtensions,
 		packageAdds,
 		packageUpdates,
 		packageRemovals,
 		extensionAdds,
 		extensionRemovals,
+		packageOrderChanged,
+		loadOrderChanged,
 		autoExtensionRemovals,
-		changed: packageConfigChanged || extensionConfigChanged || autoExtensionRemovals.length > 0,
+		changed: packageOrderChanged || loadOrderChanged || autoExtensionRemovals.length > 0,
 	};
 }
 
@@ -248,19 +298,21 @@ export function applySyncPlan(plan, { now = new Date() } = {}) {
 	};
 }
 
-function describeEntry(entry) {
-	return packageSource(entry);
-}
-
 export function formatSyncPlan(plan) {
-	const lines = [plan.changed ? "Pi extension sync changes:" : "Pi extensions already match the user config."];
-	for (const entry of plan.packageAdds) lines.push(`  package + ${describeEntry(entry)}`);
-	for (const update of plan.packageUpdates) {
-		lines.push(`  package ~ filters/source: ${describeEntry(update.to)}`);
+	const lines = [plan.changed ? "Pi extension sync changes:" : "Pi extensions already match the ordered user config."];
+	for (const entry of plan.packageAdds) lines.push(`  package + ${entry.source}`);
+	for (const update of plan.packageUpdates) lines.push(`  package ~ managed install: ${update.to.source}`);
+	for (const entry of plan.packageRemovals) lines.push(`  package - ${packageSource(entry)}`);
+	if (plan.packageOrderChanged) {
+		lines.push("  package install order:");
+		plan.desiredPackages.forEach((entry, index) => lines.push(`    ${index + 1}. ${entry.source}`));
 	}
-	for (const entry of plan.packageRemovals) lines.push(`  package - ${describeEntry(entry)}`);
-	for (const entry of plan.extensionAdds) lines.push(`  extension + ${entry}`);
+	for (const entry of plan.extensionAdds) lines.push(`  extension + ${entry.label}`);
 	for (const entry of plan.extensionRemovals) lines.push(`  extension - ${entry}`);
+	if (plan.loadOrderChanged) {
+		lines.push("  extension load order:");
+		plan.orderedExtensions.forEach((entry, index) => lines.push(`    ${index + 1}. ${entry.label}`));
+	}
 	for (const removal of plan.autoExtensionRemovals) lines.push(`  auto extension - ${removal.name} -> quarantine`);
 	return lines.join("\n");
 }
@@ -281,7 +333,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-	console.log(`Usage: node scripts/pi-extension-sync.mjs [options]\n\nOptions:\n  --apply              Apply the user config (default is dry-run)\n  --config <path>      Config path (default: ~/.pi/agent/extensions.config.json)\n  --agent-dir <path>   Pi agent directory\n  -h, --help           Show this help`);
+	console.log(`Usage: node scripts/pi-extension-sync.mjs [options]\n\nOptions:\n  --apply              Apply ordered install/load config (default: dry-run)\n  --config <path>      Config path (default: ~/.pi/agent/extensions.config.json)\n  --agent-dir <path>   Pi agent directory\n  -h, --help           Show this help`);
 }
 
 function main() {
@@ -301,7 +353,7 @@ function main() {
 		if (result.changed) {
 			console.log(`Applied. Backup: ${result.backupDir}`);
 			if (result.quarantineDir) console.log(`Quarantine: ${result.quarantineDir}`);
-			console.log("Reload or restart Pi to load the user-selected extensions.");
+			console.log("Reload or restart Pi to use the ordered extension set.");
 		}
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
