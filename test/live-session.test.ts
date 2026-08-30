@@ -4,8 +4,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { registerLiveSessionExtension, type LiveSessionClientHandle } from "../extensions/live-session.ts";
 import { LeaseManager } from "../extensions/live-session/lease.ts";
 import { SnapshotProjector, sanitizeJson } from "../extensions/live-session/projector.ts";
-import type { CommandEnvelope } from "../extensions/live-session/protocol.ts";
+import type { CommandEnvelope, EventMessage } from "../extensions/live-session/protocol.ts";
 import type { LiveSessionClientOptions } from "../extensions/live-session/client.ts";
+import { registerLiveFeatureCommandHandler } from "../extensions/lib/live-observer.ts";
 
 function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
@@ -80,6 +81,16 @@ test("Live Session extension claims, injects prompts, gates TUI input, aborts, a
   assert.equal(prompt.ok, true);
   assert.deepEqual(harness.sent, [{ text: "from dashboard", options: { expandPromptTemplates: false } }]);
 
+  const featureCommands: unknown[] = [];
+  const unregisterFeature = registerLiveFeatureCommandHandler("btw", async command => {
+    featureCommands.push(command);
+    return { status: "ready" };
+  });
+  const feature = await options!.executeCommand(envelope({ type: "feature_command", leaseId, feature: "btw", command: { type: "open" } }, "request-feature"));
+  unregisterFeature();
+  assert.equal(feature.ok, true);
+  assert.deepEqual(featureCommands, [{ type: "open" }]);
+
   state.idle = false;
   const abort = await options!.executeCommand(envelope({ type: "abort", leaseId }, "request-abort"));
   assert.equal(abort.ok, true);
@@ -89,6 +100,23 @@ test("Live Session extension claims, injects prompts, gates TUI input, aborts, a
   assert.deepEqual(await input?.({ source: "interactive", text: "allowed again" }, ctx), { action: "continue" });
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
   assert.equal(stopped, true);
+});
+
+test("Live Session extension does not publish hidden goal context messages", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: () => ({ start() {}, publish: message => published.push(message), sendSnapshot() {}, stop() {} }),
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const hidden = { role: "custom", customType: "goal-context", display: false, content: "<goal_context>secret</goal_context>" };
+  await harness.handlers.get("message_start")?.[0]({ message: hidden }, ctx);
+  await harness.handlers.get("message_end")?.[0]({ message: hidden }, ctx);
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "assistant", content: "visible" } }, ctx);
+  assert.equal(published.filter(message => message.event.type.startsWith("message_")).length, 1);
+  assert.equal((published.at(-1)?.event.data as any).message.content, "visible");
 });
 
 test("Live Session extension does not register a Dashboard-owned session", async () => {
