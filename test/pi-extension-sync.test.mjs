@@ -11,31 +11,35 @@ function writeJson(path, value) {
 	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-test("user config filters package extensions and quarantines unmanaged auto extensions", () => {
+test("sync preserves configured package install order and extension load order", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-"));
 	const repoRoot = join(root, "pi-tsien-extension");
 	const eagleeyeRoot = join(root, "eagleeye-ai-dev");
 	const agentDir = join(root, ".pi", "agent");
 	const configPath = join(agentDir, "extensions.config.json");
 	const directExtension = join(root, "direct.ts");
-	mkdirSync(repoRoot, { recursive: true });
+	mkdirSync(join(repoRoot, "extensions"), { recursive: true });
 	mkdirSync(eagleeyeRoot, { recursive: true });
 	mkdirSync(join(agentDir, "extensions"), { recursive: true });
-	writeFileSync(join(repoRoot, "package.json"), "{}");
+	writeFileSync(join(repoRoot, "extensions", "goal.ts"), "export default {};");
 	writeFileSync(directExtension, "export default {};");
 	writeFileSync(join(agentDir, "extensions", "legacy.ts"), "legacy");
 	writeJson(join(agentDir, "settings.json"), {
 		theme: "dark",
-		packages: ["npm:keep", "npm:remove"],
+		packages: ["npm:remove", "npm:keep"],
 		extensions: ["old.ts"],
 	});
 	writeJson(configPath, {
 		version: 1,
 		packages: [
-			{ source: "npm:keep", extensions: ["+index.ts"] },
-			{ source: "${PI_TSIEN_EXTENSION_ROOT}", extensions: ["+extensions/goal.ts"] },
+			{ id: "keep", source: "npm:keep" },
+			{ id: "tsien", source: "${PI_TSIEN_EXTENSION_ROOT}" },
 		],
-		extensions: [directExtension],
+		loadOrder: [
+			{ package: "tsien", path: "extensions/goal.ts" },
+			{ package: "keep", path: "index.ts" },
+			{ path: directExtension },
+		],
 		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
 	});
 
@@ -48,24 +52,28 @@ test("user config filters package extensions and quarantines unmanaged auto exte
 	assert.deepEqual(plan.packageRemovals, ["npm:remove"]);
 	assert.equal(plan.packageUpdates.length, 1);
 	assert.equal(plan.packageAdds.length, 1);
-	assert.deepEqual(plan.extensionAdds, [directExtension]);
-	assert.deepEqual(plan.extensionRemovals, ["old.ts"]);
+	assert.deepEqual(plan.desiredPackages, [
+		{ source: "npm:keep", autoload: false },
+		{ source: repoRoot, autoload: false },
+	]);
+	assert.deepEqual(plan.desiredExtensions, [
+		join(repoRoot, "extensions", "goal.ts"),
+		join(agentDir, "npm", "node_modules", "keep", "index.ts"),
+		directExtension,
+	]);
 	assert.deepEqual(plan.autoExtensionRemovals.map((entry) => entry.name), ["legacy.ts"]);
 
 	const result = applySyncPlan(plan, { now: new Date("2026-08-22T00:00:00.000Z") });
 	const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
 	assert.equal(settings.theme, "dark");
-	assert.deepEqual(settings.packages, [
-		{ source: "npm:keep", extensions: ["+index.ts"] },
-		{ source: repoRoot, extensions: ["+extensions/goal.ts"] },
-	]);
-	assert.deepEqual(settings.extensions, [directExtension]);
+	assert.deepEqual(settings.packages, plan.desiredPackages);
+	assert.deepEqual(settings.extensions, plan.desiredExtensions);
 	assert.equal(existsSync(join(agentDir, "extensions", "legacy.ts")), false);
 	assert.equal(existsSync(join(result.quarantineDir, "legacy.ts")), true);
 	assert.equal(existsSync(join(result.backupDir, "settings.json")), true);
 });
 
-test("user config requires explicit package extension allowlists", () => {
+test("sync rejects load-order paths that escape a package", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-invalid-"));
 	const repoRoot = join(root, "repo");
 	const eagleeyeRoot = join(root, "eagleeye-ai-dev");
@@ -75,12 +83,12 @@ test("user config requires explicit package extension allowlists", () => {
 	const configPath = join(agentDir, "extensions.config.json");
 	writeJson(configPath, {
 		version: 1,
-		packages: [{ source: "npm:unbounded" }],
-		extensions: [],
+		packages: [{ id: "repo", source: "${PI_TSIEN_EXTENSION_ROOT}" }],
+		loadOrder: [{ package: "repo", path: "../escape.ts" }],
 		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
 	});
 	assert.throws(
 		() => buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root, EAGLEEYE_AI_DEV_ROOT: eagleeyeRoot } }),
-		/must declare an extensions allowlist/,
+		/must stay inside its package/,
 	);
 });
