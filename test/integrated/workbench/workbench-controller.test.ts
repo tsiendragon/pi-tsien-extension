@@ -1,9 +1,15 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PiRpcProcessProvider } from "../../../extensions/subagent-workbench/src/providers/pi-rpc-process-provider.ts";
+import {
+  PiRpcProcessProvider,
+  type PiRpcProcessProviderOptions,
+} from "../../../extensions/subagent-workbench/src/providers/pi-rpc-process-provider.ts";
 import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
-import { WorkbenchController } from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
+import {
+  WorkbenchController,
+  type WorkbenchRunWarning,
+} from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
 
 const fixture = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -15,11 +21,15 @@ const controllers: WorkbenchController[] = [];
 function setup(
   maxTranscriptBytes = 1024 * 1024,
   stalledAfterMs?: number,
+  maxSessions?: number,
+  activeLimit = 2,
+  providerOverrides: PiRpcProcessProviderOptions = {},
+  onRunWarning?: (warning: WorkbenchRunWarning) => void,
 ): {
   runtime: WorkbenchRuntimeHost;
   controller: WorkbenchController;
 } {
-  const runtime = new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 });
+  const runtime = new WorkbenchRuntimeHost({ activeLimit, queueLimit: 8 });
   const provider = new PiRpcProcessProvider({
     executable: process.execPath,
     baseArgs: [fixture],
@@ -28,11 +38,14 @@ function setup(
     runTimeoutMs: 5_000,
     shutdownTimeoutMs: 500,
     heartbeatIntervalMs: 50,
+    ...(maxSessions === undefined ? {} : { maxSessions }),
+    ...providerOverrides,
   });
   const controller = new WorkbenchController(runtime, {
     provider,
     maxTranscriptBytes,
     ...(stalledAfterMs === undefined ? {} : { stalledAfterMs }),
+    ...(onRunWarning === undefined ? {} : { onRunWarning }),
   });
   controllers.push(controller);
   return { runtime, controller };
@@ -63,6 +76,27 @@ describe("WorkbenchController", () => {
     ).resolves.toEqual({ ok: false, error: "session_not_found" });
     expect(runtime.getSnapshot().conversations.total).toBe(0);
     expect(controller.provider.snapshot().sessions).toBe(0);
+  });
+
+  it("uses independent 16-session provider capacity per Controller", async () => {
+    const first = setup();
+    const second = setup();
+
+    expect(first.controller.provider.snapshot()).toMatchObject({
+      sessions: 0,
+      limit: 16,
+    });
+    expect(second.controller.provider.snapshot()).toMatchObject({
+      sessions: 0,
+      limit: 16,
+    });
+
+    await first.controller.runAgent({
+      task: "first-controller-only",
+      cwd: process.cwd(),
+    });
+    expect(first.controller.provider.snapshot().sessions).toBe(1);
+    expect(second.controller.provider.snapshot().sessions).toBe(0);
   });
 
   it("projects a multi-Run conversation and preserves one RPC ChildSession", async () => {
@@ -577,6 +611,98 @@ describe("WorkbenchController", () => {
     });
   });
 
+  it("maps soft Run warnings to Direct and Workflow work handles without cancelling", async () => {
+    const warnings: WorkbenchRunWarning[] = [];
+    const { controller } = setup(
+      1024 * 1024,
+      undefined,
+      16,
+      2,
+      {
+        runIdleWarningMs: 50,
+        runWallWarningMs: 1_000,
+        warningRepeatMs: 1_000,
+        hardRunWallTimeMs: 2_000,
+      },
+      (warning) => warnings.push(warning),
+    );
+    const direct = controller.submitAgent({
+      task: "wait-for-abort",
+      label: "Long Direct",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => expect(warnings).toHaveLength(1));
+    expect(warnings[0]).toMatchObject({
+      workId: direct.handle.workId,
+      kind: "agent",
+      label: "Long Direct",
+      warning: "idle",
+    });
+    expect(controller.getJobs([direct.handle.workId]).pending[0]).toMatchObject({
+      status: "running",
+    });
+    expect(controller.pendingRunWarnings()).toHaveLength(1);
+    expect(controller.markRunWarningDelivered(warnings[0]!.id)).toBe(true);
+    controller.cancelJob(direct.handle.workId);
+    await direct.completion.catch(() => undefined);
+
+    const workflow = controller.submitWorkflow({
+      label: "Long Workflow",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [{ task: "wait-for-abort", cwd: process.cwd() }],
+        },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(warnings.some((warning) => warning.workId === workflow.handle.workId)).toBe(true),
+    );
+    expect(
+      warnings.find((warning) => warning.workId === workflow.handle.workId),
+    ).toMatchObject({
+      kind: "workflow",
+      label: "Long Workflow",
+      warning: "idle",
+      workflowId: expect.any(String),
+    });
+    expect(controller.getJobs([workflow.handle.workId]).pending[0]).toMatchObject({
+      status: "running",
+    });
+    controller.cancelJob(workflow.handle.workId);
+    await workflow.completion.catch(() => undefined);
+  });
+
+  it("admits eight active Direct Agents and queues the ninth", async () => {
+    const { runtime, controller } = setup(
+      1024 * 1024,
+      undefined,
+      16,
+      8,
+    );
+    for (let index = 0; index < 9; index++) {
+      await runtime.dispatch({
+        type: "start-agent",
+        task: "wait-for-abort",
+        label: `Concurrent ${index + 1}`,
+        cwd: process.cwd(),
+      });
+    }
+
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().governor).toMatchObject({
+        active: 8,
+        queued: 1,
+        activeLimit: 8,
+      });
+      expect(controller.provider.snapshot()).toMatchObject({
+        sessions: 8,
+        active: 8,
+        limit: 16,
+      });
+    });
+  });
+
   it("cancels governor-queued Direct Agents when disposed", async () => {
     const { runtime, controller } = setup();
     for (const label of ["Active one", "Active two", "Queued three"]) {
@@ -601,6 +727,51 @@ describe("WorkbenchController", () => {
         active: 0,
         queued: 0,
       });
+    });
+  });
+
+  it("rejects fuzzy model overrides before creating work", async () => {
+    const { controller } = setup();
+    const agentRequest = {
+      task: "model-reference-check",
+      cwd: process.cwd(),
+    };
+
+    expect(() =>
+      controller.submitAgent({ ...agentRequest, model: "luna" }),
+    ).toThrow(/exact provider\/model/);
+    expect(controller.getJobs()).toMatchObject({ completed: [], pending: [] });
+
+    expect(() =>
+      controller.preflightWorkflow({
+        cwd: process.cwd(),
+        model: "luna",
+        stages: [{ tasks: [{ task: "root-short-model", cwd: process.cwd() }] }],
+      }),
+    ).toThrow(/Workflow model must use an exact provider\/model/);
+    expect(() =>
+      controller.preflightWorkflow({
+        cwd: process.cwd(),
+        stages: [
+          {
+            tasks: [
+              {
+                task: "task-short-model",
+                cwd: process.cwd(),
+                model: "luna",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/Stage 1 task 1 model must use an exact provider\/model/);
+
+    const exact = controller.submitAgent({
+      ...agentRequest,
+      model: "openai-codex/gpt-5.6-luna",
+    });
+    await expect(exact.completion).resolves.toMatchObject({
+      output: expect.stringContaining("model-reference-check"),
     });
   });
 
@@ -892,54 +1063,176 @@ describe("WorkbenchController", () => {
       cwd: process.cwd(),
       stages: [
         {
-          tasks: Array.from({ length: 5 }, (_, index) => ({
+          tasks: Array.from({ length: 8 }, (_, index) => ({
             task: `first-${index}`,
             cwd: process.cwd(),
           })),
         },
         {
-          tasks: Array.from({ length: 4 }, (_, index) => ({
+          tasks: Array.from({ length: 8 }, (_, index) => ({
             task: `second-${index}`,
+            cwd: process.cwd(),
+          })),
+        },
+        {
+          tasks: [{ task: "seventeenth", cwd: process.cwd() }],
+        },
+      ],
+    };
+    expect(() => controller.submitWorkflow(tooMany)).toThrow(
+      "Keep the entire workflow within 16 tasks",
+    );
+    expect(controller.getJobs()).toMatchObject({ completed: [], pending: [] });
+  });
+
+  it("reclaims the oldest idle Direct session when capacity is full", async () => {
+    const { runtime, controller } = setup(1024 * 1024, undefined, 2);
+    const oldest = await controller.runAgent({
+      task: "oldest-idle-session",
+      cwd: process.cwd(),
+    });
+    const newer = await controller.runAgent({
+      task: "newer-idle-session",
+      cwd: process.cwd(),
+    });
+    expect(controller.provider.snapshot()).toMatchObject({ sessions: 2, limit: 2 });
+
+    const replacement = await controller.runAgent({
+      task: "replacement-session",
+      cwd: process.cwd(),
+    });
+
+    expect(controller.provider.snapshot()).toMatchObject({ sessions: 2, limit: 2 });
+    expect(controller.provider.hasSession(oldest.sessionId)).toBe(false);
+    expect(controller.provider.hasSession(newer.sessionId)).toBe(true);
+    expect(controller.provider.hasSession(replacement.sessionId)).toBe(true);
+    expect(
+      runtime
+        .getSnapshot()
+        .conversations.items.find((item) => item.id === oldest.sessionId),
+    ).toMatchObject({
+      availability: "disposed",
+      error: "Closed to free RPC provider capacity.",
+    });
+  });
+
+  it("never reclaims a running Direct session", async () => {
+    const { runtime, controller } = setup(1024 * 1024, undefined, 1);
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "wait-for-abort",
+      label: "Protected active session",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(controller.provider.snapshot()).toMatchObject({
+        sessions: 1,
+        active: 1,
+        limit: 1,
+      });
+    });
+
+    await expect(
+      controller.runAgent({
+        task: "must-not-evict-active-session",
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("only 0 are available after reclaiming idle Direct sessions");
+    expect(runtime.getSnapshot().conversations.items[0]).toMatchObject({
+      label: "Protected active session",
+      availability: "ready",
+      status: "running",
+    });
+  });
+
+  it("reclaims idle Direct sessions before a Workflow starts", async () => {
+    const { runtime, controller } = setup(1024 * 1024, undefined, 2);
+    const direct = await controller.runAgent({
+      task: "reclaim-before-workflow",
+      cwd: process.cwd(),
+    });
+    const request = {
+      label: "Uses reclaimed capacity",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: Array.from({ length: 2 }, (_, index) => ({
+            task: `workflow-${index}`,
             cwd: process.cwd(),
           })),
         },
       ],
     };
-    expect(() => controller.submitWorkflow(tooMany)).toThrow(
-      "Keep the entire workflow within 8 tasks",
-    );
-    expect(controller.getJobs()).toMatchObject({ completed: [], pending: [] });
+
+    expect(controller.preflightWorkflow(request).availableSessionSlots).toBe(2);
+    await expect(controller.submitWorkflow(request).completion).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(controller.provider.hasSession(direct.sessionId)).toBe(false);
+    expect(
+      runtime
+        .getSnapshot()
+        .conversations.items.find((item) => item.id === direct.sessionId),
+    ).toMatchObject({ availability: "disposed" });
   });
 
-  it("accounts for existing persistent sessions during workflow preflight", async () => {
-    const { controller } = setup();
-    await controller.runAgent({
-      task: "occupy-one-session",
+  it("counts materialized Workflow reservations once while reclaiming Direct sessions", async () => {
+    const { runtime, controller } = setup(1024 * 1024, undefined, 4);
+    const blocking = controller.submitWorkflow({
+      label: "Blocking workflow",
       cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [{ task: "wait-for-abort", cwd: process.cwd() }],
+        },
+      ],
     });
-    expect(controller.provider.snapshot()).toMatchObject({
-      sessions: 1,
-      limit: 8,
+    await vi.waitFor(() => {
+      expect(controller.provider.snapshot()).toMatchObject({
+        sessions: 1,
+        active: 1,
+        limit: 4,
+      });
     });
 
-    expect(() =>
-      controller.submitWorkflow({
-        label: "No remaining capacity",
-        cwd: process.cwd(),
-        stages: [
-          {
-            tasks: Array.from({ length: 8 }, (_, index) => ({
-              task: `workflow-${index}`,
-              cwd: process.cwd(),
-            })),
-          },
-        ],
-      }),
-    ).toThrow("provider has 7 available session slots");
+    const oldest = await controller.runAgent({
+      task: "oldest-beside-workflow",
+      cwd: process.cwd(),
+    });
+    const newer = await controller.runAgent({
+      task: "newer-beside-workflow",
+      cwd: process.cwd(),
+    });
+    const admitted = controller.submitWorkflow({
+      label: "Fits after one reclaim",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            { task: "fit-0", cwd: process.cwd() },
+            { task: "fit-1", cwd: process.cwd() },
+          ],
+        },
+      ],
+    });
+
+    await expect(admitted.completion).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(controller.provider.hasSession(oldest.sessionId)).toBe(false);
+    expect(controller.provider.hasSession(newer.sessionId)).toBe(true);
+    expect(
+      runtime
+        .getSnapshot()
+        .conversations.items.find((item) => item.id === oldest.sessionId),
+    ).toMatchObject({ availability: "disposed" });
+
+    controller.cancelJob(blocking.handle.workId);
+    await blocking.completion.catch(() => undefined);
   });
 
   it("reserves provider slots across concurrently submitted workflows", async () => {
-    const { controller } = setup();
+    const { controller } = setup(1024 * 1024, undefined, 8);
     const first = controller.submitWorkflow({
       label: "Reserved first",
       cwd: process.cwd(),
@@ -1033,6 +1326,12 @@ describe("WorkbenchController", () => {
           label: "Reusable",
           tasks: [
             { key: "source", task: "stable-source", cwd: process.cwd() },
+            {
+              key: "optional",
+              when: false,
+              task: "must-stay-skipped",
+              cwd: process.cwd(),
+            },
           ],
         },
         {
@@ -1100,6 +1399,11 @@ describe("WorkbenchController", () => {
               reused: true,
               output: cancelled.stages[0]?.tasks[0]?.output,
             },
+            {
+              key: "optional",
+              status: "skipped",
+              reused: true,
+            },
           ],
         },
         { status: "completed" },
@@ -1107,6 +1411,110 @@ describe("WorkbenchController", () => {
       ],
     });
     expect(retried.stages[2]?.tasks[0]?.output).toContain("stable-source");
+  });
+
+  it("forwards only conclusions and absolute artifact paths through workflow inputs", async () => {
+    const { controller } = setup();
+    const result = await controller.runWorkflow({
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            {
+              key: "produce",
+              task: 'json-output:{"summary":"Source conclusion","artifacts":[{"path":"/tmp/workflow-report.md","description":"Detailed report"},"relative.txt"]}',
+              cwd: process.cwd(),
+            },
+          ],
+        },
+        {
+          tasks: [
+            {
+              key: "consume",
+              inputs: ["produce"],
+              task: "consume handoff",
+              cwd: process.cwd(),
+            },
+          ],
+        },
+      ],
+    });
+
+    const producer = result.stages[0]!.tasks[0]!;
+    const consumer = result.stages[1]!.tasks[0]!;
+    expect(producer).toMatchObject({
+      summary: "Source conclusion",
+      artifacts: [
+        { path: "/tmp/workflow-report.md", description: "Detailed report" },
+      ],
+    });
+    expect(consumer.output).toContain("## Conclusion\nSource conclusion");
+    expect(consumer.output).toContain("/tmp/workflow-report.md");
+    expect(consumer.output).not.toContain('"summary"');
+    expect(consumer.output).not.toContain("relative.txt");
+  });
+
+  it("retries one failed task without rerunning completed stage siblings", async () => {
+    const { controller } = setup();
+    const request = {
+      label: "Retry one task",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            { key: "stable", task: "stable sibling", cwd: process.cwd() },
+            { key: "flaky", task: "flaky sibling", cwd: process.cwd() },
+          ],
+        },
+      ],
+    };
+    const started: string[] = [];
+    let failFlaky = true;
+    const originalStart = controller.service.start.bind(controller.service);
+    vi.spyOn(controller.service, "start").mockImplementation((agentRequest) => {
+      started.push(agentRequest.task);
+      if (agentRequest.task === "flaky sibling" && failFlaky) {
+        return Promise.reject(new Error("planned flaky failure"));
+      }
+      return originalStart(agentRequest);
+    });
+
+    const first = await controller.runWorkflow(request);
+    expect(first).toMatchObject({ status: "failed" });
+    expect(first.stages[0]?.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "stable", status: "completed" }),
+        expect.objectContaining({
+          key: "flaky",
+          status: "failed",
+          error: "planned flaky failure",
+        }),
+      ]),
+    );
+
+    failFlaky = false;
+    const retry = controller.retryWorkflowTaskFromResult(
+      "work_failed_retry",
+      request,
+      first,
+      "flaky",
+    );
+    const retried = await retry.completion;
+
+    expect(started.filter((task) => task === "stable sibling")).toHaveLength(1);
+    expect(started.filter((task) => task === "flaky sibling")).toHaveLength(2);
+    expect(retried).toMatchObject({
+      status: "completed",
+      sourceWorkId: "work_failed_retry",
+      stages: [
+        {
+          tasks: expect.arrayContaining([
+            expect.objectContaining({ key: "stable", status: "completed", reused: true }),
+            expect.objectContaining({ key: "flaky", status: "completed" }),
+          ]),
+        },
+      ],
+    });
   });
 
   it("interrupts an active workflow from the runtime command", async () => {
