@@ -15,6 +15,7 @@ import {
 } from "../extensions/lib/background-commands/manager.ts";
 import { registerBackgroundCommandTools } from "../extensions/lib/background-commands/tools.ts";
 import { BackgroundCommandsDashboardAdapter } from "../extensions/lib/background-commands/dashboard-bridge.ts";
+import { registerForegroundHandoffBashTool } from "../extensions/lib/background-commands/foreground-handoff.ts";
 
 const cwd = "/mnt/workspace/lilong/repos/pi-tsien-extension";
 
@@ -113,6 +114,223 @@ test("start returns a running task promptly and persists complete output", async
     assert.equal(manager.pendingCompletions().length, 1);
     manager.markCompletionDelivered(task.id);
     assert.equal(manager.pendingCompletions().length, 0);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("foreground handoff keeps the same process and detaches the Tool abort signal", {
+  skip: process.platform === "win32" ? "Windows process-tree support is experimental" : false,
+}, async () => {
+  const { manager, outputRoot } = await createManager();
+  const controller = new AbortController();
+  const foregroundOutput: Buffer[] = [];
+  try {
+    const foreground = manager.executeForeground({
+      toolCallId: "foreground-handoff",
+      command: "printf 'pid=%s\\n' \"$$\"; printf 'before\\n'; sleep 0.15; printf 'after\\n'",
+      cwd,
+      sessionId: "session-test",
+      startedAt: 123,
+      signal: controller.signal,
+      onData: (data) => foregroundOutput.push(Buffer.from(data)),
+    });
+    await waitUntil(() => manager.foregroundCount === 1 && Buffer.concat(foregroundOutput).includes("before"));
+
+    const task = manager.backgroundForeground("foreground-handoff");
+    const released = await foreground;
+    assert.equal(released.exitCode, 0);
+    assert.equal(task.startedAt, 123);
+    assert.equal(task.state, "running");
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal(manager.taskCount, 1);
+    assert.match(Buffer.concat(foregroundOutput).toString("utf8"), new RegExp(`Command moved to background as task ${task.id}`));
+
+    controller.abort();
+    const finished = await manager.waitForTask(task.id);
+    assert.equal(finished.state, "succeeded");
+    const output = await readFile(finished.outputFile, "utf8");
+    assert.equal(output.match(/before/gu)?.length, 1);
+    assert.equal(output.match(/after/gu)?.length, 1);
+    assert.equal(output.includes("Command moved to background"), false);
+    assert.equal(Number(/^pid=(\d+)/u.exec(output)?.[1]), task.pid);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("foreground completion without handoff returns normally and leaves no background task", async () => {
+  const { manager, outputRoot } = await createManager();
+  const output: Buffer[] = [];
+  try {
+    const result = await manager.executeForeground({
+      toolCallId: "foreground-natural",
+      command: "printf 'natural\\n'",
+      cwd,
+      sessionId: "session-test",
+      onData: (data) => output.push(Buffer.from(data)),
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(Buffer.concat(output).toString("utf8"), "natural\n");
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal(manager.taskCount, 0);
+    assert.deepEqual(manager.list(), []);
+    assert.deepEqual(manager.pendingCompletions(), []);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("controllable Bash Tool returns one successful handoff result and keeps the task running", async () => {
+  const { manager, outputRoot } = await createManager();
+  const tools = new Map<string, ExecutableTool>();
+  const api = {
+    registerTool(tool: ExecutableTool) {
+      tools.set(tool.name, tool);
+    },
+  } as unknown as ExtensionAPI;
+  const controller = new AbortController();
+  try {
+    registerForegroundHandoffBashTool(api, manager, cwd);
+    const toolCallId = "bash-tool-handoff";
+    manager.registry.start(toolCallId, { command: "printf 'tool-before\\n'; sleep 0.15; printf 'tool-after\\n'" }, 456);
+    const execution = tools.get("bash")!.execute(
+      toolCallId,
+      { command: "printf 'tool-before\\n'; sleep 0.15; printf 'tool-after\\n'" },
+      controller.signal,
+      undefined,
+      toolContext(),
+    );
+    await waitUntil(() => manager.foregroundCount === 1);
+    const task = manager.backgroundForeground(toolCallId);
+    const result = await execution;
+    const resultText = result.content.map((part) => part.text).join("");
+    assert.match(resultText, new RegExp(`Command moved to background as task ${task.id}`));
+    assert.equal(resultText.includes("Use background_command_status"), true);
+
+    controller.abort();
+    const finished = await manager.waitForTask(task.id);
+    assert.equal(finished.state, "succeeded");
+    assert.match(manager.output(task.id).output, /tool-before\ntool-after/u);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("parallel controllable Bash calls hand off only the selected toolCallId", async () => {
+  const { manager, outputRoot } = await createManager();
+  const tools = new Map<string, ExecutableTool>();
+  const api = {
+    registerTool(tool: ExecutableTool) {
+      tools.set(tool.name, tool);
+    },
+  } as unknown as ExtensionAPI;
+  try {
+    registerForegroundHandoffBashTool(api, manager, cwd);
+    const bash = tools.get("bash")!;
+    manager.registry.start("parallel-a", { command: "printf 'A-start\\n'; sleep 0.3; printf 'A-end\\n'" }, 100);
+    manager.registry.start("parallel-b", { command: "printf 'B-start\\n'; sleep 0.15; printf 'B-end\\n'" }, 200);
+    const executionA = bash.execute(
+      "parallel-a",
+      { command: "printf 'A-start\\n'; sleep 0.3; printf 'A-end\\n'" },
+      undefined,
+      undefined,
+      toolContext(),
+    );
+    const executionB = bash.execute(
+      "parallel-b",
+      { command: "printf 'B-start\\n'; sleep 0.15; printf 'B-end\\n'" },
+      undefined,
+      undefined,
+      toolContext(),
+    );
+    await waitUntil(() => manager.foregroundCount === 2);
+
+    const taskB = manager.backgroundForeground("parallel-b");
+    const resultB = await executionB;
+    assert.equal(resultB.content[0]?.text.includes(taskB.id), true);
+    assert.equal(manager.foregroundCount, 1);
+    assert.throws(() => manager.get(taskB.id.replace(/.$/u, "x")), /not found/u);
+
+    const resultA = await executionA;
+    assert.match(resultA.content[0]?.text ?? "", /A-start\nA-end/u);
+    assert.equal((await manager.waitForTask(taskB.id)).state, "succeeded");
+    assert.match(manager.output(taskB.id).output, /B-start\nB-end/u);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("handoff rejection at the background limit leaves the command in foreground", async () => {
+  const { manager, outputRoot } = await createManager({ maxConcurrent: 1 });
+  try {
+    const occupied = await manager.start(startRequest("sleep 30"));
+    const foreground = manager.executeForeground({
+      toolCallId: "handoff-at-limit",
+      command: "printf 'still-foreground\\n'; sleep 0.1",
+      cwd,
+      sessionId: "session-test",
+      onData() {},
+    });
+    await waitUntil(() => manager.foregroundCount === 1);
+    assert.throws(
+      () => manager.backgroundForeground("handoff-at-limit"),
+      /already has 1 active tasks/u,
+    );
+    assert.equal(manager.foregroundCount, 1);
+    assert.equal((await foreground).exitCode, 0);
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal(manager.taskCount, 1);
+    await manager.cancel(occupied.id);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("foreground abort wins before Ctrl+B and creates no background task", async () => {
+  const { manager, outputRoot } = await createManager();
+  const controller = new AbortController();
+  try {
+    const execution = manager.executeForeground({
+      toolCallId: "abort-before-handoff",
+      command: "sleep 30",
+      cwd,
+      sessionId: "session-test",
+      signal: controller.signal,
+      onData() {},
+    });
+    await waitUntil(() => manager.foregroundCount === 1);
+    controller.abort();
+    await assert.rejects(execution, /aborted/u);
+    assert.throws(
+      () => manager.backgroundForeground("abort-before-handoff"),
+      /no longer running/u,
+    );
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal(manager.taskCount, 0);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("foreground timeout remains active after handoff", async () => {
+  const { manager, outputRoot } = await createManager();
+  try {
+    const foreground = manager.executeForeground({
+      toolCallId: "timeout-after-handoff",
+      command: "sleep 30",
+      cwd,
+      sessionId: "session-test",
+      timeoutSeconds: 0.05,
+      onData() {},
+    });
+    await waitUntil(() => manager.foregroundCount === 1);
+    const task = manager.backgroundForeground("timeout-after-handoff");
+    assert.equal((await foreground).exitCode, 0);
+    const finished = await manager.waitForTask(task.id);
+    assert.equal(finished.state, "timed_out");
+    assert.equal(finished.exitReason, "timeout");
+    assert.equal(finished.timeoutMs, 50);
   } finally {
     await cleanupManager(manager, outputRoot);
   }
