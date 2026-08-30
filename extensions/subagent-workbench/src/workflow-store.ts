@@ -25,10 +25,17 @@ export interface SavedWorkflowStage {
   readonly tasks: readonly SavedWorkflowTask[];
 }
 
+export interface SavedWorkflowJavaScriptOrigin {
+  readonly language: "javascript";
+  readonly source: string;
+}
+
 export interface SavedWorkflowDefinition {
   readonly version: typeof SAVED_WORKFLOW_VERSION;
   readonly label?: string;
   readonly parameters?: Readonly<Record<string, unknown>>;
+  /** Present when a temporary JavaScript builder produced these persisted stages. */
+  readonly origin?: SavedWorkflowJavaScriptOrigin;
   readonly stages: readonly SavedWorkflowStage[];
 }
 
@@ -85,6 +92,10 @@ function assertJsonValue(
       assertJsonValue(item, `${location}[${index}]`, seen),
     );
   } else {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(`${location} must contain only plain JSON objects.`);
+    }
     for (const [key, item] of Object.entries(value)) {
       if (["__proto__", "prototype", "constructor"].includes(key)) {
         throw new TypeError(`${location} contains a forbidden key: ${key}.`);
@@ -164,6 +175,18 @@ function assertTask(value: unknown, location: string): asserts value is SavedWor
   }
 }
 
+function assertWorkflowOrigin(value: unknown): asserts value is SavedWorkflowJavaScriptOrigin {
+  if (!isRecord(value) || value.language !== "javascript") {
+    throw new TypeError("workflow.origin must be a JavaScript origin record.");
+  }
+  if (typeof value.source !== "string" || !value.source.trim()) {
+    throw new TypeError("workflow.origin.source must be a non-empty string.");
+  }
+  if (Buffer.byteLength(value.source, "utf8") > 16 * 1024) {
+    throw new TypeError("workflow.origin.source exceeds 16 KiB.");
+  }
+}
+
 function assertWorkflowDefinition(
   value: unknown,
 ): asserts value is SavedWorkflowDefinition {
@@ -179,6 +202,7 @@ function assertWorkflowDefinition(
   if (value.parameters !== undefined) {
     assertJsonRecord(value.parameters, "workflow.parameters");
   }
+  if (value.origin !== undefined) assertWorkflowOrigin(value.origin);
   if (!Array.isArray(value.stages) || value.stages.length === 0) {
     throw new TypeError("Workflow definition requires at least one stage.");
   }

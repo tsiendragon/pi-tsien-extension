@@ -49,10 +49,16 @@ export interface PiRpcProcessProviderOptions {
   readonly environment?: Readonly<Record<string, string>>;
   readonly commandTimeoutMs?: number;
   readonly startupTimeoutMs?: number;
-  /** @deprecated Use runIdleTimeoutMs. */
+  /** @deprecated Use runIdleWarningMs. This alias now controls a warning, not cancellation. */
   readonly runTimeoutMs?: number;
+  /** @deprecated Use runIdleWarningMs. This alias now controls a warning, not cancellation. */
   readonly runIdleTimeoutMs?: number;
+  readonly runIdleWarningMs?: number;
+  /** @deprecated Use runWallWarningMs. This alias now controls a warning, not cancellation. */
   readonly maxRunWallTimeMs?: number;
+  readonly runWallWarningMs?: number;
+  readonly warningRepeatMs?: number;
+  readonly hardRunWallTimeMs?: number | false;
   readonly timeoutAbortGraceMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly heartbeatIntervalMs?: number;
@@ -577,8 +583,10 @@ export class PiRpcProcessProvider implements SubagentProvider {
   private readonly environment: Readonly<Record<string, string>>;
   private readonly commandTimeoutMs: number;
   private readonly startupTimeoutMs: number;
-  private readonly runIdleTimeoutMs: number;
-  private readonly maxRunWallTimeMs: number;
+  private readonly runIdleWarningMs: number;
+  private readonly runWallWarningMs: number;
+  private readonly warningRepeatMs: number;
+  private readonly hardRunWallTimeMs: number | undefined;
   private readonly timeoutAbortGraceMs: number;
   private readonly shutdownTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
@@ -610,14 +618,30 @@ export class PiRpcProcessProvider implements SubagentProvider {
       "startupTimeoutMs",
       options.startupTimeoutMs ?? 180_000,
     );
-    this.runIdleTimeoutMs = positiveInteger(
-      "runIdleTimeoutMs",
-      options.runIdleTimeoutMs ?? options.runTimeoutMs ?? 10 * 60_000,
+    this.runIdleWarningMs = positiveInteger(
+      "runIdleWarningMs",
+      options.runIdleWarningMs ??
+        options.runIdleTimeoutMs ??
+        options.runTimeoutMs ??
+        10 * 60_000,
     );
-    this.maxRunWallTimeMs = positiveInteger(
-      "maxRunWallTimeMs",
-      options.maxRunWallTimeMs ?? 60 * 60_000,
+    this.runWallWarningMs = positiveInteger(
+      "runWallWarningMs",
+      options.runWallWarningMs ??
+        options.maxRunWallTimeMs ??
+        60 * 60_000,
     );
+    this.warningRepeatMs = positiveInteger(
+      "warningRepeatMs",
+      options.warningRepeatMs ?? 6 * 60 * 60_000,
+    );
+    this.hardRunWallTimeMs =
+      options.hardRunWallTimeMs === false
+        ? undefined
+        : positiveInteger(
+            "hardRunWallTimeMs",
+            options.hardRunWallTimeMs ?? 24 * 60 * 60_000,
+          );
     this.timeoutAbortGraceMs = positiveInteger(
       "timeoutAbortGraceMs",
       options.timeoutAbortGraceMs ?? 5_000,
@@ -634,7 +658,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
       "maxStderrBytes",
       options.maxStderrBytes ?? 16_384,
     );
-    this.maxSessions = positiveInteger("maxSessions", options.maxSessions ?? 8);
+    this.maxSessions = positiveInteger("maxSessions", options.maxSessions ?? 16);
   }
 
   async run(request: ProviderRunRequest): Promise<{
@@ -712,6 +736,10 @@ export class PiRpcProcessProvider implements SubagentProvider {
           .filter((pid): pid is number => pid !== undefined),
       ),
     });
+  }
+
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
   }
 
   async closeSession(
@@ -853,8 +881,11 @@ export class PiRpcProcessProvider implements SubagentProvider {
       let stopReason = "stop";
       let providerError: string | undefined;
       let abortSent = false;
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      let wallTimer: ReturnType<typeof setTimeout> | undefined;
+      const runStartedAt = Date.now();
+      let lastProgressAt = runStartedAt;
+      let idleWarningTimer: ReturnType<typeof setTimeout> | undefined;
+      let wallWarningTimer: ReturnType<typeof setTimeout> | undefined;
+      let hardWallTimer: ReturnType<typeof setTimeout> | undefined;
       let timeoutAbortGraceTimer: ReturnType<typeof setTimeout> | undefined;
       let pendingTimeout: PiRpcProviderError | undefined;
       let timeoutTerminationStarted = false;
@@ -866,8 +897,9 @@ export class PiRpcProcessProvider implements SubagentProvider {
       const finish = (action: () => void): void => {
         if (settled) return;
         settled = true;
-        if (idleTimer) clearTimeout(idleTimer);
-        if (wallTimer) clearTimeout(wallTimer);
+        if (idleWarningTimer) clearTimeout(idleWarningTimer);
+        if (wallWarningTimer) clearTimeout(wallWarningTimer);
+        if (hardWallTimer) clearTimeout(hardWallTimer);
         if (timeoutAbortGraceTimer) clearTimeout(timeoutAbortGraceTimer);
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         unsubscribeEvents();
@@ -890,8 +922,9 @@ export class PiRpcProcessProvider implements SubagentProvider {
       const beginTimeout = (error: PiRpcProviderError): void => {
         if (settled || pendingTimeout) return;
         pendingTimeout = error;
-        if (idleTimer) clearTimeout(idleTimer);
-        if (wallTimer) clearTimeout(wallTimer);
+        if (idleWarningTimer) clearTimeout(idleWarningTimer);
+        if (wallWarningTimer) clearTimeout(wallWarningTimer);
+        if (hardWallTimer) clearTimeout(hardWallTimer);
         abortSent = true;
         timeoutAbortGraceTimer = setTimeout(
           () => terminateTimedOutSession(error),
@@ -900,23 +933,42 @@ export class PiRpcProcessProvider implements SubagentProvider {
         timeoutAbortGraceTimer.unref?.();
         void session.client.abort().catch(() => terminateTimedOutSession(error));
       };
-      const armIdleTimer = (): void => {
+      const emitRunWarning = (warning: "idle" | "wall"): void => {
+        const now = Date.now();
+        const elapsedMs = now - runStartedAt;
+        const idleMs = now - lastProgressAt;
+        request.emit({
+          type: "run-warning",
+          warning,
+          elapsedMs,
+          ...(warning === "idle" ? { idleMs } : {}),
+          message:
+            warning === "idle"
+              ? `Pi RPC Run ${request.runId} has had no RPC progress for ${idleMs} ms and is still running.`
+              : `Pi RPC Run ${request.runId} has been running for ${elapsedMs} ms and is still running.`,
+        });
+      };
+      const armIdleWarning = (delay = this.runIdleWarningMs): void => {
         if (settled || pendingTimeout) return;
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(
-          () =>
-            beginTimeout(
-              new PiRpcProviderError(
-                "run_idle_timeout",
-                `Pi RPC Run ${request.runId} was idle for ${this.runIdleTimeoutMs} ms without RPC progress.`,
-              ),
-            ),
-          this.runIdleTimeoutMs,
-        );
-        idleTimer.unref?.();
+        if (idleWarningTimer) clearTimeout(idleWarningTimer);
+        idleWarningTimer = setTimeout(() => {
+          emitRunWarning("idle");
+          armIdleWarning(this.warningRepeatMs);
+        }, delay);
+        idleWarningTimer.unref?.();
+      };
+      const armWallWarning = (delay = this.runWallWarningMs): void => {
+        if (settled || pendingTimeout) return;
+        if (wallWarningTimer) clearTimeout(wallWarningTimer);
+        wallWarningTimer = setTimeout(() => {
+          emitRunWarning("wall");
+          armWallWarning(this.warningRepeatMs);
+        }, delay);
+        wallWarningTimer.unref?.();
       };
       const markProgress = (): void => {
-        armIdleTimer();
+        lastProgressAt = Date.now();
+        armIdleWarning();
       };
       const onAbort = (): void => {
         if (abortSent) return;
@@ -1078,18 +1130,22 @@ export class PiRpcProcessProvider implements SubagentProvider {
           });
       }, this.heartbeatIntervalMs);
       heartbeatTimer.unref?.();
-      armIdleTimer();
-      wallTimer = setTimeout(
-        () =>
-          beginTimeout(
-            new PiRpcProviderError(
-              "run_wall_timeout",
-              `Pi RPC Run ${request.runId} exceeded maximum wall time ${this.maxRunWallTimeMs} ms.`,
+      armIdleWarning();
+      armWallWarning();
+      if (this.hardRunWallTimeMs !== undefined) {
+        const hardRunWallTimeMs = this.hardRunWallTimeMs;
+        hardWallTimer = setTimeout(
+          () =>
+            beginTimeout(
+              new PiRpcProviderError(
+                "run_wall_timeout",
+                `Pi RPC Run ${request.runId} exceeded hard wall time ${hardRunWallTimeMs} ms.`,
+              ),
             ),
-          ),
-        this.maxRunWallTimeMs,
-      );
-      wallTimer.unref?.();
+          hardRunWallTimeMs,
+        );
+        hardWallTimer.unref?.();
+      }
       if (request.signal.aborted) {
         fail(
           request.signal.reason instanceof Error

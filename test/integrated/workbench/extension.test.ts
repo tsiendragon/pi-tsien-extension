@@ -7,6 +7,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import subagentWorkbench from "../../../extensions/subagent-workbench/src/index.ts";
 import { WorkbenchController } from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
 import {
+  loadWorkflowRun,
+  saveWorkflowRun,
+} from "../../../extensions/subagent-workbench/src/workflow-run-store.ts";
+import {
   WORKBENCH_RUNTIME_SYMBOL,
   uninstallWorkbenchRuntime,
 } from "../../../extensions/subagent-workbench/src/runtime.ts";
@@ -90,7 +94,7 @@ describe("Pi extension", () => {
     });
 
     expect(rendered.join("\n")).toContain("Subagent Workbench · Status");
-    expect(rendered.join("\n")).toContain("active 0/4");
+    expect(rendered.join("\n")).toContain("active 0/8");
 
     for (const handler of handlers.get("session_shutdown") ?? []) {
       await handler();
@@ -174,6 +178,150 @@ describe("Pi extension", () => {
       expect.objectContaining({ signal: undefined }),
       true,
     );
+
+    for (const handler of handlers.get("session_shutdown") ?? []) {
+      await handler();
+    }
+  });
+
+  it("wakes an idle main Agent when a background job fails", async () => {
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const failedJob = {
+      workId: "work-failed",
+      kind: "agent",
+      label: "Failing worker",
+      status: "failed",
+      background: true,
+      createdAt: Date.now(),
+      error: "Request exceeds the model context window.",
+    } as any;
+    vi.spyOn(WorkbenchController.prototype, "pendingJobCompletions").mockReturnValue([
+      failedJob,
+    ]);
+    const markDelivered = vi
+      .spyOn(WorkbenchController.prototype, "markJobCompletionDelivered")
+      .mockReturnValue(true);
+    vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
+      completed: [failedJob],
+      pending: [],
+      missing: [],
+    } as any);
+    const sendMessage = vi.fn();
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+      sendMessage,
+    };
+    subagentWorkbench(pi as any);
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: false,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    const signal = new AbortController().signal;
+
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    await tools
+      .get("subagent_results")
+      .execute("first-query", { mode: "status" }, signal, undefined, ctx);
+    await tools
+      .get("subagent_results")
+      .execute("second-query", { mode: "status" }, signal, undefined, ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "subagent-workbench-completion",
+        content: expect.stringContaining("Subagent agent failed"),
+      }),
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+    expect(markDelivered).toHaveBeenCalledWith("work-failed");
+
+    for (const handler of handlers.get("session_shutdown") ?? []) {
+      await handler();
+    }
+  });
+
+  it("wakes an idle main Agent for a soft long-running warning", async () => {
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const warning = {
+      id: "run_warning_1",
+      workId: "work-long",
+      kind: "workflow",
+      label: "Long workflow",
+      sessionId: "session-long",
+      runId: "run-long",
+      workflowId: "workflow-long",
+      warning: "idle",
+      message: "No RPC progress, but the task is still running.",
+      elapsedMs: 700_000,
+      idleMs: 600_000,
+    } as const;
+    vi.spyOn(WorkbenchController.prototype, "pendingRunWarnings").mockReturnValue([
+      warning,
+    ]);
+    const markDelivered = vi
+      .spyOn(WorkbenchController.prototype, "markRunWarningDelivered")
+      .mockReturnValue(true);
+    vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
+      completed: [],
+      pending: [],
+      missing: [],
+    } as any);
+    const sendMessage = vi.fn();
+    const notify = vi.fn();
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+      sendMessage,
+    };
+    subagentWorkbench(pi as any);
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: { notify },
+    };
+    const sessionCtx = { ...ctx, hasUI: false };
+    const signal = new AbortController().signal;
+
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler({}, sessionCtx);
+    }
+    await tools
+      .get("subagent_results")
+      .execute("first-query", { mode: "status" }, signal, undefined, ctx);
+    await tools
+      .get("subagent_results")
+      .execute("second-query", { mode: "status" }, signal, undefined, ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "subagent-workbench-run-warning",
+        content: expect.stringContaining("The task is still running"),
+      }),
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("work-long"),
+      "warning",
+    );
+    expect(markDelivered).toHaveBeenCalledWith("run_warning_1");
 
     for (const handler of handlers.get("session_shutdown") ?? []) {
       await handler();
@@ -341,6 +489,207 @@ describe("Pi extension", () => {
       await expect(
         readFile(path.join(cwd, ".pi", "workflows", "must-not-save.json")),
       ).rejects.toThrow();
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler();
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps one task and compiles restricted JavaScript plans for dry-run", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "workflow-auto-tool-"));
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+    };
+    subagentWorkbench(pi as any);
+    const ctx = { cwd, hasUI: false, ui: { notify: vi.fn() } };
+
+    try {
+      const single = await tools.get("subagent_workflow").execute(
+        "single-workflow",
+        { task: "inspect one file", dryRun: true },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(single.details.preflight).toMatchObject({
+        stages: 1,
+        taskDefinitions: 1,
+      });
+
+      const generated = await tools.get("subagent_workflow").execute(
+        "javascript-workflow",
+        {
+          dryRun: true,
+          parameters: { files: ["a.ts", "b.ts"] },
+          javascript:
+            'const stage = workflow.stage("Inspect"); for (const file of parameters.files) stage.task({ key: file.replace(".", "_"), task: "Inspect " + file });',
+        },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(generated.details.preflight).toMatchObject({
+        stages: 1,
+        taskDefinitions: 2,
+      });
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler();
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("persists explicit run records and retries a full record across sessions", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "workflow-record-"));
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const definition = {
+      version: 1 as const,
+      label: "Persistent",
+      stages: [{ tasks: [{ key: "inspect", task: "inspect" }] }],
+    };
+    const completed = {
+      workflowId: "workflow_persisted",
+      label: "Persistent",
+      status: "completed" as const,
+      attempt: 1,
+      stages: [
+        {
+          id: "stage-1",
+          label: "Stage 1",
+          status: "completed" as const,
+          tasks: [
+            {
+              id: "task-1",
+              key: "inspect",
+              label: "Inspect",
+              status: "completed" as const,
+              output: "sensitive output",
+            },
+          ],
+        },
+      ],
+    };
+    vi.spyOn(WorkbenchController.prototype, "submitWorkflow").mockReturnValue({
+      handle: {
+        workId: "work_metadata_public",
+        kind: "workflow",
+        status: "queued",
+        background: false,
+      },
+      completion: Promise.resolve(completed),
+    });
+    let rejectRetry!: (error: Error) => void;
+    const retryCompletion = new Promise<any>((_resolve, reject) => {
+      rejectRetry = reject;
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const retryFromResult = vi
+      .spyOn(WorkbenchController.prototype, "retryWorkflowFromResult")
+      .mockReturnValue({
+        handle: {
+          workId: "work_cross_session_retry",
+          kind: "workflow",
+          status: "queued",
+          background: true,
+        },
+        completion: retryCompletion,
+      });
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+    };
+    subagentWorkbench(pi as any);
+    const ctx = { cwd, hasUI: false, ui: { notify: vi.fn() } };
+
+    try {
+      const recorded = await tools.get("subagent_workflow").execute(
+        "record-run",
+        {
+          background: false,
+          record: "metadata",
+          label: definition.label,
+          stages: definition.stages,
+        },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(recorded.details).toMatchObject({
+        status: "completed",
+        runRecordPath: path.join(
+          cwd,
+          ".pi",
+          "workflow-runs",
+          "work_metadata_public.json",
+        ),
+      });
+      const metadata = await loadWorkflowRun(cwd, "work_metadata_public");
+      expect(metadata.mode).toBe("metadata");
+      expect(JSON.stringify(metadata)).not.toContain("sensitive output");
+
+      await saveWorkflowRun(
+        cwd,
+        "work_persisted_source",
+        "full",
+        definition,
+        completed,
+      );
+      const retried = await tools.get("subagent_workflow_control").execute(
+        "retry-persisted",
+        { action: "retry", workId: "work_persisted_source" },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(retried).toMatchObject({
+        details: {
+          status: "queued",
+          sourceWorkId: "work_persisted_source",
+          workId: "work_cross_session_retry",
+          retryRecordPath: path.join(
+            cwd,
+            ".pi",
+            "workflow-runs",
+            "work_cross_session_retry.json",
+          ),
+        },
+      });
+      expect(retryFromResult).toHaveBeenCalledWith(
+        "work_persisted_source",
+        expect.objectContaining({
+          label: "Persistent",
+          stages: [
+            expect.objectContaining({
+              tasks: [expect.objectContaining({ key: "inspect" })],
+            }),
+          ],
+        }),
+        completed,
+      );
+      rejectRetry(new Error("cancelled after Session shutdown"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ctx.ui.notify).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("Workflow retry record failed"),
+      );
     } finally {
       for (const handler of handlers.get("session_shutdown") ?? []) {
         await handler();
