@@ -70,7 +70,13 @@ export type LiveSessionCommand =
       readonly deliverAs?: "steer" | "followUp";
       readonly expandPromptTemplates?: false;
     }
-  | { readonly type: "abort"; readonly leaseId: string };
+  | { readonly type: "abort"; readonly leaseId: string }
+  | {
+      readonly type: "feature_command";
+      readonly leaseId: string;
+      readonly feature: "btw";
+      readonly command: { readonly type: "open" | "close" };
+    };
 
 export interface HelloMessage {
   readonly type: "hello";
@@ -188,6 +194,14 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
     && hasOnlyKeys(value, ["type", "leaseId"])) {
     if (!isBoundedString(value.leaseId, 256)) return undefined;
     return { type: value.type, leaseId: value.leaseId };
+  }
+
+  if (value.type === "feature_command"
+    && hasOnlyKeys(value, ["type", "leaseId", "feature", "command"])) {
+    if (!isBoundedString(value.leaseId, 256) || value.feature !== "btw" || !isRecord(value.command)
+      || !hasOnlyKeys(value.command, ["type"])
+      || (value.command.type !== "open" && value.command.type !== "close")) return undefined;
+    return { type: "feature_command", leaseId: value.leaseId, feature: "btw", command: { type: value.command.type } };
   }
 
   if (value.type === "prompt"

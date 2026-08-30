@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- BTW 历史快照刷新键由 `Ctrl+R` 改为 `F5`，避免与自定义提交键冲突。
 - 新增前台 Bash 命令区域，显示本地开始时间、耗时和最多 50KB 的实时输出尾部。
 - 输入严格为空时可用方向键聚焦命令、切换输出和控制自动跟随。
 - 通过 `pi-zero` 的 `pre-powerline v1` 插槽保持“命令 → Powerline → 输入框”，不覆盖现有 Powerline。
