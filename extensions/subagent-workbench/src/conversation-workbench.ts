@@ -1088,7 +1088,7 @@ class ConversationWorkbenchComponent implements Component, Focusable {
     const tasks = (workflow.stages ?? []).flatMap((stage) => stage.tasks);
     rows.push(
       frame(
-        ` running ${tasks.filter((task) => task.status === "running").length} · queued ${tasks.filter((task) => task.status === "queued").length} · completed ${tasks.filter((task) => task.status === "completed").length} · skipped ${tasks.filter((task) => task.status === "skipped").length}`, 
+        ` running ${tasks.filter((task) => task.status === "running").length} · queued ${tasks.filter((task) => task.status === "queued").length} · completed ${tasks.filter((task) => task.status === "completed").length} · skipped ${tasks.filter((task) => task.status === "skipped").length}`,
       ),
     );
     if (workflow.error) {

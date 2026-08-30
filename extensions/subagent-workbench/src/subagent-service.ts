@@ -80,6 +80,13 @@ export interface ProviderToolOutput {
 
 export type ProviderEvent =
   | { readonly type: "heartbeat"; readonly at?: number }
+  | {
+      readonly type: "run-warning";
+      readonly warning: "idle" | "wall";
+      readonly message: string;
+      readonly elapsedMs: number;
+      readonly idleMs?: number;
+    }
   | { readonly type: "message"; readonly text: string }
   | {
       readonly type: "session-state";

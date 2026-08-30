@@ -1,4 +1,4 @@
-export const DEFAULT_ACTIVE_LIMIT = 4;
+export const DEFAULT_ACTIVE_LIMIT = 8;
 export const DEFAULT_QUEUE_LIMIT = 32;
 
 export const ResourcePriority = {

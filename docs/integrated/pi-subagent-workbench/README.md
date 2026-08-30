@@ -8,7 +8,7 @@ This repository owns its runtime, resource admission, public snapshot contract, 
 
 M0 foundation plus the first usable M1 Conversation Workbench:
 
-- process-level `ResourceGovernor` with default active limit 4 and queue limit 32;
+- process-level `ResourceGovernor` with default active limit 8 and queue limit 32;
 - P0/P1/P2 priority scheduling;
 - FIFO within a subject and round-robin across same-priority subjects;
 - cancellable and timeout-bounded admission;
@@ -19,17 +19,23 @@ M0 foundation plus the first usable M1 Conversation Workbench:
 - fail-loud provider capability checks and active Run interruption;
 - `PiRpcProcessProvider`: one persistent `pi --mode rpc` process per ChildSession;
 - RPC continuation across Runs, explicit-context envelope, abort, crash tombstones, and idempotent process cleanup;
-- bounded retained RPC processes (`maxSessions=8` by default) with fail-loud `provider_capacity` rejection;
+- bounded retained RPC processes (`maxSessions=16` per main Pi Session by default), with oldest-idle Direct Session reclamation before fail-loud `provider_capacity` rejection;
 - separate cold-start (`startupTimeoutMs=180000`) and normal RPC command (`commandTimeoutMs=30000`) deadlines;
+- soft long-running policy: idle at 10 minutes and wall time at one hour notify the main Agent without cancelling; warnings repeat every six hours, with a configurable 24-hour final hard wall;
 - full-capability process defaults: child Agents load Pi tools, extensions, skills, prompt templates, and project context files while keeping durable Pi sessions disabled;
 - child-only `multi_tool_use_parallel` (`multi_tool_use.parallel` label) for up to eight independent active Pi tool calls, with ordered results, Abort propagation, policy hooks, and sequential-tool fallback;
 - explicit provider switches to disable any child resource class for restricted deployments;
 - main-Agent-callable `subagent_start` and `subagent_workflow` tools;
 - staged Workflow execution: stages run sequentially and tasks inside each stage run in parallel;
-- explicit Workflow dataflow: tasks expose stable `key` values and later stages list `inputs` whose completed outputs are appended to context;
+- explicit Workflow dataflow: tasks expose stable `key` values; later Stages receive each producer's compact conclusion plus absolute artifact paths through bounded `inputs`, while raw output remains inspectable in Workbench;
+- optional task `outputSchema` validation, with parsed JSON retained separately from the raw output;
+- declarative `when` conditions and capacity-bounded `foreach` fan-out with `{{item}}`/`{{index}}`;
+- explicit opt-in restricted JavaScript builders for plan shapes that are awkward declaratively; they can only create bounded stages/tasks synchronously and compile to persisted structural definitions before any child runs;
 - reusable project Workflow definitions in `.pi/workflows/<name>.json`, written only when `saveAs` is explicitly supplied and runnable later with `name`;
-- cooperative Workflow pause/resume at Stage boundaries plus in-session whole-Workflow retry under a new `workId`;
-- synchronous capacity and dependency validation before a background job is accepted;
+- cooperative Workflow pause/resume at Stage boundaries, whole-Workflow retry from the first incomplete Stage, and `retry_task` attempts that reuse same-Stage siblings while rerunning only one failed task;
+- `dryRun` validation and graph/capacity preview without saving, creating a Job, or starting a child process;
+- explicit terminal run records in `.pi/workflow-runs/<workId>.json`: `metadata` is output-free, while `full` enables cross-Session retry and may contain sensitive data;
+- synchronous capacity, template dependency, and structure validation before a background job is accepted;
 - focusable one-line Agent/Workflow navigator above the existing Powerline/status row, leaving that row directly adjacent to the main editor border;
 - extension-owned `WorkbenchController` wiring the Runtime, Service, provider, and Workflow execution without exposing mutable provider handles to the UI;
 - host-owned fullscreen routes with an independent alternate-screen layout root and primary ScrollView, so child scrolling cannot expose Main content;
@@ -77,16 +83,16 @@ Inside a Workflow, use `↑/↓` to select a Stage or task, `←/→` to fold/un
 When the extension is loaded, the main Agent can call these tools without a manual slash command:
 
 ```text
-subagent_start     one bounded child task
-subagent_workflow          staged tasks, prior-output inputs, and saved definitions
-subagent_workflow_control  pause, resume, or retry a Workflow by workId
+subagent_start             one bounded child task
+subagent_workflow          recoverable single task, staged workflow, or restricted JavaScript plan
+subagent_workflow_control  pause, resume, retry a Workflow, or retry one failed task by workId
 subagent_results           query, collect, or briefly wait for workIds
 subagent_cancel            cancel queued or running workIds
 ```
 
-`subagent_start` and `subagent_workflow` run in the background by default and immediately return a stable `workId`. Continue independent work, then use `subagent_results` with `mode: "status"` or `"collect"` when a result is useful. Collected Workflow results include the aggregate Stage/task outputs, not just terminal status. `mode: "wait"` is deliberately bounded to 30 seconds and leaves unfinished jobs running; use it only at a real correctness or delivery dependency point. Set `background: false` only when the current turn must wait for the complete result. Background work is not tied to the completed Tool call's abort signal. A direct task and each workflow task can set `thinking` to `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; an agent follow-up always reuses its initial `cwd`, `model`, and `thinking` configuration.
+`subagent_start` and `subagent_workflow` run in the background by default and immediately return a stable `workId`. Continue independent work, then use `subagent_results` with `mode: "status"` or `"collect"` when a result is useful. Collected Workflow results include the aggregate Stage/task outputs, not just terminal status. `mode: "wait"` is deliberately bounded to 30 seconds and leaves unfinished jobs running; use it only at a real correctness or delivery dependency point. Set `background: false` only when the current turn must wait for the complete result. Background work is not tied to the completed Tool call's abort signal. A direct task and each workflow task can set `thinking` to `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. An explicit model override must use the exact `provider/model` form; short or fuzzy names are rejected before a Job is created, while omitting `model` inherits the current Session model. An agent follow-up always reuses its initial `cwd`, `model`, and `thinking` configuration.
 
-Terminal jobs retain their result in the controller for collection. Completion is delivered as a non-triggering `nextTurn` custom message, so it appears naturally in the next Agent turn without interrupting an active response or user input. `subagent_workflow_control` pauses at the next Stage boundary, resumes a paused run, or explicitly retries an entire terminal Workflow from its in-memory definition under a new `workId`. Retry can repeat external side effects and is never automatic. In-memory retry definitions do not survive Session shutdown; use `saveAs` and later `name` for cross-Session reuse. Workflow child processes are closed at terminal state to release provider slots while their projected transcript remains inspectable. `subagent_cancel` aborts a queued, running, or paused workId on a best-effort basis; collect status afterward if the terminal state matters.
+Terminal jobs retain their result in the controller for collection. Completion is delivered as a non-triggering `nextTurn` custom message, so it appears naturally in the next Agent turn without interrupting an active response or user input. A failed Workflow completion identifies the failed Stage/task key and tells the main Agent to call `subagent_workflow_control` with `action: "retry_task"`. That action retries only the failed task and reuses the statuses, outputs, summaries, and artifact paths of its same-Stage siblings; a failed `foreach` task is retried as one task, including its bounded iterations. Ordinary `retry` still reuses completed Stages and resumes at the first incomplete Stage; a retry of an already-completed Workflow starts from Stage 1. Retry can still repeat side effects in the resumed task and is never automatic. In-memory retry definitions do not survive Session shutdown; use `saveAs`/`name` for definition reuse, or set `record: "full"` to allow terminal-result retry from a later Session. `record: "metadata"` deliberately omits Workflow/Stage/task labels, parameters, prompts, contexts, outputs, schemas, iteration values, and process IDs; it cannot be resumed. Full records contain the compiled definition, optional JavaScript origin, and outputs and therefore may contain sensitive data. Run records are explicit, terminal-only, and ignored by Git through `.pi/workflow-runs/`. Workflow child processes are closed at terminal state to release provider slots while their projected transcript remains inspectable. `subagent_cancel` aborts a queued, running, or paused workId on a best-effort basis; collect status afterward if the terminal state matters.
 
 Active work automatically appears as one unframed line above the existing Powerline/status row, rather than between that row and the main editor border. The extension does not replace the main editor or Powerline while Main is active. When the main editor is empty, use `←/→` to focus and switch tasks directly, then press `Enter` to open an isolated fullscreen route. `↑/↓` remain available for the main editor's history and cursor movement. `F6` remains available as an optional focus shortcut. The route has its own layout root and primary ScrollView; mouse/page scrolling never includes Main content. `Esc` restores the original Main layout, focus, draft, and viewport.
 
@@ -94,7 +100,9 @@ A child process receives `PI_SUBAGENT_WORKBENCH_CHILD=1`, so it still loads norm
 
 Direct and Workflow Agent pages read the child RPC session state and display the actual model plus thinking effort (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). Workflow overview displays the selected Agent's configuration above its live output.
 
-A Workflow can contain at most eight Stages and eight tasks per Stage, but its total task count must also fit the provider Session limit (eight by default). Accepted background Workflows reserve their required Session slots so concurrent submissions cannot silently overbook that limit. `inputs` may reference only unique task keys from earlier Stages; same-Stage references are rejected because those tasks run concurrently. This is intentionally a deterministic staged runner, not a JavaScript runtime: loops, conditions, and dynamic fan-out remain out of scope until a concrete large-Workflow requirement justifies them.
+A Workflow can contain at most eight Stages and eight task definitions per Stage. Its maximum expanded child count, including every task's `foreach.maxItems`, must fit the provider Session limit (16 per main Pi Session by default). Accepted background Workflows reserve that maximum so concurrent submissions cannot silently overbook the limit. When capacity is short, the Controller closes only the oldest idle Direct Sessions that have no active Run or queued Follow-up; running and Workflow Sessions are never reclamation candidates. Different main Pi Sessions own independent providers and capacity limits. `inputs` and `tasks.*` templates may reference only unique keys from earlier Stages; same-Stage references are rejected because those tasks run concurrently. A producer may return JSON such as `{ "summary": "...", "artifacts": [{ "path": "/absolute/report.md", "description": "details" }] }`; only its concise `summary` and absolute artifact paths flow through `inputs`, and consumers read an artifact only when needed. `when` accepts only booleans, one reference, or `==`/`!=` against a JSON primitive. `foreach` accepts only an array reference and a hard limit of zero to eight.
+
+`subagent_workflow` accepts exactly one definition source: `task` automatically creates a one-Stage/one-task Workflow; `stages` is the normal structured form; `name` loads a saved definition; and `javascript` is explicit opt-in for a synchronous builder. A JavaScript builder receives only `parameters` and `workflow`, and may call `workflow.stage("label").task({ key, task, ... })`. It has no filesystem, process, network, import, timer, asynchronous, dynamic-code, or child-execution API; execution is limited to 50 ms and the builder itself enforces the normal 8×8 limit. It is not a runtime control plane: the builder compiles before preflight, and the resulting structural definition is what runs, is saved, and is retried. Use `when`/`foreach` for bounded output-driven behavior.
 
 The native UI requires a Pi host that supports both `ctx.ui.custom(..., { fullscreen: true })` and `ctx.ui.setWidget(..., { placement: "aboveStatus" })`. Older hosts are not supported because falling back to a 100% Overlay would reintroduce Main transcript leakage or place navigation inside the editor/status boundary.
 
@@ -132,8 +140,10 @@ const service = new SubagentService();
 const provider = new PiRpcProcessProvider({
   defaultModel: "openai-codex/gpt-5.6-luna",
   thinking: "minimal",
-  runIdleTimeoutMs: 10 * 60_000,
-  maxRunWallTimeMs: 60 * 60_000,
+  runIdleWarningMs: 10 * 60_000,
+  runWallWarningMs: 60 * 60_000,
+  warningRepeatMs: 6 * 60 * 60_000,
+  hardRunWallTimeMs: 24 * 60 * 60_000,
   timeoutAbortGraceMs: 5_000,
 });
 service.providers.register(provider);
@@ -142,7 +152,7 @@ service.providers.register(provider);
 // Call provider.dispose() during shutdown to stop every persistent child process.
 ```
 
-`runIdleTimeoutMs` is reset by real RPC progress such as assistant or tool events. Polling heartbeats do not reset it. `maxRunWallTimeMs` remains an absolute safety ceiling even while progress continues. On either timeout, the provider first requests an abort, waits up to `timeoutAbortGraceMs`, and then stops and tombstones the Session. The deprecated `runTimeoutMs` option remains an alias for `runIdleTimeoutMs`.
+`runIdleWarningMs` is reset by real RPC progress such as assistant or tool events; polling heartbeats do not reset it. Crossing `runIdleWarningMs` or `runWallWarningMs` emits a warning while the Run continues. The Controller maps the warning to its Direct or parent Workflow workId, retains it until delivery, wakes an idle main Agent, and also shows a UI warning. Warnings repeat after `warningRepeatMs`. Only `hardRunWallTimeMs` aborts the Run; set it to `false` to disable the final hard wall. When enabled, the provider waits up to `timeoutAbortGraceMs`, then stops and tombstones the Session. Deprecated `runTimeoutMs`/`runIdleTimeoutMs` and `maxRunWallTimeMs` are warning-threshold aliases, not cancellation timers. Main-Agent decision is immediate for the default background tools; `background:false` keeps the main tool call occupied, so the UI warning is immediate but the queued Agent message is processed only after that foreground call returns.
 
 A `background_command_start` tool call normally returns immediately, so the Agent Run should settle instead of waiting for the command. Merely owning a live background process does not reset the idle timer; later status/output tool calls do count as real progress. Background commands that must outlive or be managed outside the ChildSession should be started by the owning parent Session.
 
