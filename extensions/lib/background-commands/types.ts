@@ -52,6 +52,22 @@ export interface BackgroundTaskStartRequest {
   readonly launchSignal?: AbortSignal;
 }
 
+export interface ForegroundCommandStartRequest {
+  readonly toolCallId: string;
+  readonly command: string;
+  readonly cwd: string;
+  readonly sessionId: string;
+  readonly startedAt?: number;
+  readonly timeoutSeconds?: number;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+  readonly onData: (data: Buffer) => void;
+}
+
+export interface ForegroundCommandResult {
+  readonly exitCode: number | null;
+}
+
 export type BackgroundTaskEvent =
   | { readonly type: "started"; readonly task: BackgroundTaskSnapshot }
   | { readonly type: "updated"; readonly task: BackgroundTaskSnapshot }

@@ -1314,7 +1314,8 @@ UI 故障不得终止命令；日志和进程管理故障必须停止对应后�
 |---|---|---:|---|
 | 阶段一 | `pi-tsien-extension` + `pi-zero` pre-powerline 插槽 | 否 | 展示开始时间和耗时，方向键选择命令并查看实时输出 |
 | 阶段二 | Extension 原型，可逐步上移 Core | 非必须 | 主 Agent 与显式后台命令并行 |
-| 阶段三 | Pi Core、TUI、Bash Tool | 是 | `Ctrl+B` 动态后台化和统一 `/tasks` |
+| 阶段三 MVP | Extension 覆盖 Agent Bash + TUI | 否 | Agent Bash `Ctrl+B` 同进程动态后台化 |
+| 阶段三完整形态 | Pi Core、用户 Shell、`/tasks` | 待评估 | Agent Bash 与 `!command` 统一管理 |
 
 ### 18.1 阶段一交付物
 
@@ -1369,7 +1370,7 @@ backgroundCommands.dynamicForegroundHandoff
 1. **采用前台默认、显式后台的双模式**，不做全局无条件异步。
 2. **阶段一使用 Extension + `pi-zero` pre-powerline 插槽**，新增命令组件、方向键焦点和输出视图，不修改 Pi Core 或现有 Powerline。
 3. **阶段二先提供独立后台 Tool**，验证任务模型和生命周期。
-4. **阶段三再修改 Pi Core**，支持已经运行的命令通过 `Ctrl+B` 转入后台。
+4. **阶段三先由 Extension 覆盖内置 Agent Bash**，实现 `Ctrl+B` 同进程转后台；用户 `!command` 和完整 `/tasks` 若要统一支持，再评估 Pi Core 接口。
 5. **后台完成发送简短 `followUp` 摘要**；Agent 忙碌时排队，空闲时自动触发并继续处理。
 6. **Session 退出默认终止全部后台任务**，首版不支持跨进程保活。
 7. **前台与后台统一使用一个 CommandTaskRegistry**，避免 TUI、Tool 和 Shell 分别维护状态。
@@ -1384,4 +1385,12 @@ backgroundCommands.dynamicForegroundHandoff
 4. Linux/macOS 使用独立进程组终止；Windows 先标记实验支持。
 5. 后台完成摘要以 `followUp` 投递；Agent 忙碌时等待，空闲时立即触发 Agent Turn。
 
-阶段三仍需确认：存在前台 Bash 时，`Ctrl+B` 是否覆盖 Pi 默认“光标左移”，或改用单独的可配置快捷键。
+阶段三 MVP 已落地：
+
+1. Extension 覆盖内置 Agent Bash，并从进程启动时由统一管理器托管输出和进程组。
+2. 单个前台 Bash 按 `Ctrl+B` 直接同进程转后台，不重启命令；并行 Bash 先进入现有命令列表，再转换选中项。
+3. 转后台后原 Tool 只返回一次合法结果，原 AbortSignal 不再终止后台进程。
+4. 没有前台 Bash 时，`Ctrl+B` 保留 Pi 默认“光标左移”。
+5. 已覆盖同 PID、并行精确关联、Abort/timeout 竞态、后台并发上限和自然完成清理测试。
+
+当前边界：尚未提供 `/tasks` 管理界面，也未把用户直接输入的 `!command` 纳入动态后台化。
