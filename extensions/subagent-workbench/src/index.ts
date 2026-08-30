@@ -25,7 +25,9 @@ import {
 import {
   WorkbenchController,
   type WorkbenchJobQuery,
+  type WorkbenchRunWarning,
   type WorkbenchWorkflowPreflight,
+  type WorkbenchWorkflowRequest,
   type WorkbenchWorkflowResult,
 } from "./workbench-controller.ts";
 import type { WorkbenchJobSnapshot } from "./job-registry.ts";
@@ -35,11 +37,19 @@ import {
   type TaskNavigationTarget,
 } from "./task-navigation.ts";
 import { registerWorkbenchDashboardBridge } from "./dashboard-bridge.ts";
+import { clearLiveFeature, publishLiveFeature } from "../../lib/live-observer.ts";
 import {
   SAVED_WORKFLOW_VERSION,
   loadWorkflowDefinition,
   saveWorkflowDefinition,
+  type SavedWorkflowDefinition,
 } from "./workflow-store.ts";
+import {
+  loadWorkflowRun,
+  saveWorkflowRun,
+  workflowRunPath,
+} from "./workflow-run-store.ts";
+import { compileWorkflowJavaScript } from "./workflow-javascript.ts";
 const WORKBENCH_API_VERSION = 1 as const;
 const VIEW_ROWS = 18;
 const TOOL_OUTPUT_CHARS = 64 * 1024;
@@ -68,7 +78,11 @@ const AgentToolParams = Type.Object({
     }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Optional provider/model override." }),
+    Type.String({
+      pattern: "^[^/\\s]+/\\S+$",
+      description:
+        "Optional exact provider/model override. Short or fuzzy model names are rejected.",
+    }),
   ),
   thinking: Type.Optional(ThinkingLevelParam),
   context: Type.Optional(
@@ -106,7 +120,15 @@ const WorkflowControlParams = Type.Object({
     Type.Literal("pause"),
     Type.Literal("resume"),
     Type.Literal("retry"),
+    Type.Literal("retry_task"),
   ]),
+  taskKey: Type.Optional(
+    Type.String({
+      pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+      description:
+        "Required with retry_task: retry only this failed workflow task and reuse its siblings.",
+    }),
+  ),
 });
 
 const WorkflowTaskParams = Type.Object({
@@ -127,7 +149,13 @@ const WorkflowTaskParams = Type.Object({
   ),
   label: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
+  model: Type.Optional(
+    Type.String({
+      pattern: "^[^/\\s]+/\\S+$",
+      description:
+        "Optional exact provider/model override. Short or fuzzy model names are rejected.",
+    }),
+  ),
   thinking: Type.Optional(ThinkingLevelParam),
   context: Type.Optional(Type.String()),
   outputSchema: Type.Optional(
@@ -164,6 +192,14 @@ const WorkflowStageParams = Type.Object({
 });
 
 const WorkflowToolParams = Type.Object({
+  /** Automatically wrapped as one stage with one task. */
+  task: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "One task to run as a recoverable single-stage workflow. Use this for user-requested workflows or when tracking/retry value justifies it.",
+    }),
+  ),
   label: Type.Optional(Type.String()),
   parameters: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), {
@@ -188,6 +224,14 @@ const WorkflowToolParams = Type.Object({
   stages: Type.Optional(
     Type.Array(WorkflowStageParams, { minItems: 1, maxItems: 8 }),
   ),
+  javascript: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 16 * 1024,
+      description:
+        "Explicit opt-in, synchronous JavaScript builder. It may only use workflow.stage(label).task(task) and parameters; no I/O, imports, async code, or agent execution. The compiled stages are persisted for retry.",
+    }),
+  ),
   background: Type.Optional(
     Type.Boolean({
       description:
@@ -198,6 +242,12 @@ const WorkflowToolParams = Type.Object({
     Type.Boolean({
       description:
         "Validate and preview the Workflow without saving it, creating a Job, or starting child processes.",
+    }),
+  ),
+  record: Type.Optional(
+    Type.Union([Type.Literal("metadata"), Type.Literal("full")], {
+      description:
+        "Explicitly persist a terminal run under .pi/workflow-runs. metadata omits prompts/outputs; full enables cross-session retry and may contain sensitive data.",
     }),
   ),
 });
@@ -629,6 +679,38 @@ function currentThinking(ctx: ExtensionContext):
     : undefined;
 }
 
+function workflowRequestFromDefinition(
+  definition: SavedWorkflowDefinition,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): WorkbenchWorkflowRequest {
+  return {
+    label: definition.label,
+    parameters: definition.parameters,
+    cwd: ctx.cwd,
+    model: currentModel(ctx),
+    thinking: currentThinking(ctx),
+    signal,
+    stages: definition.stages.map((stage) => ({
+      label: stage.label,
+      tasks: stage.tasks.map((task) => ({
+        task: task.task,
+        key: task.key,
+        inputs: task.inputs,
+        label: task.label,
+        cwd: task.cwd || ctx.cwd,
+        model: task.model || currentModel(ctx),
+        thinking: task.thinking ?? currentThinking(ctx),
+        context: task.context,
+        outputSchema: task.outputSchema,
+        when: task.when,
+        foreach: task.foreach,
+        maxItems: task.maxItems,
+      })),
+    })),
+  };
+}
+
 function boundedToolOutput(text: string): string {
   if (text.length <= TOOL_OUTPUT_CHARS) return text;
   return `${text.slice(0, TOOL_OUTPUT_CHARS)}\n… output truncated; open /subagent-workbench for the retained transcript.`;
@@ -671,8 +753,20 @@ function workflowToolOutput(result: WorkbenchWorkflowResult): string {
     );
     for (const task of stage.tasks) {
       lines.push(`\n### ${task.label} · ${task.status}`);
-      if (task.output) lines.push(task.output);
-      else if (task.error) lines.push(`Error: ${task.error}`);
+      if (task.summary) lines.push(`Conclusion: ${task.summary}`);
+      else if (task.output) lines.push(task.output);
+      if (task.artifacts?.length) {
+        lines.push(
+          "Artifacts:\n" +
+            task.artifacts
+              .map(
+                (artifact) =>
+                  `- ${artifact.path}${artifact.description ? ` — ${artifact.description}` : ""}`,
+              )
+              .join("\n"),
+        );
+      }
+      if (task.error) lines.push(`Error: ${task.error}`);
     }
   }
   if (result.error) lines.push(`\nWorkflow error: ${result.error}`);
@@ -710,7 +804,38 @@ function formatJobQuery(
   return lines.length ? boundedToolOutput(lines.join("\n")) : "No matching Subagent Workbench jobs.";
 }
 
+function failedWorkflowTask(
+  job: WorkbenchJobSnapshot,
+): { stage: string; key: string; error?: string } | undefined {
+  if (job.kind !== "workflow" || job.status !== "failed") return undefined;
+  const result = job.result as Partial<WorkbenchWorkflowResult> | undefined;
+  if (!result?.stages) return undefined;
+  for (const stage of result.stages) {
+    const task = stage.tasks.find((candidate) => candidate.status === "failed");
+    if (task) return { stage: stage.label, key: task.key, error: task.error };
+  }
+  return undefined;
+}
+
+function runWarningSummary(warning: WorkbenchRunWarning): string {
+  const idle =
+    warning.idleMs === undefined
+      ? ""
+      : ` No real RPC progress for ${formatDuration(warning.idleMs)}.`;
+  const target = warning.workId
+    ? `${warning.kind} ${warning.workId}`
+    : `${warning.kind} session ${warning.sessionId}`;
+  const action = warning.workId
+    ? `Inspect with subagent_results and cancel with subagent_cancel workIds=["${warning.workId}"] only if it is stuck or no longer needed.`
+    : "Inspect the Workbench and interrupt the Run only if it is stuck or no longer needed.";
+  return `Long-running ${target}: ${warning.label}. Runtime ${formatDuration(warning.elapsedMs)}.${idle} The task is still running; this is a warning, not a failure. ${action}`;
+}
+
 function completionSummary(job: WorkbenchJobSnapshot): string {
+  const failedTask = failedWorkflowTask(job);
+  if (failedTask) {
+    return `Workflow failed at ${failedTask.stage} / ${failedTask.key} (${job.workId}).${failedTask.error ? ` Error: ${failedTask.error}.` : ""} Retry only this task with subagent_workflow_control action=retry_task, workId=${job.workId}, taskKey=${failedTask.key}.`;
+  }
   const result = jobOutput(job);
   const detail = job.error
     ? ` Error: ${job.error}`
@@ -734,6 +859,32 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
   if (isChildProcess) registerChildMultiTool(pi);
   let controller: WorkbenchController | undefined;
   let activeContext: ExtensionContext | undefined;
+  const deliverPendingRunWarnings = (): void => {
+    const current = controller;
+    if (!activeContext || !current || typeof pi.sendMessage !== "function") return;
+    for (const warning of current.pendingRunWarnings()) {
+      const content = runWarningSummary(warning);
+      try {
+        pi.sendMessage(
+          {
+            customType: "subagent-workbench-run-warning",
+            content,
+            display: false,
+            details: { ...warning },
+          },
+          activeContext.isIdle()
+            ? { triggerTurn: true, deliverAs: "followUp" }
+            : { triggerTurn: false, deliverAs: "nextTurn" },
+        );
+        if (activeContext.hasUI) {
+          activeContext.ui.notify(content, "warning");
+        }
+        current.markRunWarningDelivered(warning.id);
+      } catch {
+        // Retain the warning for the next delivery opportunity.
+      }
+    }
+  };
   const deliverPendingCompletions = (): void => {
     const current = controller;
     if (!activeContext || !current || typeof pi.sendMessage !== "function") return;
@@ -753,7 +904,9 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               ...(job.workflowId ? { workflowId: job.workflowId } : {}),
             },
           },
-          { triggerTurn: false, deliverAs: "nextTurn" },
+          job.status === "failed" && activeContext.isIdle()
+            ? { triggerTurn: true, deliverAs: "followUp" }
+            : { triggerTurn: false, deliverAs: "nextTurn" },
         );
         current.markJobCompletionDelivered(job.workId);
       } catch {
@@ -764,11 +917,13 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
   const ensureController = (): WorkbenchController => {
     controller ??= new WorkbenchController(installedRuntime, {
       onJobSettled: () => deliverPendingCompletions(),
+      onRunWarning: () => deliverPendingRunWarnings(),
     });
     return controller;
   };
 
   let dashboardBridgeCleanup: (() => void) | undefined;
+  let liveFeatureCleanup: (() => void) | undefined;
   let taskNavigation: TaskNavigationHandle | undefined;
   const openWorkbenchPage = async (
     ctx: ExtensionContext,
@@ -812,6 +967,17 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     pi.on("session_start", async (_event, ctx) => {
       activeContext = ctx;
       bindTaskNavigation(ctx);
+      liveFeatureCleanup?.();
+      const publishSnapshot = (snapshot: ReturnType<typeof installedRuntime.getSnapshot>) => publishLiveFeature("subagent-workflow", {
+        revision: snapshot.revision,
+        generatedAt: Date.now(),
+        conversations: snapshot.conversations,
+        workflows: snapshot.workflows,
+        runHealth: snapshot.runHealth,
+      });
+      liveFeatureCleanup = installedRuntime.subscribe(publishSnapshot);
+      publishSnapshot(installedRuntime.getSnapshot());
+      deliverPendingRunWarnings();
       deliverPendingCompletions();
       if (isDashboard) {
         dashboardBridgeCleanup?.();
@@ -832,6 +998,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
         "Delegate bounded independent work to a full-capability process subagent, normally in background.",
       promptGuidelines: [
         "Use a self-contained task and cwd; parallelize independent work.",
+        "Use an exact provider/model override; omit model to inherit the current Session model. Never pass a fuzzy short name.",
         "Continue while it runs and collect only at a real dependency point; the main Agent retains authorization and final decisions.",
       ],
       executionMode: "parallel",
@@ -914,12 +1081,17 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow",
       label: "Subagent Workflow",
       description:
-        "Run or reuse staged subagent tasks. Stages are sequential, tasks within a stage run in parallel, and later stages can consume earlier outputs through task inputs.",
+        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs.",
       promptSnippet:
-        "Run sequential stages with parallel subagents, reusable definitions, and explicit prior-task inputs.",
+        "Run recoverable single-task or staged subagent workflows with explicit prior-task handoffs.",
       promptGuidelines: [
-        "Use a Workflow for explicit stages; keep the entire workflow within eight child tasks.",
-        "Give reusable producer tasks a key and list those keys in later tasks' inputs.",
+        "Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow.",
+        "Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach.",
+        "Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates.",
+        "Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded.",
+        "Use exact provider/model task overrides; omit model to inherit the current Session model. Never pass fuzzy short names.",
+        "Use dryRun to preview dynamic or saved definitions without creating work.",
+        "Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed.",
         "Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful.",
         "Prefer background; wait only when correctness or delivery depends on the result.",
       ],
@@ -933,44 +1105,53 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
         });
         try {
           const current = ensureController();
-          if (params.name && params.stages) {
-            throw new TypeError("Use either name or stages, not both.");
+          const definitionSources = [
+            params.name !== undefined,
+            params.stages !== undefined,
+            params.task !== undefined,
+            params.javascript !== undefined,
+          ].filter(Boolean).length;
+          if (definitionSources !== 1) {
+            throw new TypeError(
+              "Provide exactly one of task, stages, javascript, or a saved workflow name.",
+            );
           }
           const loaded = params.name
             ? await loadWorkflowDefinition(ctx.cwd, params.name)
             : undefined;
-          const sourceStages = params.stages ?? loaded?.stages;
+          const compiled =
+            params.javascript === undefined
+              ? undefined
+              : compileWorkflowJavaScript(params.javascript, params.parameters);
+          const sourceStages =
+            params.stages ??
+            compiled?.stages ??
+            (params.task
+              ? [{ tasks: [{ task: params.task }] }]
+              : loaded?.stages);
           if (!sourceStages) {
-            throw new TypeError("Provide stages or a saved workflow name.");
+            throw new TypeError("Workflow definition did not produce stages.");
           }
           const workflowLabel = params.label ?? loaded?.label;
-          const workflowParameters = params.parameters ?? loaded?.parameters;
+          const workflowParameters =
+            params.parameters ?? compiled?.parameters ?? loaded?.parameters;
           const background = params.background ?? true;
-          const request = {
+          const definition: SavedWorkflowDefinition = {
+            version: SAVED_WORKFLOW_VERSION,
             label: workflowLabel,
             parameters: workflowParameters,
-            cwd: ctx.cwd,
-            model: currentModel(ctx),
-            thinking: currentThinking(ctx),
-            signal: background ? undefined : signal,
-            stages: sourceStages.map((stage) => ({
-              label: stage.label,
-              tasks: stage.tasks.map((task) => ({
-                task: task.task,
-                key: task.key,
-                inputs: task.inputs,
-                label: task.label,
-                cwd: task.cwd || ctx.cwd,
-                model: task.model || currentModel(ctx),
-                thinking: task.thinking ?? currentThinking(ctx),
-                context: task.context,
-                outputSchema: task.outputSchema,
-                when: task.when,
-                foreach: task.foreach,
-                maxItems: task.maxItems,
-              })),
-            })),
+            ...(params.javascript === undefined
+              ? loaded?.origin
+                ? { origin: loaded.origin }
+                : {}
+              : { origin: { language: "javascript", source: params.javascript } }),
+            stages: sourceStages,
           };
+          const request = workflowRequestFromDefinition(
+            definition,
+            ctx,
+            background ? undefined : signal,
+          );
           const preflight = current.preflightWorkflow(request);
           if (params.dryRun) {
             return {
@@ -983,23 +1164,38 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             };
           }
           const savedPath = params.saveAs
-            ? await saveWorkflowDefinition(ctx.cwd, params.saveAs, {
-                version: SAVED_WORKFLOW_VERSION,
-                label: workflowLabel,
-                parameters: workflowParameters,
-                stages: sourceStages,
-              })
+            ? await saveWorkflowDefinition(ctx.cwd, params.saveAs, definition)
             : undefined;
           const submission = current.submitWorkflow(request, background);
           if (background) {
-            void submission.completion.catch(() => {
-              // The durable job record retains the error for collect/status.
-            });
+            const runRecordPath = params.record
+              ? workflowRunPath(ctx.cwd, submission.handle.workId)
+              : undefined;
+            void submission.completion
+              .then(async (result) => {
+                if (params.record) {
+                  await saveWorkflowRun(
+                    ctx.cwd,
+                    submission.handle.workId,
+                    params.record,
+                    definition,
+                    result,
+                  );
+                }
+              })
+              .catch((error: unknown) => {
+                if (params.record) {
+                  console.error(
+                    `[subagent-workbench] Workflow run record failed: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
+                // Never capture a tool ctx here: it may be stale after shutdown/reload.
+              });
             return {
               content: [
                 {
                   type: "text",
-                  text: `Workflow accepted in background (${submission.handle.workId}).${savedPath ? ` Saved definition: ${savedPath}.` : ""} Track or collect it with subagent_results.`,
+                  text: `Workflow accepted in background (${submission.handle.workId}).${savedPath ? ` Saved definition: ${savedPath}.` : ""}${runRecordPath ? ` Run record will be written to ${runRecordPath}.` : ""} Track or collect it with subagent_results.`,
                 },
               ],
               details: {
@@ -1008,21 +1204,32 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
                 workId: submission.handle.workId,
                 workflowId: current.getJobs([submission.handle.workId]).pending[0]?.workflowId,
                 savedPath,
+                runRecordPath,
               },
             };
           }
           const result = await submission.completion;
+          const runRecordPath = params.record
+            ? await saveWorkflowRun(
+                ctx.cwd,
+                submission.handle.workId,
+                params.record,
+                definition,
+                result,
+              )
+            : undefined;
           return {
             content: [
               {
                 type: "text",
-                text: `${savedPath ? `Saved definition: ${savedPath}\n\n` : ""}${workflowToolOutput(result)}`,
+                text: `${savedPath ? `Saved definition: ${savedPath}\n` : ""}${runRecordPath ? `Saved run record: ${runRecordPath}\n` : ""}${savedPath || runRecordPath ? "\n" : ""}${workflowToolOutput(result)}`,
               },
             ],
             details: {
               status: result.status,
               workflowId: result.workflowId,
               savedPath,
+              runRecordPath,
               stages: result.stages.map((stage) => ({
                 id: stage.id,
                 label: stage.label,
@@ -1057,12 +1264,13 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow_control",
       label: "Control Subagent Workflow",
       description:
-        "Pause a running workflow at the next stage boundary, resume it, or retry a terminal workflow as a new attempt that reuses completed Stages.",
+        "Pause or resume a running workflow, retry a terminal workflow, or retry one failed task while reusing its completed siblings.",
       promptSnippet:
-        "Pause, resume, or retry a workflow by its workId without rebuilding the request.",
+        "Pause, resume, retry a workflow, or retry one failed workflow task by workId.",
       promptGuidelines: [
         "Pause is cooperative: already-running tasks finish, and the next stage waits.",
-        "Retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage.",
+        "retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage.",
+        "retry_task requires taskKey and reruns only that failed task; completed or skipped siblings in its Stage are reused.",
       ],
       executionMode: "sequential",
       parameters: WorkflowControlParams,
@@ -1107,13 +1315,93 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             },
           };
         }
-        const retry = current.retryWorkflowJob(params.workId);
+        const retryTask = params.action === "retry_task";
+        if (retryTask && !params.taskKey) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "retry_task requires the failed taskKey.",
+              },
+            ],
+            details: {
+              status: "failed",
+              action: params.action,
+              workId: params.workId,
+              error: "task_key_required",
+            },
+          };
+        }
+        let retry = retryTask
+          ? current.retryWorkflowTaskJob(params.workId, params.taskKey!)
+          : current.retryWorkflowJob(params.workId);
+        let persistedDefinition: SavedWorkflowDefinition | undefined;
+        if (!retry) {
+          try {
+            const record = await loadWorkflowRun(ctx.cwd, params.workId);
+            if (record.mode !== "full") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Workflow ${params.workId} has metadata only; cross-session retry requires record=full.`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  action: params.action,
+                  workId: params.workId,
+                  error: "full_run_record_required",
+                },
+              };
+            }
+            persistedDefinition = record.definition;
+            const request = workflowRequestFromDefinition(record.definition, ctx);
+            retry = retryTask
+              ? current.retryWorkflowTaskFromResult(
+                  params.workId,
+                  request,
+                  record.result,
+                  params.taskKey!,
+                )
+              : current.retryWorkflowFromResult(
+                  params.workId,
+                  request,
+                  record.result,
+                );
+          } catch (error) {
+            if (
+              typeof error !== "object" ||
+              error === null ||
+              !("code" in error) ||
+              error.code !== "ENOENT"
+            ) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Persisted Workflow retry failed: ${error instanceof Error ? error.message : String(error)}`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  action: params.action,
+                  workId: params.workId,
+                  error: "persisted_retry_failed",
+                },
+              };
+            }
+            // Missing record falls through to the standard unavailable response.
+          }
+        }
         if (!retry) {
           return {
             content: [
               {
                 type: "text",
-                text: `Workflow ${params.workId} is not terminal or its definition is unavailable.`,
+                text: retryTask
+                ? `Workflow ${params.workId} cannot retry task ${params.taskKey}; it must be a failed terminal task with a retained definition.`
+                : `Workflow ${params.workId} is not terminal or its definition is unavailable.`,
               },
             ],
             details: {
@@ -1123,15 +1411,35 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             },
           };
         }
-        void retry.completion.catch(() => {
-          // The new durable job record retains the retry failure.
-        });
+        const retryRecordPath = persistedDefinition
+          ? workflowRunPath(ctx.cwd, retry.handle.workId)
+          : undefined;
+        void retry.completion
+          .then(async (result) => {
+            if (persistedDefinition) {
+              await saveWorkflowRun(
+                ctx.cwd,
+                retry!.handle.workId,
+                "full",
+                persistedDefinition,
+                result,
+              );
+            }
+          })
+          .catch((error: unknown) => {
+            if (persistedDefinition) {
+              console.error(
+                `[subagent-workbench] Workflow retry record failed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+            // Never capture a tool ctx here: it may be stale after shutdown/reload.
+          });
         const retryJob = current.getJobs([retry.handle.workId]).pending[0];
         return {
           content: [
             {
               type: "text",
-              text: `Workflow retry accepted in background (${retry.handle.workId}).`,
+              text: `${retryTask ? `Workflow task ${params.taskKey} retry` : "Workflow retry"} accepted in background (${retry.handle.workId}).${retryRecordPath ? ` Full run record will be written to ${retryRecordPath}.` : ""}`,
             },
           ],
           details: {
@@ -1140,6 +1448,8 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             sourceWorkId: params.workId,
             workId: retry.handle.workId,
             attempt: retryJob?.attempt,
+            ...(retryTask ? { taskKey: params.taskKey } : {}),
+            retryRecordPath,
           },
         };
       },
@@ -1160,6 +1470,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       parameters: WorkbenchResultsParams,
       async execute(_toolCallId, params, _signal, onUpdate, ctx) {
         activeContext = ctx;
+        deliverPendingRunWarnings();
         deliverPendingCompletions();
         const current = ensureController();
         const mode = params.mode ?? "collect";
@@ -1252,6 +1563,9 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     if (extensionHost[extensionMarker]) delete extensionHost[extensionMarker];
     dashboardBridgeCleanup?.();
     dashboardBridgeCleanup = undefined;
+    liveFeatureCleanup?.();
+    liveFeatureCleanup = undefined;
+    clearLiveFeature("subagent-workflow");
     activeWorkbench?.close();
     activeWorkbench = undefined;
     taskNavigation?.dispose();
