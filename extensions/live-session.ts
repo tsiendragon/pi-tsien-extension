@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { LiveSessionClient, type LiveSessionClientOptions } from "./live-session/client.ts";
 import { LeaseError, LeaseManager, type LeaseSnapshot } from "./live-session/lease.ts";
 import { SnapshotProjector } from "./live-session/projector.ts";
+import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "./lib/live-observer.ts";
 import {
   LIVE_SESSION_PROTOCOL_VERSION,
   type CommandEnvelope,
@@ -62,6 +63,13 @@ function commandError(code: string, message: string): CommandExecutionResult {
   return { ok: false, error: { code, message } };
 }
 
+function isVisibleMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return false;
+  const record = message as Record<string, unknown>;
+  if (record.role === "custom") return record.display === true && record.customType !== "goal-context";
+  return record.role === "user" || record.role === "assistant" || record.role === "toolResult";
+}
+
 export function registerLiveSessionExtension(
   pi: ExtensionAPI,
   options: LiveSessionExtensionOptions = {},
@@ -73,6 +81,7 @@ export function registerLiveSessionExtension(
   let projector: SnapshotProjector | undefined;
   let running = false;
   let reconnecting = false;
+  let featureCleanup: (() => void) | undefined;
   let lastActivityAt = identity.startedAt;
 
   const publish = (type: string, data: unknown, ctx?: ExtensionContext): void => {
@@ -160,6 +169,11 @@ export function registerLiveSessionExtension(
         ctx.abort();
         return { ok: true, result: { aborted: true } };
       }
+      if (command.type === "feature_command") {
+        lease.assertLease(command.leaseId);
+        const result = await dispatchLiveFeatureCommand(command.feature, command.command);
+        return { ok: true, result: result as JsonObject };
+      }
       return { ok: true, result: { resynced: true } };
     } catch (error) {
       if (error instanceof LeaseError) return commandError(error.code, error.message);
@@ -188,6 +202,8 @@ export function registerLiveSessionExtension(
     const mode: LiveSessionMode = ctx.mode;
 
     client?.stop("session_switch");
+    featureCleanup?.();
+    featureCleanup = undefined;
     lease.release(undefined, "session_switch");
     projector = new SnapshotProjector({
       processInstanceId: identity.processInstanceId,
@@ -224,6 +240,9 @@ export function registerLiveSessionExtension(
       },
     });
     client.start();
+    featureCleanup = subscribeLiveFeatures((feature, snapshot) => {
+      publish("live_feature_snapshot", { feature, snapshot }, ctx);
+    });
   });
 
   pi.on("session_info_changed", (event, ctx) => publish("session_info_changed", { name: event.name ?? null }, ctx));
@@ -238,12 +257,18 @@ export function registerLiveSessionExtension(
   });
   pi.on("turn_start", (event, ctx) => publish("turn_start", event, ctx));
   pi.on("turn_end", (event, ctx) => publish("turn_end", event, ctx));
-  pi.on("message_start", (event, ctx) => publish("message_start", { message: event.message }, ctx));
-  pi.on("message_update", (event, ctx) => publish("message_update", {
-    message: event.message,
-    assistantMessageEvent: event.assistantMessageEvent,
-  }, ctx));
-  pi.on("message_end", (event, ctx) => publish("message_end", { message: event.message }, ctx));
+  pi.on("message_start", (event, ctx) => {
+    if (isVisibleMessage(event.message)) publish("message_start", { message: event.message }, ctx);
+  });
+  pi.on("message_update", (event, ctx) => {
+    if (isVisibleMessage(event.message)) publish("message_update", {
+      message: event.message,
+      assistantMessageEvent: event.assistantMessageEvent,
+    }, ctx);
+  });
+  pi.on("message_end", (event, ctx) => {
+    if (isVisibleMessage(event.message)) publish("message_end", { message: event.message }, ctx);
+  });
   pi.on("tool_execution_start", (event, ctx) => publish("tool_execution_start", event, ctx));
   pi.on("tool_execution_update", (event, ctx) => publish("tool_execution_update", event, ctx));
   pi.on("tool_execution_end", (event, ctx) => publish("tool_execution_end", event, ctx));
@@ -273,6 +298,8 @@ export function registerLiveSessionExtension(
 
   pi.on("session_shutdown", (event) => {
     lease.dispose(event.reason === "quit" ? "session_shutdown" : "session_switch");
+    featureCleanup?.();
+    featureCleanup = undefined;
     client?.stop(event.reason === "quit" ? "session_shutdown" : "session_switch");
     client = undefined;
     projector = undefined;
