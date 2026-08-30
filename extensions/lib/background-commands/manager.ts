@@ -21,6 +21,8 @@ import type {
   BackgroundTaskSnapshot,
   BackgroundTaskStartRequest,
   BackgroundTaskState,
+  ForegroundCommandResult,
+  ForegroundCommandStartRequest,
 } from "./types.ts";
 
 export const BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY = "pi.tsien.background-command-manager.v1";
@@ -48,6 +50,8 @@ interface RequestedTermination {
 
 interface RuntimeTask {
   id: string;
+  mode?: "foreground" | "background";
+  toolCallId?: string;
   sessionId: string;
   command: string;
   title: string;
@@ -75,6 +79,12 @@ interface RuntimeTask {
   suppressCompletion: boolean;
   completion: Promise<BackgroundTaskSnapshot>;
   resolveCompletion: (task: BackgroundTaskSnapshot) => void;
+  foregroundOnData?: (data: Buffer) => void;
+  foregroundSignal?: AbortSignal;
+  foregroundAbortListener?: () => void;
+  foregroundSettled?: boolean;
+  resolveForeground?: (result: ForegroundCommandResult) => void;
+  rejectForeground?: (error: Error) => void;
 }
 
 function normalizeTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -91,6 +101,10 @@ function normalizeTimeoutMs(timeoutSeconds: number | undefined): number | undefi
 
 function isTerminal(state: BackgroundTaskState): boolean {
   return TERMINAL_STATES.has(state);
+}
+
+function runtimeMode(task: RuntimeTask): "foreground" | "background" {
+  return task.mode ?? "background";
 }
 
 function defaultTaskId(): string {
@@ -167,8 +181,12 @@ export class BackgroundCommandManager {
   readonly version = 1 as const;
   readonly registry: RunningCommandRegistry;
 
-  /** Prototype capability marker used to upgrade the singleton during /reload. */
+  /** Prototype capability markers used to upgrade the singleton during /reload. */
   get supportsTitles(): true {
+    return true;
+  }
+
+  get supportsForegroundHandoff(): true {
     return true;
   }
 
@@ -183,8 +201,10 @@ export class BackgroundCommandManager {
   private readonly outputStore: BackgroundOutputStore;
   private readonly tasks = new Map<string, RuntimeTask>();
   private readonly listeners = new Set<EventListener>();
+  private foregroundTasksByToolCallId: Map<string, RuntimeTask> | undefined = new Map();
   private sessionId: string | undefined;
   private startingCount = 0;
+  private startingBackgroundCount: number | undefined = 0;
   private sharedWorkdirNoticeShown = false;
   private toolsDisabledByConfig = false;
   private reloadCleanupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -218,11 +238,21 @@ export class BackgroundCommandManager {
   }
 
   get taskCount(): number {
-    return this.tasks.size;
+    return [...this.tasks.values()].filter((task) => runtimeMode(task) === "background").length;
+  }
+
+  get foregroundCount(): number {
+    return this.foregroundTasks.size;
   }
 
   get currentSessionId(): string | undefined {
     return this.sessionId;
+  }
+
+  upgradeForForegroundHandoff(): void {
+    this.foregroundTasksByToolCallId ??= new Map();
+    this.startingBackgroundCount ??= this.startingCount;
+    for (const task of this.tasks.values()) task.mode ??= "background";
   }
 
   async bindSession(sessionId: string): Promise<void> {
@@ -234,6 +264,7 @@ export class BackgroundCommandManager {
     if (this.sessionId && this.sessionId !== sessionId) {
       await this.outputStore.cleanup();
       this.tasks.clear();
+      this.foregroundTasks.clear();
       this.registry.clearBackground();
     }
     this.sessionId = sessionId;
@@ -262,8 +293,18 @@ export class BackgroundCommandManager {
     return disabled;
   }
 
+  private get foregroundTasks(): Map<string, RuntimeTask> {
+    return this.foregroundTasksByToolCallId ??= new Map();
+  }
+
+  private get backgroundActiveCount(): number {
+    return (this.startingBackgroundCount ?? 0) + [...this.tasks.values()]
+      .filter((task) => runtimeMode(task) === "background" && !isTerminal(task.state)).length;
+  }
+
   list(): BackgroundTaskSnapshot[] {
     return [...this.tasks.values()]
+      .filter((task) => runtimeMode(task) === "background")
       .sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id))
       .map((task) => this.snapshot(task));
   }
@@ -296,13 +337,14 @@ export class BackgroundCommandManager {
 
   pendingCompletions(): BackgroundTaskSnapshot[] {
     return [...this.tasks.values()]
+      .filter((task) => runtimeMode(task) === "background")
       .filter((task) => isTerminal(task.state) && !task.suppressCompletion && !task.completionDelivered)
       .map((task) => this.snapshot(task));
   }
 
   markCompletionDelivered(taskId: string): void {
     const task = this.tasks.get(taskId);
-    if (task && isTerminal(task.state)) task.completionDelivered = true;
+    if (task && runtimeMode(task) === "background" && isTerminal(task.state)) task.completionDelivered = true;
   }
 
   async start(request: BackgroundTaskStartRequest): Promise<BackgroundTaskSnapshot> {
@@ -313,7 +355,7 @@ export class BackgroundCommandManager {
     if (request.launchSignal?.aborted) throw new Error("Background command start aborted");
     if (!request.command.trim()) throw new Error("command must not be empty");
     const title = normalizeCommandTitle(request.title, request.command);
-    if (this.activeCount >= this.maxConcurrent) {
+    if (this.backgroundActiveCount >= this.maxConcurrent) {
       throw new Error(
         `Cannot start background command: current Session already has ${this.maxConcurrent} active tasks`,
       );
@@ -321,6 +363,7 @@ export class BackgroundCommandManager {
     const timeoutMs = normalizeTimeoutMs(request.timeoutSeconds);
     const taskId = this.allocateTaskId();
     this.startingCount += 1;
+    this.startingBackgroundCount = (this.startingBackgroundCount ?? 0) + 1;
 
     let writer: BackgroundOutputWriter | undefined;
     let child: ChildProcess | undefined;
@@ -372,6 +415,7 @@ export class BackgroundCommandManager {
       });
       const runtime: RuntimeTask = {
         id: taskId,
+        mode: "background",
         sessionId: request.sessionId,
         command: request.command,
         title,
@@ -405,7 +449,144 @@ export class BackgroundCommandManager {
       throw error;
     } finally {
       this.startingCount -= 1;
+      this.startingBackgroundCount = Math.max(0, (this.startingBackgroundCount ?? 1) - 1);
     }
+  }
+
+  async executeForeground(request: ForegroundCommandStartRequest): Promise<ForegroundCommandResult> {
+    if (this.shuttingDown) throw new Error("Background command manager is shutting down");
+    if (!this.sessionId || this.sessionId !== request.sessionId) {
+      throw new Error("Foreground command manager is not bound to the current Session");
+    }
+    if (request.signal?.aborted) throw new Error("aborted");
+    if (!request.command.trim()) throw new Error("command must not be empty");
+    if (this.foregroundTasks.has(request.toolCallId)) {
+      throw new Error(`Foreground command already exists: ${request.toolCallId}`);
+    }
+
+    const timeoutMs = normalizeTimeoutMs(request.timeoutSeconds);
+    const taskId = this.allocateTaskId();
+    this.startingCount += 1;
+    let writer: BackgroundOutputWriter | undefined;
+    let child: ChildProcess | undefined;
+    let result: Promise<ForegroundCommandResult> | undefined;
+    try {
+      await access(request.cwd);
+      writer = await this.outputStore.createWriter(taskId, this.maxOutputBytes, this.maxTailBytes);
+      if (this.shuttingDown || request.signal?.aborted) {
+        throw new Error(request.signal?.aborted ? "aborted" : "Background command manager is shutting down");
+      }
+      const shell = getShellConfig();
+      const commandFromStdin = shell.commandTransport === "stdin";
+      child = spawn(
+        shell.shell,
+        commandFromStdin ? shell.args : [...shell.args, request.command],
+        {
+          cwd: request.cwd,
+          detached: process.platform !== "win32",
+          env: request.env ?? process.env,
+          stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
+          windowsHide: true,
+        },
+      );
+      if (commandFromStdin) {
+        child.stdin?.on("error", () => {});
+        child.stdin?.end(request.command);
+      }
+      await new Promise<void>((resolve, reject) => {
+        const onSpawn = () => {
+          child?.off("error", onError);
+          resolve();
+        };
+        const onError = (error: Error) => {
+          child?.off("spawn", onSpawn);
+          reject(error);
+        };
+        child?.once("spawn", onSpawn);
+        child?.once("error", onError);
+      });
+      if (!child.pid) throw new Error("Foreground command started without a PID");
+      if (this.shuttingDown || request.signal?.aborted) {
+        throw new Error(request.signal?.aborted ? "aborted" : "Background command manager is shutting down");
+      }
+
+      let resolveCompletion!: (task: BackgroundTaskSnapshot) => void;
+      const completion = new Promise<BackgroundTaskSnapshot>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      let resolveForeground!: (value: ForegroundCommandResult) => void;
+      let rejectForeground!: (error: Error) => void;
+      result = new Promise<ForegroundCommandResult>((resolve, reject) => {
+        resolveForeground = resolve;
+        rejectForeground = reject;
+      });
+      const runtime: RuntimeTask = {
+        id: taskId,
+        mode: "foreground",
+        toolCallId: request.toolCallId,
+        sessionId: request.sessionId,
+        command: request.command,
+        title: normalizeCommandTitle(undefined, request.command),
+        cwd: request.cwd,
+        state: "running",
+        startedAt: request.startedAt ?? this.now(),
+        pid: child.pid,
+        timeoutMs,
+        experimentalPlatform: process.platform === "win32",
+        child,
+        writer,
+        abortController: new AbortController(),
+        finalized: false,
+        processExited: false,
+        completionDelivered: false,
+        suppressCompletion: false,
+        completion,
+        resolveCompletion,
+        foregroundOnData: request.onData,
+        foregroundSignal: request.signal,
+        foregroundSettled: false,
+        resolveForeground,
+        rejectForeground,
+      };
+      this.tasks.set(taskId, runtime);
+      this.foregroundTasks.set(request.toolCallId, runtime);
+      this.attachRuntime(runtime);
+    } catch (error) {
+      if (child?.pid) await this.terminateUnregisteredChild(child);
+      if (writer) {
+        await writer.close();
+        await this.outputStore.removeTaskFile(writer.outputFile);
+      }
+      throw error;
+    } finally {
+      this.startingCount -= 1;
+    }
+    return result!;
+  }
+
+  backgroundForeground(toolCallId: string): BackgroundTaskSnapshot {
+    const task = this.foregroundTasks.get(toolCallId);
+    if (!task || runtimeMode(task) !== "foreground" || task.finalized) {
+      throw new Error(`Foreground command is no longer running: ${toolCallId}`);
+    }
+    if (this.shuttingDown) throw new Error("Background command manager is shutting down");
+    if (task.requestedTermination) throw new Error(`Foreground command is already stopping: ${toolCallId}`);
+    if (this.backgroundActiveCount >= this.maxConcurrent) {
+      throw new Error(`Cannot move command to background: already has ${this.maxConcurrent} active tasks`);
+    }
+
+    const handoffText = `${task.writer.outputBytes > 0 ? "\n\n" : ""}Command moved to background as task ${task.id}.\nUse background_command_status or background_command_output to inspect it.\n`;
+    task.mode = "background";
+    this.detachForegroundSignal(task);
+    this.foregroundTasks.delete(toolCallId);
+    task.foregroundOnData?.(Buffer.from(handoffText));
+    task.foregroundOnData = undefined;
+    this.registry.end(toolCallId);
+    this.registry.startBackground(this.commandView(task));
+    const snapshot = this.snapshot(task);
+    this.emit({ type: "started", task: snapshot });
+    this.resolveForeground(task, { exitCode: 0 });
+    return snapshot;
   }
 
   async cancel(taskId: string): Promise<BackgroundTaskSnapshot> {
@@ -464,7 +645,9 @@ export class BackgroundCommandManager {
     await Promise.allSettled(active.map((task) => task.completion));
     await this.outputStore.cleanup();
     this.tasks.clear();
+    this.foregroundTasks.clear();
     this.registry.clearBackground();
+    this.registry.clearForeground();
     this.sessionId = undefined;
     this.sharedWorkdirNoticeShown = false;
     this.shuttingDown = false;
@@ -475,8 +658,12 @@ export class BackgroundCommandManager {
       if (task.finalized || task.requestedTermination?.reason === "output_limit") return;
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
       const appended = task.writer.append(chunk);
-      this.registry.updateBackground(this.commandView(task));
-      this.scheduleUpdatedEvent(task);
+      if (runtimeMode(task) === "foreground") {
+        task.foregroundOnData?.(chunk);
+      } else {
+        this.registry.updateBackground(this.commandView(task));
+        this.scheduleUpdatedEvent(task);
+      }
       if (task.writer.error) {
         this.requestTermination(task, {
           state: "failed",
@@ -536,6 +723,20 @@ export class BackgroundCommandManager {
       }
     }, { once: true });
 
+    if (runtimeMode(task) === "foreground" && task.foregroundSignal) {
+      const onAbort = () => {
+        if (runtimeMode(task) !== "foreground") return;
+        this.requestTermination(task, {
+          state: "cancelled",
+          reason: "signal",
+          error: "Command aborted",
+        });
+      };
+      task.foregroundAbortListener = onAbort;
+      if (task.foregroundSignal.aborted) onAbort();
+      else task.foregroundSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
     if (task.timeoutMs !== undefined) {
       task.timeoutTimer = setTimeout(() => {
         if (task.processExited && (!task.pid || !processGroupExists(task.pid))) return;
@@ -556,6 +757,30 @@ export class BackgroundCommandManager {
     task.abortController.abort(requested.reason);
   }
 
+  private detachForegroundSignal(task: RuntimeTask): void {
+    if (task.foregroundSignal && task.foregroundAbortListener) {
+      task.foregroundSignal.removeEventListener("abort", task.foregroundAbortListener);
+    }
+    task.foregroundSignal = undefined;
+    task.foregroundAbortListener = undefined;
+  }
+
+  private resolveForeground(task: RuntimeTask, result: ForegroundCommandResult): void {
+    if (task.foregroundSettled) return;
+    task.foregroundSettled = true;
+    task.resolveForeground?.(result);
+    task.resolveForeground = undefined;
+    task.rejectForeground = undefined;
+  }
+
+  private rejectForeground(task: RuntimeTask, error: Error): void {
+    if (task.foregroundSettled) return;
+    task.foregroundSettled = true;
+    task.rejectForeground?.(error);
+    task.resolveForeground = undefined;
+    task.rejectForeground = undefined;
+  }
+
   private async finalize(
     task: RuntimeTask,
     exitCode: number | null,
@@ -563,6 +788,7 @@ export class BackgroundCommandManager {
   ): Promise<void> {
     if (task.finalized) return;
     task.finalized = true;
+    const completedInForeground = runtimeMode(task) === "foreground";
     if (task.timeoutTimer) clearTimeout(task.timeoutTimer);
     if (task.updateTimer) clearTimeout(task.updateTimer);
     task.timeoutTimer = undefined;
@@ -597,8 +823,29 @@ export class BackgroundCommandManager {
       task.exitReason = exitSignal ? "signal" : "exit";
     }
 
-    this.registry.endBackground(task.id);
     const snapshot = this.snapshot(task);
+    if (completedInForeground) {
+      if (task.toolCallId) this.foregroundTasks.delete(task.toolCallId);
+      this.detachForegroundSignal(task);
+      task.foregroundOnData = undefined;
+      this.tasks.delete(task.id);
+      await this.outputStore.removeTaskFile(task.writer.outputFile);
+      if (requested?.reason === "timeout") {
+        this.rejectForeground(task, new Error(`timeout:${(task.timeoutMs ?? 0) / 1_000}`));
+      } else if (requested?.state === "cancelled") {
+        this.rejectForeground(task, new Error("aborted"));
+      } else if (task.state === "failed" && requested) {
+        this.rejectForeground(task, new Error(task.error ?? "Foreground command failed"));
+      } else if (task.writer.error || lingeringProcessGroup) {
+        this.rejectForeground(task, new Error(task.error ?? "Foreground command cleanup failed"));
+      } else {
+        this.resolveForeground(task, { exitCode });
+      }
+      task.resolveCompletion(snapshot);
+      return;
+    }
+
+    this.registry.endBackground(task.id);
     this.emit({ type: "finished", task: snapshot });
     task.resolveCompletion(snapshot);
   }
@@ -700,7 +947,7 @@ export class BackgroundCommandManager {
   private requireTask(taskId: string): RuntimeTask {
     if (!/^bash-[a-z0-9]{4,16}$/u.test(taskId)) throw new Error("Invalid background task ID");
     const task = this.tasks.get(taskId);
-    if (!task || task.sessionId !== this.sessionId) {
+    if (!task || runtimeMode(task) !== "background" || task.sessionId !== this.sessionId) {
       throw new Error(`Background task not found in current Session: ${taskId}`);
     }
     return task;
@@ -733,11 +980,12 @@ export function getBackgroundCommandManager(): BackgroundCommandManager {
     && typeof candidate.manager.start === "function"
     && typeof candidate.manager.shutdown === "function"
   ) {
-    if (candidate.manager.supportsTitles !== true) {
+    if (candidate.manager.supportsForegroundHandoff !== true) {
       // /reload keeps the global manager instance; upgrade its prototype and
-      // registry so new Tool calls can carry titles without losing live tasks.
+      // lazy state without losing already running background tasks.
       Object.setPrototypeOf(candidate.manager.registry, RunningCommandRegistry.prototype);
       Object.setPrototypeOf(candidate.manager, BackgroundCommandManager.prototype);
+      candidate.manager.upgradeForForegroundHandoff();
     }
     return candidate.manager;
   }
