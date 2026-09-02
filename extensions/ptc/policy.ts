@@ -87,14 +87,40 @@ export function modelKey(model: { provider?: string; id?: string } | undefined):
   return `${model.provider}/${model.id}`;
 }
 
+function modelKeyCandidates(key: string): string[] {
+  const slash = key.lastIndexOf("/");
+  if (slash < 0) return [key];
+  const provider = key.slice(0, slash + 1);
+  const id = key.slice(slash + 1);
+  // Strip a trailing version/date suffix like "-0813" so a pinned model
+  // such as dashscope/deepseek-v4-pro-0813 matches its base policy key.
+  const baseId = id.replace(/-[A-Za-z0-9]+$/, "");
+  if (!baseId || baseId === id) return [key];
+  return [key, `${provider}${baseId}`];
+}
+
+function resolveRecommended(
+  models: Record<string, { recommended?: RecommendedPolicy }> | undefined,
+  key: string,
+): RecommendedPolicy | undefined {
+  if (!models) return undefined;
+  for (const candidate of modelKeyCandidates(key)) {
+    const recommended = models[candidate]?.recommended;
+    if (recommended) return recommended;
+  }
+  return undefined;
+}
+
 export function resolvePtcPolicy(
   mode: PolicyMode,
   model: { provider?: string; id?: string } | undefined,
 ): PtcPolicy {
   const key = modelKey(model);
-  const readRecommended = readOnlyConfig.models?.[key]?.recommended;
   const modeConfig = mode === "full" ? fullConfig : readOnlyConfig;
-  const modeRecommended = mode === "full" ? fullConfig.models?.[key]?.recommended : readRecommended;
+  const readRecommended = resolveRecommended(readOnlyConfig.models, key);
+  const modeRecommended = mode === "full"
+    ? resolveRecommended(fullConfig.models, key)
+    : readRecommended;
   const configured = modeRecommended !== undefined;
 
   return {

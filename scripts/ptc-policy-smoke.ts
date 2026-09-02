@@ -38,6 +38,19 @@ if (
   throw new Error(`Unexpected read-only policy: ${JSON.stringify(readPolicy)}`);
 }
 
+// A version-pinned model must resolve to the same base policy, not fallback.
+const baseProRead = resolvePtcPolicy("readOnly", { provider: "dashscope", id: "deepseek-v4-pro" });
+const pinnedProRead = resolvePtcPolicy("readOnly", { provider: "dashscope", id: "deepseek-v4-pro-0813" });
+if (
+  pinnedProRead.source !== "configured"
+  || pinnedProRead.maxRunWallTimeMs !== baseProRead.maxRunWallTimeMs
+  || pinnedProRead.maxAssistantOutputTokens !== baseProRead.maxAssistantOutputTokens
+  || pinnedProRead.maxTotalSubCalls !== baseProRead.maxTotalSubCalls
+  || pinnedProRead.normalizeJsonFence !== baseProRead.normalizeJsonFence
+) {
+  throw new Error(`Version-suffixed model did not resolve to base policy: ${JSON.stringify(pinnedProRead)}`);
+}
+
 const outerBudget = createBudgetState(readPolicy);
 for (let index = 0; index < readPolicy.maxOuterRunCodeCalls; index += 1) reserveOuterRunCode(outerBudget);
 expectPolicyError(() => reserveOuterRunCode(outerBudget), "PTC_BUDGET_EXCEEDED");
