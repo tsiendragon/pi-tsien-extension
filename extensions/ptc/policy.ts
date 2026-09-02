@@ -111,6 +111,14 @@ function resolveRecommended(
   return undefined;
 }
 
+// Heuristic for reasoning/thinking models. Used only to choose the fallback
+// default for fence normalization when a model has no configured policy.
+const REASONING_MODEL_HINTS = /(deepseek|reasoning|thinking|o[1-9][0-9]*|r1)(\b|[-.])/i;
+
+function isReasoningModel(model: { provider?: string; id?: string } | undefined): boolean {
+  return model?.id != null && REASONING_MODEL_HINTS.test(model.id);
+}
+
 export function resolvePtcPolicy(
   mode: PolicyMode,
   model: { provider?: string; id?: string } | undefined,
@@ -149,7 +157,9 @@ export function resolvePtcPolicy(
     maxNestedRuns: mode === "full"
       ? positiveInteger(modeRecommended?.maxNestedRuns, 3)
       : undefined,
-    normalizeJsonFence: readRecommended?.normalizeJsonFence === true,
+    normalizeJsonFence: readRecommended !== undefined
+      ? readRecommended.normalizeJsonFence === true
+      : isReasoningModel(model),
   };
 }
 

@@ -51,6 +51,17 @@ if (
   throw new Error(`Version-suffixed model did not resolve to base policy: ${JSON.stringify(pinnedProRead)}`);
 }
 
+// An unconfigured reasoning model defaults fence normalization on; a plain
+// unconfigured model keeps it off.
+const fallbackReasoning = resolvePtcPolicy("readOnly", { provider: "dashscope", id: "deepseek-r1-0528" });
+const fallbackPlain = resolvePtcPolicy("readOnly", { provider: "anthropic", id: "claude-sonnet-4-5" });
+if (fallbackReasoning.source !== "fallback" || fallbackReasoning.normalizeJsonFence !== true) {
+  throw new Error(`Fallback reasoning model should enable fence normalization: ${JSON.stringify(fallbackReasoning)}`);
+}
+if (fallbackPlain.source !== "fallback" || fallbackPlain.normalizeJsonFence !== false) {
+  throw new Error(`Fallback plain model should keep fence normalization off: ${JSON.stringify(fallbackPlain)}`);
+}
+
 const outerBudget = createBudgetState(readPolicy);
 for (let index = 0; index < readPolicy.maxOuterRunCodeCalls; index += 1) reserveOuterRunCode(outerBudget);
 expectPolicyError(() => reserveOuterRunCode(outerBudget), "PTC_BUDGET_EXCEEDED");
