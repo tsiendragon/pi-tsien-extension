@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type {
   ConversationRecord,
+  ConversationTimelineEntry,
   SubagentWorkbenchRuntime,
   WorkflowRecord,
   WorkflowStageRecord,
@@ -281,10 +282,12 @@ class ConversationWorkbenchComponent implements Component, Focusable {
           width,
         );
       }
-      return this.fillViewport(
-        [...this.renderRouteDocument(width), ...this.renderRouteDock(width)],
-        width,
-      );
+      const document = this.renderRouteDocument(width);
+      const dock = this.renderRouteDock(width);
+      if (dock.length > 0 && this.currentRoute().kind === "agent") {
+        return this.composeAgentView(document, dock, width);
+      }
+      return this.fillViewport([...document, ...dock], width);
     } catch (error) {
       this.renderError = error instanceof Error ? error.message : String(error);
       return this.fillViewport(
@@ -296,6 +299,25 @@ class ConversationWorkbenchComponent implements Component, Focusable {
         width,
       );
     }
+  }
+
+  private composeAgentView(
+    document: string[],
+    dock: string[],
+    width: number,
+  ): string[] {
+    const height = Math.max(1, Math.floor(this.viewportRows()));
+    const dockCount = Math.min(dock.length, Math.max(1, height - 1));
+    const headerCount = Math.min(document.length, 2);
+    const bodyCount = Math.max(0, height - headerCount - dockCount);
+    const header = document.slice(0, headerCount);
+    const body = document.slice(headerCount);
+    const visibleBody = body.slice(-bodyCount);
+    const padding = Array.from(
+      { length: Math.max(0, bodyCount - visibleBody.length) },
+      () => " ".repeat(width),
+    );
+    return [...header, ...padding, ...visibleBody, ...dock.slice(-dockCount)];
   }
 
   renderRouteDocument(width: number): string[] {
@@ -852,13 +874,14 @@ class ConversationWorkbenchComponent implements Component, Focusable {
         width,
       ),
     ];
+    const body: string[] = [];
     if (conversation.transcriptTruncated) {
-      rows.push(
+      body.push(
         fit(this.theme.fg("warning", " … earlier transcript evicted"), width),
       );
     }
-    rows.push(...this.nativeTimelineLines(conversation, width));
-    return rows;
+    body.push(...this.renderTimelineWindow(conversation, width));
+    return [...rows, ...body];
   }
 
   private renderAgentDock(
@@ -1131,6 +1154,93 @@ class ConversationWorkbenchComponent implements Component, Focusable {
     ];
   }
 
+  private renderTimelineEntry(
+    entry: ConversationTimelineEntry,
+    width: number,
+  ): string[] {
+    try {
+      if (entry.type === "user") {
+        return new UserMessageComponent(entry.text).render(width);
+      }
+      if (entry.type === "assistant") {
+        const content = entry.content.map((block) => {
+          if (block.type === "text") {
+            return { type: "text", text: block.text ?? "" };
+          }
+          if (block.type === "thinking") {
+            return { type: "thinking", thinking: block.thinking ?? "" };
+          }
+          return {
+            type: "toolCall",
+            id: block.id ?? `${entry.id}:tool-call`,
+            name: block.name ?? "tool",
+            arguments: block.arguments ?? {},
+          };
+        });
+        const component = new AssistantMessageComponent();
+        component.updateContent(
+          {
+            role: "assistant",
+            content,
+            provider: entry.provider ?? "workbench",
+            model: entry.model ?? "subagent",
+            stopReason:
+              entry.stopReason ?? (entry.streaming ? "toolUse" : "stop"),
+            errorMessage: entry.errorMessage,
+            timestamp: entry.createdAt,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+          } as any,
+          entry.streaming ?? false,
+        );
+        return component.render(width);
+      }
+      const component = new ToolExecutionComponent(
+        entry.name,
+        entry.toolCallId,
+        entry.args,
+        {},
+        undefined,
+        this.tui,
+        this.cwd,
+      );
+      component.markExecutionStarted();
+      component.setArgsComplete();
+      if (entry.output) {
+        component.updateResult(
+          {
+            content: entry.output.content.map((item) => ({ ...item })),
+            ...(entry.output.details === undefined
+              ? {}
+              : { details: entry.output.details }),
+            isError: entry.status === "failed",
+          },
+          entry.status === "running",
+        );
+      }
+      return component.render(width);
+    } catch (error) {
+      return [
+        truncateToWidth(
+          `Unable to render ${entry.type} entry: ${error instanceof Error ? error.message : String(error)}`,
+          width,
+        ),
+      ];
+    }
+  }
+
   private nativeTimelineLines(
     conversation: ConversationRecord,
     width: number,
@@ -1140,91 +1250,39 @@ class ConversationWorkbenchComponent implements Component, Focusable {
     }
     const lines: string[] = [];
     for (const entry of conversation.timeline) {
-      try {
-        if (entry.type === "user") {
-          lines.push(...new UserMessageComponent(entry.text).render(width));
-          continue;
-        }
-        if (entry.type === "assistant") {
-          const content = entry.content.map((block) => {
-            if (block.type === "text") {
-              return { type: "text", text: block.text ?? "" };
-            }
-            if (block.type === "thinking") {
-              return { type: "thinking", thinking: block.thinking ?? "" };
-            }
-            return {
-              type: "toolCall",
-              id: block.id ?? `${entry.id}:tool-call`,
-              name: block.name ?? "tool",
-              arguments: block.arguments ?? {},
-            };
-          });
-          const component = new AssistantMessageComponent();
-          component.updateContent(
-            {
-              role: "assistant",
-              content,
-              provider: entry.provider ?? "workbench",
-              model: entry.model ?? "subagent",
-              stopReason:
-                entry.stopReason ?? (entry.streaming ? "toolUse" : "stop"),
-              errorMessage: entry.errorMessage,
-              timestamp: entry.createdAt,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  total: 0,
-                },
-              },
-            } as any,
-            entry.streaming ?? false,
-          );
-          lines.push(...component.render(width));
-          continue;
-        }
-        const component = new ToolExecutionComponent(
-          entry.name,
-          entry.toolCallId,
-          entry.args,
-          {},
-          undefined,
-          this.tui,
-          this.cwd,
-        );
-        component.markExecutionStarted();
-        component.setArgsComplete();
-        if (entry.output) {
-          component.updateResult(
-            {
-              content: entry.output.content.map((item) => ({ ...item })),
-              ...(entry.output.details === undefined
-                ? {}
-                : { details: entry.output.details }),
-              isError: entry.status === "failed",
-            },
-            entry.status === "running",
-          );
-        }
-        lines.push(...component.render(width));
-      } catch (error) {
-        lines.push(
-          truncateToWidth(
-            `Unable to render ${entry.type} entry: ${error instanceof Error ? error.message : String(error)}`,
-            width,
-          ),
-        );
-      }
+      lines.push(...this.renderTimelineEntry(entry, width));
     }
     return lines;
+  }
+
+  private renderTimelineWindow(
+    conversation: ConversationRecord,
+    width: number,
+  ): string[] {
+    const entries = conversation.timeline;
+    if (!entries?.length) {
+      return this.transcriptLines(conversation, width);
+    }
+    const height = Math.max(1, Math.floor(this.viewportRows()));
+    const offset = Math.max(
+      0,
+      this.transcriptOffsets.get(conversation.id) ?? 0,
+    );
+    // Render only the tail-most entries that cover the visible window
+    // [offset, offset + height]. Entries are append-only and stream at the
+    // tail, so this avoids re-rendering the whole (possibly large) transcript.
+    const chunks: string[][] = [];
+    let covered = 0;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const lines = this.renderTimelineEntry(entries[index], width);
+      chunks.push(lines);
+      covered += lines.length;
+      if (covered >= offset + height) break;
+    }
+    const all = chunks.reverse().flat();
+    const end = Math.max(0, all.length - offset);
+    const start = Math.max(0, all.length - offset - height);
+    return all.slice(start, end);
   }
 
   private transcriptLines(
