@@ -15,6 +15,12 @@ import {
 } from "./live-session/protocol.ts";
 
 const PROCESS_IDENTITY_SYMBOL = Symbol.for("pi.live-session.process-identity.v1");
+const LIVE_FEATURE_PUBLISH_INTERVAL_MS = 250;
+
+type PendingFeatureSnapshot = {
+  snapshot: unknown;
+  ctx: ExtensionContext;
+};
 
 interface ProcessIdentity {
   readonly processInstanceId: string;
@@ -23,6 +29,8 @@ interface ProcessIdentity {
 
 export interface LiveSessionClientHandle {
   start(): void;
+  /** Optional for test/dummy clients; real clients report broker readiness. */
+  isReady?(): boolean;
   publish(message: EventMessage): void;
   sendSnapshot(): void;
   stop(reason?: string): void;
@@ -82,13 +90,54 @@ export function registerLiveSessionExtension(
   let running = false;
   let reconnecting = false;
   let featureCleanup: (() => void) | undefined;
+  let featurePublishTimer: ReturnType<typeof setTimeout> | undefined;
+  const pendingFeatureSnapshots = new Map<string, PendingFeatureSnapshot>();
   let lastActivityAt = identity.startedAt;
+
+  const clientIsReady = (): boolean => {
+    const current = client;
+    return Boolean(current) && (current?.isReady?.() ?? true);
+  };
 
   const publish = (type: string, data: unknown, ctx?: ExtensionContext): void => {
     if (ctx) currentContext = ctx;
     lastActivityAt = Date.now();
-    const event = projector?.createEvent(type, data);
-    if (event) client?.publish(event);
+    const currentClient = client;
+    if (!projector || !currentClient || (currentClient.isReady && !currentClient.isReady())) return;
+    const event = projector.createEvent(type, data);
+    currentClient.publish(event);
+  };
+
+  const clearFeaturePublishQueue = (): void => {
+    if (featurePublishTimer) clearTimeout(featurePublishTimer);
+    featurePublishTimer = undefined;
+    pendingFeatureSnapshots.clear();
+  };
+
+  const flushFeatureSnapshots = (): void => {
+    if (featurePublishTimer) clearTimeout(featurePublishTimer);
+    featurePublishTimer = undefined;
+    if (!clientIsReady()) return;
+
+    const pending = [...pendingFeatureSnapshots.entries()];
+    pendingFeatureSnapshots.clear();
+    for (const [feature, value] of pending) {
+      publish("live_feature_snapshot", { feature, snapshot: value.snapshot }, value.ctx);
+    }
+  };
+
+  const queueFeatureSnapshot = (
+    feature: string,
+    snapshot: unknown,
+    ctx: ExtensionContext,
+  ): void => {
+    pendingFeatureSnapshots.set(feature, { snapshot, ctx });
+    if (featurePublishTimer) return;
+    featurePublishTimer = setTimeout(
+      flushFeatureSnapshots,
+      LIVE_FEATURE_PUBLISH_INTERVAL_MS,
+    );
+    featurePublishTimer.unref?.();
   };
 
   const lease = new LeaseManager({
@@ -204,6 +253,7 @@ export function registerLiveSessionExtension(
     client?.stop("session_switch");
     featureCleanup?.();
     featureCleanup = undefined;
+    clearFeaturePublishQueue();
     lease.release(undefined, "session_switch");
     projector = new SnapshotProjector({
       processInstanceId: identity.processInstanceId,
@@ -232,6 +282,9 @@ export function registerLiveSessionExtension(
         reconnecting = false;
         lease.markBrokerConnected();
         projector?.markChanged();
+        // The client sends its initial session snapshot immediately after this callback.
+        // Flush feature state in a microtask so that snapshot remains first on the wire.
+        queueMicrotask(flushFeatureSnapshots);
       },
       onDisconnected: () => {
         reconnecting = true;
@@ -241,7 +294,7 @@ export function registerLiveSessionExtension(
     });
     client.start();
     featureCleanup = subscribeLiveFeatures((feature, snapshot) => {
-      publish("live_feature_snapshot", { feature, snapshot }, ctx);
+      queueFeatureSnapshot(feature, snapshot, ctx);
     });
   });
 
@@ -300,6 +353,7 @@ export function registerLiveSessionExtension(
     lease.dispose(event.reason === "quit" ? "session_shutdown" : "session_switch");
     featureCleanup?.();
     featureCleanup = undefined;
+    clearFeaturePublishQueue();
     client?.stop(event.reason === "quit" ? "session_shutdown" : "session_switch");
     client = undefined;
     projector = undefined;
