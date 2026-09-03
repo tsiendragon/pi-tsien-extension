@@ -6,7 +6,7 @@ import { LeaseManager } from "../extensions/live-session/lease.ts";
 import { SnapshotProjector, sanitizeJson } from "../extensions/live-session/projector.ts";
 import type { CommandEnvelope, EventMessage } from "../extensions/live-session/protocol.ts";
 import type { LiveSessionClientOptions } from "../extensions/live-session/client.ts";
-import { registerLiveFeatureCommandHandler } from "../extensions/lib/live-observer.ts";
+import { publishLiveFeature, registerLiveFeatureCommandHandler } from "../extensions/lib/live-observer.ts";
 
 function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
@@ -117,6 +117,44 @@ test("Live Session extension does not publish hidden goal context messages", asy
   await harness.handlers.get("message_end")?.[0]({ message: { role: "assistant", content: "visible" } }, ctx);
   assert.equal(published.filter(message => message.event.type.startsWith("message_")).length, 1);
   assert.equal((published.at(-1)?.event.data as any).message.content, "visible");
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("Live Session extension skips disconnected events and coalesces feature snapshots", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  let ready = false;
+  let options: LiveSessionClientOptions | undefined;
+  const handle: LiveSessionClientHandle = {
+    start() {},
+    isReady: () => ready,
+    publish: message => published.push(message),
+    sendSnapshot() {},
+    stop() {},
+  };
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => {
+      options = value;
+      return handle;
+    },
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "assistant", content: "not connected" } }, ctx);
+  assert.equal(published.length, 0);
+
+  ready = true;
+  options?.onConnected?.();
+  publishLiveFeature("subagent-workflow", { revision: 1 });
+  publishLiveFeature("subagent-workflow", { revision: 2 });
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  const featureEvents = published.filter(message => message.event.type === "live_feature_snapshot");
+  assert.equal(featureEvents.length, 1);
+  assert.equal((featureEvents[0]?.event.data as any).snapshot.revision, 2);
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
 test("Live Session extension does not register a Dashboard-owned session", async () => {
