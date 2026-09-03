@@ -4,7 +4,9 @@ import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import subagentWorkbench from "../../../extensions/subagent-workbench/src/index.ts";
+import subagentWorkbench, {
+  projectLiveFeatureSnapshot,
+} from "../../../extensions/subagent-workbench/src/index.ts";
 import { WorkbenchController } from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
 import {
   loadWorkflowRun,
@@ -24,6 +26,41 @@ afterEach(() => {
 });
 
 describe("Pi extension", () => {
+  it("projects only workbench summaries to live-session feature snapshots", () => {
+    const projected = projectLiveFeatureSnapshot(
+      {
+        revision: 7,
+        conversations: {
+          total: 1,
+          running: 1,
+          needsAttention: 0,
+          completed: 0,
+          items: [
+            {
+              id: "agent-1",
+              label: "Agent 1",
+              status: "running",
+              updatedAt: 1,
+              messages: [{ id: "m", runId: "r", role: "assistant", text: "large" }],
+              timeline: [{ id: "t", runId: "r", type: "user", text: "large", createdAt: 1 }],
+            },
+          ],
+        },
+        workflows: { total: 0, active: 0, failed: 0, items: [] },
+        runHealth: { running: 1, stalled: 0 },
+        governor: { active: 1, queued: 0, activeLimit: 8, queueLimit: 8, protection: "normal" },
+        apiVersion: 1,
+        generatedAt: 1,
+      } as any,
+      9,
+    );
+
+    expect(projected.generatedAt).toBe(9);
+    expect(projected.conversations.items[0]).not.toHaveProperty("messages");
+    expect(projected.conversations.items[0]).not.toHaveProperty("timeline");
+    expect(projected.conversations.items[0]).toMatchObject({ id: "agent-1", status: "running" });
+  });
+
   it("registers multi_tool_use.parallel only inside child processes", () => {
     vi.stubEnv("PI_SUBAGENT_WORKBENCH_CHILD", "1");
     const tools = new Map<string, any>();
