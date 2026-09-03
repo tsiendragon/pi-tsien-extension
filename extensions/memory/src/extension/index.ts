@@ -175,6 +175,9 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
     isEnabled: () => advancedToolsEnabled,
     setEnabled: setAdvancedToolsEnabled,
   });
+  // Hide advanced tools synchronously at registration; session_start re-applies
+  // the same default for sessions that start with memory tools already active.
+  setAdvancedToolsEnabled(false);
 }
 
 async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: ExtensionContext, pi: PiExtensionAPI): Promise<void> {
