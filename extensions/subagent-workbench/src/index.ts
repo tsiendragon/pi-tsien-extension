@@ -54,6 +54,78 @@ const WORKBENCH_API_VERSION = 1 as const;
 const VIEW_ROWS = 18;
 const TOOL_OUTPUT_CHARS = 64 * 1024;
 const RESULT_WAIT_MAX_MS = 30_000;
+
+type WorkbenchRuntimeSnapshot = ReturnType<WorkbenchRuntime["getSnapshot"]>;
+
+type LiveConversationSummary = WorkbenchRuntimeSnapshot["conversations"]["items"][number];
+
+function projectLiveConversationSummary(
+  conversation: LiveConversationSummary,
+): Omit<LiveConversationSummary, "messages" | "timeline"> {
+  const {
+    id,
+    label,
+    status,
+    updatedAt,
+    availability,
+    activeRunId,
+    latestRunStatus,
+    provider,
+    model,
+    thinkingLevel,
+    usage,
+    transcriptTruncated,
+    error,
+    workflowId,
+    needsAttention,
+    lastHeartbeatAt,
+    stalled,
+  } = conversation;
+  return {
+    id,
+    label,
+    status,
+    updatedAt,
+    availability,
+    activeRunId,
+    latestRunStatus,
+    provider,
+    model,
+    thinkingLevel,
+    usage,
+    transcriptTruncated,
+    error,
+    workflowId,
+    needsAttention,
+    lastHeartbeatAt,
+    stalled,
+  };
+}
+
+/**
+ * Live-session feature cards only need workbench status. Full transcripts are
+ * served by the Dashboard Extension Bridge and must not be broadcast on every
+ * heartbeat through the bounded live-session event channel.
+ */
+export function projectLiveFeatureSnapshot(
+  snapshot: WorkbenchRuntimeSnapshot,
+  generatedAt = Date.now(),
+) {
+  return {
+    revision: snapshot.revision,
+    generatedAt,
+    conversations: {
+      total: snapshot.conversations.total,
+      running: snapshot.conversations.running,
+      needsAttention: snapshot.conversations.needsAttention,
+      completed: snapshot.conversations.completed,
+      items: snapshot.conversations.items.map(projectLiveConversationSummary),
+    },
+    workflows: snapshot.workflows,
+    runHealth: snapshot.runHealth,
+  };
+}
+
 const ThinkingLevelParam = Type.Union([
   Type.Literal("off"),
   Type.Literal("minimal"),
@@ -968,13 +1040,8 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       activeContext = ctx;
       bindTaskNavigation(ctx);
       liveFeatureCleanup?.();
-      const publishSnapshot = (snapshot: ReturnType<typeof installedRuntime.getSnapshot>) => publishLiveFeature("subagent-workflow", {
-        revision: snapshot.revision,
-        generatedAt: Date.now(),
-        conversations: snapshot.conversations,
-        workflows: snapshot.workflows,
-        runHealth: snapshot.runHealth,
-      });
+      const publishSnapshot = (snapshot: ReturnType<typeof installedRuntime.getSnapshot>) =>
+        publishLiveFeature("subagent-workflow", projectLiveFeatureSnapshot(snapshot));
       liveFeatureCleanup = installedRuntime.subscribe(publishSnapshot);
       publishSnapshot(installedRuntime.getSnapshot());
       deliverPendingRunWarnings();

@@ -80,6 +80,10 @@ export class LiveSessionClient {
     void this.connect();
   }
 
+  isReady(): boolean {
+    return this.ready;
+  }
+
   publish(message: EventMessage): void {
     if (!this.ready || !this.socket) return;
     if (encodedBytes(message) > MAX_EVENT_BYTES) {
