@@ -50,6 +50,11 @@ const DEFAULT_STALLED_AFTER_MS = 15_000;
 const FOLLOW_UP_RETRY_MS = 25;
 const CANONICAL_MODEL_REFERENCE = /^[^/\s]+\/\S+$/;
 
+function serializedBytes(value: unknown): number {
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? 0 : Buffer.byteLength(encoded, "utf8");
+}
+
 function assertCanonicalModelReference(
   model: string | undefined,
   location: string,
@@ -85,7 +90,9 @@ interface MutableConversation {
   workflowId?: string;
   transcriptTruncated: boolean;
   messages: ConversationMessage[];
+  messageTextBytes: number;
   timeline: ConversationTimelineEntry[];
+  timelineBytes: number;
   provider?: string;
   model?: string;
   thinkingLevel?: AgentThinkingLevel;
@@ -97,7 +104,6 @@ interface MutableConversation {
   lastHeartbeatAt?: number;
   stalled: boolean;
   config: SessionConfig;
-  publishTimer?: ReturnType<typeof setTimeout>;
   stallTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -675,6 +681,8 @@ export class WorkbenchController {
 
   private readonly pendingWarnings: WorkbenchRunWarning[] = [];
   private warningSequence = 0;
+  private readonly dirtyConversations = new Set<MutableConversation>();
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly maxTranscriptBytes: number;
   private readonly stalledAfterMs: number;
   private reservedWorkflowSessions = 0;
@@ -1909,10 +1917,11 @@ export class WorkbenchController {
     this.pendingWarnings.length = 0;
     this.uninstallHandler();
     this.unsubscribeService();
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+    this.dirtyConversations.clear();
     for (const conversation of this.conversations.values()) {
-      if (conversation.publishTimer) clearTimeout(conversation.publishTimer);
       if (conversation.stallTimer) clearTimeout(conversation.stallTimer);
-      conversation.publishTimer = undefined;
       conversation.stallTimer = undefined;
       conversation.activeRunId = undefined;
       conversation.availability = "disposed";
@@ -2144,7 +2153,9 @@ export class WorkbenchController {
         updatedAt: event.session.updatedAt,
         transcriptTruncated: false,
         messages: [],
+        messageTextBytes: 0,
         timeline: [],
+        timelineBytes: 0,
         usage: {
           input: 0,
           output: 0,
@@ -2196,24 +2207,22 @@ export class WorkbenchController {
       }
       conversation.error = undefined;
       conversation.currentAssistantId = undefined;
-      conversation.messages.push(
-        Object.freeze({
-          id: `${event.run.id}:user`,
-          runId: event.run.id,
-          role: "user",
-          text: event.task,
-          createdAt: event.run.startedAt ?? event.session.updatedAt,
-        }),
-      );
-      conversation.timeline.push(
-        Object.freeze({
-          id: `${event.run.id}:user`,
-          runId: event.run.id,
-          type: "user",
-          text: event.task,
-          createdAt: event.run.startedAt ?? event.session.updatedAt,
-        }),
-      );
+      const userMessage = Object.freeze({
+        id: `${event.run.id}:user`,
+        runId: event.run.id,
+        role: "user" as const,
+        text: event.task,
+        createdAt: event.run.startedAt ?? event.session.updatedAt,
+      });
+      const userTimelineEntry = Object.freeze({
+        id: `${event.run.id}:user`,
+        runId: event.run.id,
+        type: "user" as const,
+        text: event.task,
+        createdAt: event.run.startedAt ?? event.session.updatedAt,
+      });
+      this.appendMessage(conversation, userMessage);
+      this.appendTimeline(conversation, userTimelineEntry);
       this.conversations.set(conversation.id, conversation);
       this.boundTranscript(conversation);
       this.publish(conversation);
@@ -2270,6 +2279,46 @@ export class WorkbenchController {
     this.onRunWarning?.(warning);
   }
 
+  private appendMessage(
+    conversation: MutableConversation,
+    message: ConversationMessage,
+  ): void {
+    conversation.messages.push(message);
+    conversation.messageTextBytes += Buffer.byteLength(message.text, "utf8");
+  }
+
+  private replaceMessage(
+    conversation: MutableConversation,
+    index: number,
+    message: ConversationMessage,
+  ): void {
+    const previous = conversation.messages[index];
+    if (previous) {
+      conversation.messageTextBytes -= Buffer.byteLength(previous.text, "utf8");
+    }
+    conversation.messages[index] = message;
+    conversation.messageTextBytes += Buffer.byteLength(message.text, "utf8");
+  }
+
+  private appendTimeline(
+    conversation: MutableConversation,
+    entry: ConversationTimelineEntry,
+  ): void {
+    conversation.timeline.push(entry);
+    conversation.timelineBytes += serializedBytes(entry);
+  }
+
+  private replaceTimeline(
+    conversation: MutableConversation,
+    index: number,
+    entry: ConversationTimelineEntry,
+  ): void {
+    const previous = conversation.timeline[index];
+    if (previous) conversation.timelineBytes -= serializedBytes(previous);
+    conversation.timeline[index] = entry;
+    conversation.timelineBytes += serializedBytes(entry);
+  }
+
   private applyProviderEvent(
     conversation: MutableConversation,
     runId: string,
@@ -2282,7 +2331,8 @@ export class WorkbenchController {
       conversation.stalled = false;
       this.armStallWatchdog(conversation, runId);
     } else if (event.type === "run-warning") {
-      conversation.messages.push(
+      this.appendMessage(
+        conversation,
         Object.freeze({
           id: `${runId}:warning:${++conversation.assistantSequence}`,
           runId,
@@ -2305,14 +2355,17 @@ export class WorkbenchController {
         last.runId === runId &&
         last.streaming
       ) {
-        conversation.messages[conversation.messages.length - 1] = Object.freeze(
-          {
+        this.replaceMessage(
+          conversation,
+          conversation.messages.length - 1,
+          Object.freeze({
             ...last,
             text: last.text + event.text,
-          },
+          }),
         );
       } else {
-        conversation.messages.push(
+        this.appendMessage(
+          conversation,
           Object.freeze({
             id: `${runId}:assistant`,
             runId,
@@ -2339,11 +2392,12 @@ export class WorkbenchController {
         };
       }
     } else if (event.type === "tool-start") {
-      conversation.timeline.push(
+      this.appendTimeline(
+        conversation,
         Object.freeze({
           id: `${runId}:tool:${event.toolCallId}`,
           runId,
-          type: "tool",
+          type: "tool" as const,
           toolCallId: event.toolCallId,
           name: event.name,
           args: event.args,
@@ -2351,7 +2405,8 @@ export class WorkbenchController {
           createdAt: Date.now(),
         }),
       );
-      conversation.messages.push(
+      this.appendMessage(
+        conversation,
         Object.freeze({
           id: `${runId}:tool-start:${event.toolCallId}`,
           runId,
@@ -2373,7 +2428,8 @@ export class WorkbenchController {
         output: event.output,
         status: event.isError ? "failed" : "completed",
       });
-      conversation.messages.push(
+      this.appendMessage(
+        conversation,
         Object.freeze({
           id: `${runId}:tool-end:${event.toolCallId}`,
           runId,
@@ -2393,11 +2449,12 @@ export class WorkbenchController {
   ): string {
     const id = `${runId}:assistant:${++conversation.assistantSequence}`;
     conversation.currentAssistantId = id;
-    conversation.timeline.push(
+    this.appendTimeline(
+      conversation,
       Object.freeze({
         id,
         runId,
-        type: "assistant",
+        type: "assistant" as const,
         content: Object.freeze([]),
         createdAt: Date.now(),
         streaming: true,
@@ -2455,11 +2512,15 @@ export class WorkbenchController {
     });
     if (blockIndex < 0) blocks.push(block);
     else blocks[blockIndex] = block;
-    conversation.timeline[index] = Object.freeze({
-      ...entry,
-      content: Object.freeze(blocks),
-      streaming: true,
-    });
+    this.replaceTimeline(
+      conversation,
+      index,
+      Object.freeze({
+        ...entry,
+        content: Object.freeze(blocks),
+        streaming: true,
+      }),
+    );
   }
 
   private completeTimelineAssistant(
@@ -2468,19 +2529,23 @@ export class WorkbenchController {
     event: Extract<ProviderEvent, { type: "assistant-end" }>,
   ): void {
     const { index, entry } = this.currentTimelineAssistant(conversation, runId);
-    conversation.timeline[index] = Object.freeze({
-      ...entry,
-      content: Object.freeze(
-        event.content.map((block, contentIndex) =>
-          Object.freeze({ ...block, contentIndex }),
+    this.replaceTimeline(
+      conversation,
+      index,
+      Object.freeze({
+        ...entry,
+        content: Object.freeze(
+          event.content.map((block, contentIndex) =>
+            Object.freeze({ ...block, contentIndex }),
+          ),
         ),
-      ),
-      streaming: false,
-      ...(event.provider ? { provider: event.provider } : {}),
-      ...(event.model ? { model: event.model } : {}),
-      ...(event.stopReason ? { stopReason: event.stopReason } : {}),
-      ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
-    });
+        streaming: false,
+        ...(event.provider ? { provider: event.provider } : {}),
+        ...(event.model ? { model: event.model } : {}),
+        ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+        ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
+      }),
+    );
     conversation.currentAssistantId = undefined;
   }
 
@@ -2522,8 +2587,8 @@ export class WorkbenchController {
       status: update.status,
       createdAt: previous?.createdAt ?? Date.now(),
     });
-    if (index < 0) conversation.timeline.push(entry);
-    else conversation.timeline[index] = entry;
+    if (index < 0) this.appendTimeline(conversation, entry);
+    else this.replaceTimeline(conversation, index, entry);
   }
 
   private finishTimelineAssistant(
@@ -2540,20 +2605,24 @@ export class WorkbenchController {
         ConversationTimelineEntry,
         { type: "assistant" }
       >;
-      conversation.timeline[index] = Object.freeze({
-        ...entry,
-        content:
-          entry.content.length > 0
-            ? entry.content
-            : Object.freeze([
-                Object.freeze({
-                  type: "text" as const,
-                  contentIndex: 0,
-                  text: result?.output ?? "",
-                }),
-              ]),
-        streaming: false,
-      });
+      this.replaceTimeline(
+        conversation,
+        index,
+        Object.freeze({
+          ...entry,
+          content:
+            entry.content.length > 0
+              ? entry.content
+              : Object.freeze([
+                  Object.freeze({
+                    type: "text" as const,
+                    contentIndex: 0,
+                    text: result?.output ?? "",
+                  }),
+                ]),
+          streaming: false,
+        }),
+      );
       conversation.currentAssistantId = undefined;
       return;
     }
@@ -2562,14 +2631,15 @@ export class WorkbenchController {
       (entry) => entry.type === "assistant" && entry.runId === runId,
     );
     if (hasAssistant) return;
-    conversation.timeline.push(
+    this.appendTimeline(
+      conversation,
       Object.freeze({
         id: `${runId}:assistant:${++conversation.assistantSequence}`,
         runId,
-        type: "assistant",
+        type: "assistant" as const,
         content: Object.freeze([
           Object.freeze({
-            type: "text",
+            type: "text" as const,
             contentIndex: 0,
             text: result.output,
           }),
@@ -2597,15 +2667,20 @@ export class WorkbenchController {
     }
     if (assistantIndex >= 0) {
       const assistant = conversation.messages[assistantIndex]!;
-      conversation.messages[assistantIndex] = Object.freeze({
-        ...assistant,
-        text: result?.output ?? assistant.text,
-        streaming: false,
-      });
+      this.replaceMessage(
+        conversation,
+        assistantIndex,
+        Object.freeze({
+          ...assistant,
+          text: result?.output ?? assistant.text,
+          streaming: false,
+        }),
+      );
       return;
     }
     if (!result) return;
-    conversation.messages.push(
+    this.appendMessage(
+      conversation,
       Object.freeze({
         id: `${runId}:assistant`,
         runId,
@@ -2725,93 +2800,111 @@ export class WorkbenchController {
   }
 
   private boundTranscript(conversation: MutableConversation): void {
-    const messageSize = (): number =>
-      conversation.messages.reduce(
-        (total, message) => total + Buffer.byteLength(message.text, "utf8"),
-        0,
-      );
     while (
       conversation.messages.length > 1 &&
-      messageSize() > this.maxTranscriptBytes
+      conversation.messageTextBytes > this.maxTranscriptBytes
     ) {
-      conversation.messages.shift();
+      const removed = conversation.messages.shift();
+      if (removed) {
+        conversation.messageTextBytes -= Buffer.byteLength(removed.text, "utf8");
+      }
       conversation.transcriptTruncated = true;
     }
-    if (messageSize() > this.maxTranscriptBytes) {
+    if (conversation.messageTextBytes > this.maxTranscriptBytes) {
       const only = conversation.messages[0]!;
-      conversation.messages[0] = Object.freeze({
-        ...only,
-        text: tailWithinBytes(only.text, this.maxTranscriptBytes),
-      });
+      this.replaceMessage(
+        conversation,
+        0,
+        Object.freeze({
+          ...only,
+          text: tailWithinBytes(only.text, this.maxTranscriptBytes),
+        }),
+      );
       conversation.transcriptTruncated = true;
     }
 
-    const timelineSize = (): number =>
-      Buffer.byteLength(JSON.stringify(conversation.timeline), "utf8");
     while (
       conversation.timeline.length > 1 &&
-      timelineSize() > this.maxTranscriptBytes
+      conversation.timelineBytes > this.maxTranscriptBytes
     ) {
-      conversation.timeline.shift();
+      const removed = conversation.timeline.shift();
+      if (removed) conversation.timelineBytes -= serializedBytes(removed);
       conversation.transcriptTruncated = true;
     }
-    if (timelineSize() <= this.maxTranscriptBytes) return;
+    if (conversation.timelineBytes <= this.maxTranscriptBytes) return;
     const only = conversation.timeline[0];
     if (!only) return;
     const textBudget = Math.max(1, Math.floor(this.maxTranscriptBytes / 2));
     if (only.type === "user") {
-      conversation.timeline[0] = Object.freeze({
-        ...only,
-        text: tailWithinBytes(only.text, textBudget),
-      });
+      this.replaceTimeline(
+        conversation,
+        0,
+        Object.freeze({
+          ...only,
+          text: tailWithinBytes(only.text, textBudget),
+        }),
+      );
     } else if (only.type === "assistant") {
       const readable = only.content
         .map((block) => block.text ?? block.thinking ?? "")
         .join("\n");
-      conversation.timeline[0] = Object.freeze({
-        ...only,
-        content: Object.freeze([
-          Object.freeze({
-            type: "text",
-            contentIndex: 0,
-            text: tailWithinBytes(readable, textBudget),
-          }),
-        ]),
-      });
+      this.replaceTimeline(
+        conversation,
+        0,
+        Object.freeze({
+          ...only,
+          content: Object.freeze([
+            Object.freeze({
+              type: "text" as const,
+              contentIndex: 0,
+              text: tailWithinBytes(readable, textBudget),
+            }),
+          ]),
+        }),
+      );
     } else {
       const readable = only.output?.content
         .map((item) => item.text ?? "")
         .join("\n");
-      conversation.timeline[0] = Object.freeze({
-        ...only,
-        args: { truncated: true },
-        output: Object.freeze({
-          content: Object.freeze([
-            Object.freeze({
-              type: "text",
-              text: tailWithinBytes(readable ?? "", textBudget),
-            }),
-          ]),
+      this.replaceTimeline(
+        conversation,
+        0,
+        Object.freeze({
+          ...only,
+          args: { truncated: true },
+          output: Object.freeze({
+            content: Object.freeze([
+              Object.freeze({
+                type: "text" as const,
+                text: tailWithinBytes(readable ?? "", textBudget),
+              }),
+            ]),
+          }),
         }),
-      });
+      );
     }
     conversation.transcriptTruncated = true;
   }
 
   private schedulePublish(conversation: MutableConversation): void {
-    if (conversation.publishTimer) return;
-    conversation.publishTimer = setTimeout(() => {
-      conversation.publishTimer = undefined;
-      this.publish(conversation);
+    this.dirtyConversations.add(conversation);
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flushDirtyConversations();
     }, PUBLISH_INTERVAL_MS);
-    conversation.publishTimer.unref?.();
+    this.flushTimer.unref?.();
+  }
+
+  private flushDirtyConversations(): void {
+    const dirty = [...this.dirtyConversations];
+    this.dirtyConversations.clear();
+    for (const conversation of dirty) {
+      this.publish(conversation);
+    }
   }
 
   private publish(conversation: MutableConversation): void {
-    if (conversation.publishTimer) {
-      clearTimeout(conversation.publishTimer);
-      conversation.publishTimer = undefined;
-    }
     const record: ConversationRecord = {
       id: conversation.id,
       label: conversation.label,
