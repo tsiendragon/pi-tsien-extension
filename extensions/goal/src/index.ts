@@ -21,6 +21,7 @@ export type {
 	SaveReviewedGoalOptions,
 } from "./commands.ts";
 export {
+	clearStickyStopForActiveGoal,
 	createGoalCompaction,
 	createGoalContextMessage,
 	createGoalContinuationState,

@@ -20,9 +20,9 @@ import {
 import type { GoalState } from "./types.ts";
 
 export const GOAL_CONTINUATION_CUSTOM_TYPE = "goal-continuation";
-// Zero disables a turn cap; wall-clock duration is the default budget boundary.
+// Zero disables the turn cap and the wall-clock duration budget.
 export const DEFAULT_GOAL_CONTINUATION_MAX_TURNS = 0;
-export const DEFAULT_GOAL_CONTINUATION_MAX_DURATION_HOURS = 48;
+export const DEFAULT_GOAL_CONTINUATION_MAX_DURATION_HOURS = 0;
 export const DEFAULT_GOAL_CONTINUATION_MAX_NO_PROGRESS_TURNS = 2;
 export const DEFAULT_GOAL_CONTINUATION_WATCHDOG_SILENCE_MINUTES = 30;
 const GOAL_CONTINUATION_WATCHDOG_RETRY_MS = 60_000;
@@ -143,7 +143,7 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		default: String(DEFAULT_GOAL_CONTINUATION_MAX_TURNS),
 	});
 	api.registerFlag?.("goal-continuation-max-duration-hours", {
-		description: "Maximum wall-clock continuation budget per goal in hours",
+		description: "Maximum wall-clock continuation budget per goal in hours (0 disables)",
 		type: "string",
 		default: String(DEFAULT_GOAL_CONTINUATION_MAX_DURATION_HOURS),
 	});
@@ -194,16 +194,20 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 	pi.on("input", async (event, ctx) => {
 		observeGoalBranchActivity(watchdogState, ctx);
 		const prompt = getInputText(event as GoalInputEvent);
-		if (isContinuationPrompt(prompt) && api.getFlag?.("goal-continuation") === false) {
+		const isContinuation = isContinuationPrompt(prompt);
+		if (isContinuation && api.getFlag?.("goal-continuation") === false) {
 			stopGoalContinuation(api, continuationState, "disabled");
 			updateContinuationStatus(ctx, continuationState);
 			return { action: "handled" };
 		}
 		if (continuationState.queuedGoalId || continuationState.runningGoalId) {
-			if (!isContinuationPrompt(prompt)) {
+			if (!isContinuation) {
 				stopGoalContinuation(api, continuationState, "user-interrupt");
 				updateContinuationStatus(ctx, continuationState);
 			}
+		}
+		if (!isContinuation) {
+			clearStickyStopForActiveGoal(continuationState, ctx);
 		}
 		scheduleGoalWatchdog(api, continuationState, watchdogState, ctx);
 	});
@@ -370,12 +374,11 @@ export async function maybeQueueGoalContinuation(
 		return stopDecision("no-progress-budget", goal.goalId);
 	if (state.stoppedGoalId === goal.goalId && state.stoppedReason === "max-turns")
 		return stopDecision("max-turns", goal.goalId);
-	if (state.stoppedGoalId === goal.goalId && state.stoppedReason === "duration-budget")
-		return stopDecision("duration-budget", goal.goalId);
 	const maxTurns = getMaxContinuationTurns(api);
 	const turnCount = state.turnCounts.get(goal.goalId) ?? 0;
 	const budgetStartedAt = state.budgetStartedAts.get(goal.goalId);
-	if (budgetStartedAt !== undefined && now - budgetStartedAt >= getMaxContinuationDurationMs(api)) {
+	const maxDurationMs = getMaxContinuationDurationMs(api);
+	if (maxDurationMs !== undefined && budgetStartedAt !== undefined && now - budgetStartedAt >= maxDurationMs) {
 		persistStopReport(api, goal, "duration_budget", now);
 		state.stoppedGoalId = goal.goalId;
 		state.stoppedReason = "duration-budget";
@@ -594,6 +597,16 @@ export function stopGoalContinuation(
 		turnCount: state.turnCounts.get(goalId) ?? 0,
 		reason,
 	});
+}
+
+export function clearStickyStopForActiveGoal(state: GoalContinuationState, ctx: GoalRuntimeContext): void {
+	const goal = loadGoalState(ctx);
+	if (!isActiveGoal(goal) || state.stoppedGoalId !== goal.goalId) return;
+	const reason = state.stoppedReason;
+	if (reason !== "all-paths-blocked" && reason !== "no-progress-budget") return;
+	state.stoppedGoalId = undefined;
+	state.stoppedReason = undefined;
+	if (reason === "no-progress-budget") state.noProgressCounts.set(goal.goalId, 0);
 }
 
 function getInputText(event: GoalInputEvent): string {
@@ -820,12 +833,12 @@ function getMaxContinuationTurns(api: ContinuationAPI): number | undefined {
 	return DEFAULT_GOAL_CONTINUATION_MAX_TURNS > 0 ? DEFAULT_GOAL_CONTINUATION_MAX_TURNS : undefined;
 }
 
-function getMaxContinuationDurationMs(api: ContinuationAPI): number {
+function getMaxContinuationDurationMs(api: ContinuationAPI): number | undefined {
 	const configured = api.getFlag?.("goal-continuation-max-duration-hours");
 	const value =
 		typeof configured === "number" ? configured : typeof configured === "string" ? Number(configured) : NaN;
 	const hours = Number.isFinite(value) && value > 0 ? value : DEFAULT_GOAL_CONTINUATION_MAX_DURATION_HOURS;
-	return Math.floor(hours * 60 * 60 * 1000);
+	return hours > 0 ? Math.floor(hours * 60 * 60 * 1000) : undefined;
 }
 
 function stopDecision(reason: GoalContinuationStopReason, goalId?: string): GoalContinuationDecision {
