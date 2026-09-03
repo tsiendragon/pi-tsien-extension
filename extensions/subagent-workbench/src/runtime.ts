@@ -246,12 +246,16 @@ type WorkbenchCommandHandler = (
 ) => Promise<WorkbenchCommandResult>;
 
 function freezeConversation(record: ConversationRecord): ConversationRecord {
+  // Entries are immutable by construction in the controller (append/replace swap
+  // fresh frozen objects), so freeze each entry in place instead of deep-copying
+  // nested blocks/output on every publish. This keeps the deep-frozen snapshot
+  // contract without the O(transcript) copy cost.
   return Object.freeze({
     ...record,
     ...(record.messages
       ? {
           messages: Object.freeze(
-            record.messages.map((message) => Object.freeze({ ...message })),
+            record.messages.map((message) => Object.freeze(message)),
           ),
         }
       : {}),
@@ -259,30 +263,7 @@ function freezeConversation(record: ConversationRecord): ConversationRecord {
     ...(record.timeline
       ? {
           timeline: Object.freeze(
-            record.timeline.map((entry) => {
-              if (entry.type === "assistant") {
-                return Object.freeze({
-                  ...entry,
-                  content: Object.freeze(
-                    entry.content.map((block) => Object.freeze({ ...block })),
-                  ),
-                });
-              }
-              if (entry.type === "tool" && entry.output) {
-                return Object.freeze({
-                  ...entry,
-                  output: Object.freeze({
-                    ...entry.output,
-                    content: Object.freeze(
-                      entry.output.content.map((item) =>
-                        Object.freeze({ ...item }),
-                      ),
-                    ),
-                  }),
-                });
-              }
-              return Object.freeze({ ...entry });
-            }),
+            record.timeline.map((entry) => Object.freeze(entry)),
           ),
         }
       : {}),
