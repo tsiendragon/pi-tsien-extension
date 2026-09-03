@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	clearStickyStopForActiveGoal,
 	createGoalContinuationState,
 	finishRunningGoalContinuation,
 	GOAL_CONTINUATION_CUSTOM_TYPE,
@@ -366,6 +367,34 @@ describe("goal continuation scheduler", () => {
 		);
 	});
 
+	it("clears persisted no-progress and all-paths-blocked sticky stops on user input", () => {
+		const created = createGoal();
+		const ctx = { sessionManager: { getBranch: vi.fn(() => [customEntry(created.entry)]) } };
+
+		const noProgress = createGoalContinuationState();
+		noProgress.stoppedGoalId = "goal-1";
+		noProgress.stoppedReason = "no-progress-budget";
+		noProgress.noProgressCounts.set("goal-1", 2);
+		clearStickyStopForActiveGoal(noProgress, ctx);
+		expect(noProgress.stoppedGoalId).toBeUndefined();
+		expect(noProgress.stoppedReason).toBeUndefined();
+		expect(noProgress.noProgressCounts.get("goal-1")).toBe(0);
+
+		const blocked = createGoalContinuationState();
+		blocked.stoppedGoalId = "goal-1";
+		blocked.stoppedReason = "all-paths-blocked";
+		clearStickyStopForActiveGoal(blocked, ctx);
+		expect(blocked.stoppedGoalId).toBeUndefined();
+		expect(blocked.stoppedReason).toBeUndefined();
+
+		const maxTurns = createGoalContinuationState();
+		maxTurns.stoppedGoalId = "goal-1";
+		maxTurns.stoppedReason = "max-turns";
+		clearStickyStopForActiveGoal(maxTurns, ctx);
+		expect(maxTurns.stoppedGoalId).toBe("goal-1");
+		expect(maxTurns.stoppedReason).toBe("max-turns");
+	});
+
 	it("stops after the configured wall-clock duration budget", async () => {
 		const created = createGoal();
 		const state = createGoalContinuationState();
@@ -722,7 +751,7 @@ describe("goal continuation scheduler", () => {
 		);
 		expect((pi as unknown as { registerFlag: ReturnType<typeof vi.fn> }).registerFlag).toHaveBeenCalledWith(
 			"goal-continuation-max-duration-hours",
-			expect.objectContaining({ type: "string", default: "48" }),
+			expect.objectContaining({ type: "string", default: "0" }),
 		);
 
 		await handlers.get("session_start")?.({}, ctx);
