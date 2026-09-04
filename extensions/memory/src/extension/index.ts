@@ -175,9 +175,10 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
     isEnabled: () => advancedToolsEnabled,
     setEnabled: setAdvancedToolsEnabled,
   });
-  // Hide advanced tools synchronously at registration; session_start re-applies
-  // the same default for sessions that start with memory tools already active.
-  setAdvancedToolsEnabled(false);
+  // Advanced tools are hidden on session_start (after bindCore makes
+  // getActiveTools/setActiveTools available). Calling setActiveTools here would
+  // throw "Action methods cannot be called during extension loading" and abort
+  // the whole extension.
 }
 
 async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: ExtensionContext, pi: PiExtensionAPI): Promise<void> {
