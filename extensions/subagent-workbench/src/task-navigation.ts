@@ -114,7 +114,6 @@ class TaskNavigationComponent implements Component {
 
 class TaskNavigationController implements TaskNavigationHandle {
   private snapshot: WorkbenchSnapshot;
-  private readonly dismissed = new Set<string>();
   private selectedId = "main";
   private focused = false;
   private opening = false;
@@ -252,13 +251,12 @@ class TaskNavigationController implements TaskNavigationHandle {
   }
 
   private targets(): TaskNavigationTarget[] {
+    // Terminal work is delivered through the completion notification and the
+    // Workbench view; only active (non-terminal) items stay in the navigation
+    // bar so finished subagents do not linger above the powerline.
     const conversations = this.snapshot.conversations.items
       .filter((conversation) => !conversation.workflowId)
-      .filter(
-        (conversation) =>
-          !this.dismissed.has(conversation.id) ||
-          !isTerminalStatus(conversation.status),
-      )
+      .filter((conversation) => !isTerminalStatus(conversation.status))
       .map((conversation): TaskNavigationTarget => ({
         kind: "agent",
         id: conversation.id,
@@ -266,11 +264,7 @@ class TaskNavigationController implements TaskNavigationHandle {
         conversation,
       }));
     const workflows = this.snapshot.workflows.items
-      .filter(
-        (workflow) =>
-          !this.dismissed.has(workflow.id) ||
-          !isTerminalStatus(workflow.status),
-      )
+      .filter((workflow) => !isTerminalStatus(workflow.status))
       .map((workflow): TaskNavigationTarget => ({
         kind: "workflow",
         id: workflow.id,
@@ -340,14 +334,6 @@ class TaskNavigationController implements TaskNavigationHandle {
       } else if (!this.opening) {
         this.opening = true;
         this.focused = false;
-        if (
-          (target.kind === "agent" &&
-            isTerminalStatus(target.conversation.status)) ||
-          (target.kind === "workflow" &&
-            isTerminalStatus(target.workflow.status))
-        ) {
-          this.dismissed.add(target.id);
-        }
         this.requestRender?.();
         void Promise.resolve(this.options.onOpen(target))
           .catch((error: unknown) => {
@@ -377,27 +363,6 @@ class TaskNavigationController implements TaskNavigationHandle {
           type: "interrupt-workflow",
           workflowId: target.id,
         });
-      }
-      return { consume: true };
-    }
-    if (data.toLowerCase() === "x") {
-      const target = targets.find(
-        (candidate) => candidate.id === this.selectedId,
-      );
-      if (
-        target?.kind === "agent" &&
-        isTerminalStatus(target.conversation.status)
-      ) {
-        this.dismissed.add(target.id);
-        this.selectedId = "main";
-        this.requestRender?.();
-      } else if (
-        target?.kind === "workflow" &&
-        isTerminalStatus(target.workflow.status)
-      ) {
-        this.dismissed.add(target.id);
-        this.selectedId = "main";
-        this.requestRender?.();
       }
       return { consume: true };
     }
