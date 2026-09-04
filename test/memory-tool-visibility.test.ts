@@ -15,9 +15,12 @@ const ADVANCED = [
 function setup(initialTools: string[]) {
   let activeTools = [...initialTools];
   const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const notifications: string[] = [];
   registerMemory({
-    on() {},
+    on(name: string, handler: (event: unknown, ctx: unknown) => unknown) {
+      handlers.set(name, handler);
+    },
     registerTool() {},
     registerCommand(name: string, command: { handler(args: string, ctx: unknown): Promise<void> }) { commands.set(name, command); },
     appendEntry() {},
@@ -26,16 +29,31 @@ function setup(initialTools: string[]) {
     getActiveTools: () => [...activeTools],
     setActiveTools: (names: string[]) => { activeTools = [...names]; },
   } as any);
+  // sessionManager/isProjectTrusted are intentionally absent so createRuntime
+  // throws before any I/O; the session_start handler hides advanced tools
+  // before that throw, which is all this test observes.
+  const ctx = {
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      setStatus: () => {},
+    },
+  };
   return {
     active: () => activeTools,
     command: commands.get("memory")!,
-    ctx: { ui: { notify: (message: string) => notifications.push(message) } },
+    sessionStart: () => handlers.get("session_start")?.({}, ctx),
+    ctx,
     notifications,
   };
 }
 
-test("hides advanced Memory tools until /memory admin on", async () => {
+test("hides advanced Memory tools on session_start, not during registration", async () => {
   const fixture = setup(["memory_search", "memory_remember", ...ADVANCED]);
+  // Registration must not call setActiveTools during extension loading; the RPC
+  // child would otherwise abort the whole extension load and kill the subagent.
+  assert.deepEqual(fixture.active(), ["memory_search", "memory_remember", ...ADVANCED]);
+
+  await fixture.sessionStart();
   assert.deepEqual(fixture.active(), ["memory_search", "memory_remember"]);
 
   await fixture.command.handler("admin on", fixture.ctx);
@@ -47,6 +65,7 @@ test("hides advanced Memory tools until /memory admin on", async () => {
 
 test("keeps strict PTC mode single-tool when admin tools are requested", async () => {
   const fixture = setup(["run_code", ...ADVANCED]);
+  await fixture.sessionStart();
   assert.deepEqual(fixture.active(), ["run_code"]);
 
   await fixture.command.handler("admin on", fixture.ctx);
