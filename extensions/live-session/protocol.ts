@@ -1,10 +1,13 @@
-export const LIVE_SESSION_PROTOCOL_VERSION = 1 as const;
+export const LIVE_SESSION_PROTOCOL_VERSION = 2 as const;
 
-export const MAX_EVENT_BYTES = 1024 * 1024;
-export const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
-export const MAX_COMMAND_BYTES = 256 * 1024;
-export const MAX_CONNECTION_BUFFER_BYTES = 4 * 1024 * 1024;
+export const MAX_EVENT_BYTES = 8 * 1024 * 1024;
+export const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+export const MAX_COMMAND_BYTES = 8 * 1024 * 1024;
+export const MAX_CONNECTION_BUFFER_BYTES = 16 * 1024 * 1024;
 export const MAX_PROMPT_BYTES = 128 * 1024;
+export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+export const MAX_IMAGES = 4;
+export const MAX_IMAGE_TOTAL_BYTES = 6 * 1024 * 1024;
 export const MAX_TOOL_OUTPUT_BYTES = 256 * 1024;
 export const REQUEST_CACHE_SIZE = 256;
 
@@ -18,6 +21,10 @@ export type LiveSessionStatus = "idle" | "running" | "reconnecting";
 export interface LiveSessionSummary {
   readonly processInstanceId: string;
   readonly sessionId: string;
+  readonly role?: "main" | "subagent";
+  readonly parentSessionId?: string;
+  readonly parentToolCallId?: string;
+  readonly subagentWorkId?: string;
   readonly sessionFile?: string;
   readonly sessionName?: string;
   readonly pid: number;
@@ -58,19 +65,29 @@ export type LiveSessionEvent = JsonObject & {
   readonly truncated?: boolean;
 };
 
+export type LiveSessionInputChannel = "web" | "terminal" | "chatapp" | "mobile";
+
+export interface LiveSessionImage {
+  readonly type: "image";
+  readonly data: string;
+  readonly mimeType: string;
+}
+
 export type LiveSessionCommand =
   | { readonly type: "resync" }
   | { readonly type: "claim"; readonly browserClientId: string; readonly requestedLeaseMs: number }
   | { readonly type: "renew"; readonly leaseId: string }
   | { readonly type: "release"; readonly leaseId: string }
   | {
-      readonly type: "prompt";
-      readonly leaseId: string;
+      readonly type: "input";
       readonly text: string;
+      readonly images?: readonly LiveSessionImage[];
+      readonly channel: LiveSessionInputChannel;
       readonly deliverAs?: "steer" | "followUp";
-      readonly expandPromptTemplates?: false;
     }
   | { readonly type: "abort"; readonly leaseId: string }
+  | { readonly type: "set_session_name"; readonly name: string }
+  | { readonly type: "get_models" }
   | {
       readonly type: "feature_command";
       readonly leaseId: string;
@@ -169,6 +186,25 @@ function hasOnlyKeys(value: Record<string, unknown>, required: readonly string[]
     && Object.keys(value).every((key) => allowed.has(key));
 }
 
+function parseImages(value: unknown): LiveSessionImage[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMAGES) return undefined;
+  let totalBytes = 0;
+  const images: LiveSessionImage[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || !hasOnlyKeys(item, ["type", "data", "mimeType"])
+      || item.type !== "image"
+      || !isBoundedString(item.data, MAX_IMAGE_BYTES)
+      || typeof item.mimeType !== "string"
+      || !/^image\/[a-z0-9.+-]+$/i.test(item.mimeType)
+      || Buffer.byteLength(item.data, "utf8") > MAX_IMAGE_BYTES) return undefined;
+    totalBytes += Buffer.byteLength(item.data, "utf8");
+    if (totalBytes > MAX_IMAGE_TOTAL_BYTES) return undefined;
+    images.push({ type: "image", data: item.data, mimeType: item.mimeType });
+  }
+  return images;
+}
+
 function isBoundedString(value: unknown, maxBytes = 4096): value is string {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= maxBytes;
 }
@@ -196,6 +232,13 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
     return { type: value.type, leaseId: value.leaseId };
   }
 
+  if (value.type === "set_session_name" && hasOnlyKeys(value, ["type", "name"])) {
+    if (!isBoundedString(value.name, 160)) return undefined;
+    return { type: "set_session_name", name: value.name };
+  }
+
+  if (value.type === "get_models" && hasOnlyKeys(value, ["type"])) return { type: "get_models" };
+
   if (value.type === "feature_command"
     && hasOnlyKeys(value, ["type", "leaseId", "feature", "command"])) {
     if (!isBoundedString(value.leaseId, 256) || value.feature !== "btw" || !isRecord(value.command)
@@ -204,20 +247,21 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
     return { type: "feature_command", leaseId: value.leaseId, feature: "btw", command: { type: value.command.type } };
   }
 
-  if (value.type === "prompt"
-    && hasOnlyKeys(value, ["type", "leaseId", "text"], ["deliverAs", "expandPromptTemplates"])) {
-    if (!isBoundedString(value.leaseId, 256)
-      || typeof value.text !== "string"
-      || value.text.trim().length === 0
+  if (value.type === "input"
+    && hasOnlyKeys(value, ["type", "text", "channel"], ["deliverAs", "images"])) {
+    const hasImages = Object.hasOwn(value, "images");
+    const images = parseImages(value.images);
+    if ((hasImages && !images) || typeof value.text !== "string"
       || Buffer.byteLength(value.text, "utf8") > MAX_PROMPT_BYTES
+      || (!value.text.trim() && !images?.length)
       || (value.deliverAs !== undefined && value.deliverAs !== "steer" && value.deliverAs !== "followUp")
-      || (value.expandPromptTemplates !== undefined && value.expandPromptTemplates !== false)) return undefined;
+      || (value.channel !== "web" && value.channel !== "terminal" && value.channel !== "chatapp" && value.channel !== "mobile")) return undefined;
     return {
-      type: "prompt",
-      leaseId: value.leaseId,
+      type: "input",
       text: value.text,
+      channel: value.channel,
+      ...(images ? { images } : {}),
       ...(value.deliverAs === undefined ? {} : { deliverAs: value.deliverAs }),
-      ...(value.expandPromptTemplates === undefined ? {} : { expandPromptTemplates: false }),
     };
   }
 
