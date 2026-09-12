@@ -1,5 +1,6 @@
 import {
   MAX_EVENT_BYTES,
+  MAX_IMAGE_BYTES,
   MAX_SNAPSHOT_BYTES,
   MAX_TOOL_OUTPUT_BYTES,
   type EventMessage,
@@ -19,6 +20,7 @@ const DEFAULT_STRING_LIMIT_BYTES = 512 * 1024;
 interface SanitizeState {
   readonly seen: WeakSet<object>;
   readonly maxStringBytes: number;
+  readonly maxImageBytes: number;
   truncated: boolean;
 }
 
@@ -45,6 +47,17 @@ function sanitize(value: unknown, state: SanitizeState, key?: string): JsonValue
   state.seen.add(value);
   if (Array.isArray(value)) return value.map((item) => sanitize(item, state));
 
+  const source = value as Record<string, unknown>;
+  if (source.type === "image" && typeof source.data === "string") {
+    const data = truncateUtf8(source.data, state.maxImageBytes);
+    if (data !== source.data) state.truncated = true;
+    return {
+      type: "image",
+      data,
+      mimeType: typeof source.mimeType === "string" ? source.mimeType : "application/octet-stream",
+    };
+  }
+
   const result: Record<string, JsonValue> = {};
   for (const [childKey, childValue] of Object.entries(value)) {
     if (typeof childValue === "undefined" || typeof childValue === "function" || typeof childValue === "symbol") continue;
@@ -56,8 +69,9 @@ function sanitize(value: unknown, state: SanitizeState, key?: string): JsonValue
 export function sanitizeJson(
   value: unknown,
   maxStringBytes = DEFAULT_STRING_LIMIT_BYTES,
+  maxImageBytes = MAX_IMAGE_BYTES,
 ): { readonly value: JsonValue; readonly truncated: boolean } {
-  const state: SanitizeState = { seen: new WeakSet(), maxStringBytes, truncated: false };
+  const state: SanitizeState = { seen: new WeakSet(), maxStringBytes, maxImageBytes, truncated: false };
   return { value: sanitize(value, state), truncated: state.truncated };
 }
 
