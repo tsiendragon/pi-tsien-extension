@@ -11,7 +11,7 @@ import { publishLiveFeature, registerLiveFeatureCommandHandler } from "../extens
 function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
   const commands = new Map<string, any>();
-  const sent: Array<{ text: string; options: unknown }> = [];
+  const sent: Array<{ content: unknown; options: unknown }> = [];
   const pi = {
     on(name: string, handler: (event: any, ctx: ExtensionContext) => any) {
       const list = handlers.get(name) || [];
@@ -19,12 +19,16 @@ function extensionHarness() {
       handlers.set(name, list);
     },
     registerCommand(name: string, command: unknown) { commands.set(name, command); },
-    sendUserMessage(text: string, options: unknown) { sent.push({ text, options }); },
+    registerTool() {},
+    sendUserMessage(content: unknown, options: unknown) { sent.push({ content, options }); },
+    setModel: async () => true,
+    setThinkingLevel() {},
+    getThinkingLevel: () => "high",
   } as unknown as ExtensionAPI;
   return { pi, handlers, commands, sent };
 }
 
-function context(state: { idle: boolean; aborted: boolean; notifications: string[] }): ExtensionContext {
+function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; notifications: string[] }): ExtensionContext {
   return {
     mode: "tui",
     cwd: "/mnt/workspace/lilong/repos/worktree/task-a",
@@ -38,6 +42,11 @@ function context(state: { idle: boolean; aborted: boolean; notifications: string
       getBranch: () => [{ type: "message", id: "m1", message: { role: "user", content: "hello" } }],
     },
     getContextUsage: () => ({ tokens: 20, contextWindow: 100, percent: 20 }),
+    modelRegistry: {
+      getAvailable: () => [{ provider: "test", id: "next", name: "Next", reasoning: true, contextWindow: 100, thinkingLevelMap: {} }],
+      find: () => ({ provider: "test", id: "next", name: "Next", reasoning: true, contextWindow: 100, thinkingLevelMap: {} }),
+    },
+    compact: () => { state.compacted = true; },
     isIdle: () => state.idle,
     abort: () => { state.aborted = true; },
     ui: { notify: (message: string) => state.notifications.push(message) },
@@ -48,15 +57,16 @@ function envelope(command: CommandEnvelope["command"], requestId = "request-a"):
   return { type: "command", requestId, processInstanceId: "process-a", command };
 }
 
-test("Live Session extension claims, injects prompts, gates TUI input, aborts, and releases locally", async () => {
+test("Live Session extension shares prompt input while keeping strong controls leased", async () => {
   const harness = extensionHarness();
   const state = { idle: true, aborted: false, notifications: [] as string[] };
   const ctx = context(state);
   let options: LiveSessionClientOptions | undefined;
   let started = false;
   let stopped = false;
+  const published: EventMessage[] = [];
   const handle: LiveSessionClientHandle = {
-    start: () => { started = true; }, publish: () => {}, sendSnapshot: () => {}, stop: () => { stopped = true; },
+    start: () => { started = true; }, publish: message => published.push(message), sendSnapshot: () => {}, stop: () => { stopped = true; },
   };
   registerLiveSessionExtension(harness.pi, {
     identity: { processInstanceId: "process-a", startedAt: 1 },
@@ -74,12 +84,27 @@ test("Live Session extension claims, injects prompts, gates TUI input, aborts, a
   assert.ok(leaseId);
 
   const input = harness.handlers.get("input")?.[0];
-  assert.deepEqual(await input?.({ source: "interactive", text: "blocked" }, ctx), { action: "handled" });
-  assert.deepEqual(await input?.({ source: "extension", text: "allowed" }, ctx), { action: "continue" });
+  assert.deepEqual(await input?.({ source: "interactive", text: "from terminal" }, ctx), { action: "handled" });
+  assert.deepEqual(await input?.({ source: "extension", text: "already queued" }, ctx), { action: "continue" });
+  assert.deepEqual(harness.sent, [{ content: "from terminal", options: { expandPromptTemplates: true } }]);
 
-  const prompt = await options!.executeCommand(envelope({ type: "prompt", leaseId, text: "from dashboard", expandPromptTemplates: false }, "request-prompt"));
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "from terminal" } }, ctx);
+  assert.equal((published.at(-1)?.event.data as any).channel, "terminal");
+  const prompt = await options!.executeCommand(envelope({ type: "input", text: "from dashboard", channel: "web" }, "request-prompt"));
   assert.equal(prompt.ok, true);
-  assert.deepEqual(harness.sent, [{ text: "from dashboard", options: { expandPromptTemplates: false } }]);
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "from dashboard" } }, ctx);
+  const imagePrompt = await options!.executeCommand(envelope({
+    type: "input",
+    text: "look at this",
+    channel: "web",
+    images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+  }, "request-image-prompt"));
+  assert.equal(imagePrompt.ok, true);
+  assert.deepEqual(harness.sent, [
+    { content: "from terminal", options: { expandPromptTemplates: true } },
+    { content: "from dashboard", options: { expandPromptTemplates: true } },
+    { content: [{ type: "text", text: "look at this" }, { type: "image", data: "aGVsbG8=", mimeType: "image/png" }], options: { expandPromptTemplates: true } },
+  ]);
 
   const featureCommands: unknown[] = [];
   const unregisterFeature = registerLiveFeatureCommandHandler("btw", async command => {
@@ -97,9 +122,46 @@ test("Live Session extension claims, injects prompts, gates TUI input, aborts, a
   assert.equal(state.aborted, true);
 
   await harness.commands.get("dashboard-release").handler("", ctx);
-  assert.deepEqual(await input?.({ source: "interactive", text: "allowed again" }, ctx), { action: "continue" });
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "from dashboard" } }, ctx);
+  assert.deepEqual(await input?.({ source: "interactive", text: "still shared" }, ctx), { action: "handled" });
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
   assert.equal(stopped, true);
+});
+
+test("Live Session extension executes model and context controls", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, compacted: false, notifications: [] as string[] };
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => {
+      options = value;
+      return { start() {}, publish() {}, sendSnapshot() {}, stop() {} };
+    },
+  });
+  const ctx = context(state);
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const models = await options!.executeCommand(envelope({ type: "get_models" }, "request-models"));
+  assert.equal(models.ok, true);
+  assert.equal((models as any).result.models[0].id, "next");
+  const claimed = await options!.executeCommand(envelope({ type: "claim", browserClientId: "browser-a", requestedLeaseMs: 30_000 }, "request-claim"));
+  const leaseId = claimed.ok ? String((claimed as any).result.leaseId) : "";
+  assert.ok(leaseId);
+  const compact = await options!.executeCommand(envelope({ type: "input", text: "/compact", channel: "web" }, "request-compact"));
+  assert.equal(compact.ok, true);
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/compact" } }, ctx);
+  const clear = await options!.executeCommand(envelope({ type: "input", text: "/clear", channel: "web" }, "request-clear"));
+  assert.equal(clear.ok, true);
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/clear" } }, ctx);
+  const model = await options!.executeCommand(envelope({ type: "input", text: "/model test/next", channel: "web" }, "request-model"));
+  assert.equal(model.ok, true);
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/model test/next" } }, ctx);
+  assert.deepEqual(harness.sent, [
+    { content: "/compact", options: { expandPromptTemplates: true } },
+    { content: "/clear", options: { expandPromptTemplates: true } },
+    { content: "/model test/next", options: { expandPromptTemplates: true } },
+  ]);
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
 test("Live Session extension does not publish hidden goal context messages", async () => {
@@ -117,6 +179,31 @@ test("Live Session extension does not publish hidden goal context messages", asy
   await harness.handlers.get("message_end")?.[0]({ message: { role: "assistant", content: "visible" } }, ctx);
   assert.equal(published.filter(message => message.event.type.startsWith("message_")).length, 1);
   assert.equal((published.at(-1)?.event.data as any).message.content, "visible");
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("Live Session extension echoes the input channel on injected user messages", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => {
+      options = value;
+      return { start() {}, publish: message => published.push(message), sendSnapshot() {}, stop() {} };
+    },
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  const prompt = await options!.executeCommand(envelope({ type: "input", text: "hi from chatapp", channel: "chatapp" }, "request-prompt"));
+  assert.equal(prompt.ok, true);
+
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "hi from chatapp" } }, ctx);
+  const userMessage = published.find(message => message.event.type === "message_end" && (message.event.data as any).message?.role === "user");
+  assert.ok(userMessage);
+  assert.equal((userMessage!.event.data as any).channel, "chatapp");
+
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import { LiveSessionClient, type LiveSessionClientOptions } from "./live-session/client.ts";
 import { LeaseError, LeaseManager, type LeaseSnapshot } from "./live-session/lease.ts";
 import { SnapshotProjector } from "./live-session/projector.ts";
@@ -10,6 +11,7 @@ import {
   type CommandExecutionResult,
   type EventMessage,
   type JsonObject,
+  type LiveSessionInputChannel,
   type LiveSessionMode,
   type LiveSessionSummaryBase,
 } from "./live-session/protocol.ts";
@@ -22,9 +24,40 @@ type PendingFeatureSnapshot = {
   ctx: ExtensionContext;
 };
 
+type QueuedInput = {
+  channel: LiveSessionInputChannel;
+  text: string;
+  images?: InputEvent["images"];
+  deliverAs?: "steer" | "followUp";
+  expandPromptTemplates: boolean;
+};
+
 interface ProcessIdentity {
   readonly processInstanceId: string;
   readonly startedAt: number;
+}
+
+interface SessionLineage {
+  readonly role: "main" | "subagent";
+  readonly parentSessionId?: string;
+  readonly parentToolCallId?: string;
+  readonly subagentWorkId?: string;
+}
+
+function sessionLineage(): SessionLineage {
+  if (process.env.PI_SUBAGENT_WORKBENCH_CHILD !== "1") return { role: "main" };
+  try {
+    const raw = JSON.parse(process.env.PI_TRACE_CONTEXT || "{}") as Record<string, unknown>;
+    const bounded = (value: unknown): string | undefined => typeof value === "string" && value.length > 0 ? value.slice(0, 512) : undefined;
+    return {
+      role: "subagent",
+      ...(bounded(raw.parentSessionId) ? { parentSessionId: bounded(raw.parentSessionId) } : {}),
+      ...(bounded(raw.parentToolCallId) ? { parentToolCallId: bounded(raw.parentToolCallId) } : {}),
+      ...(bounded(raw.workId) ? { subagentWorkId: bounded(raw.workId) } : {}),
+    };
+  } catch {
+    return { role: "subagent" };
+  }
 }
 
 export interface LiveSessionClientHandle {
@@ -83,6 +116,7 @@ export function registerLiveSessionExtension(
   options: LiveSessionExtensionOptions = {},
 ): void {
   const identity = options.identity ?? processIdentity();
+  const lineage = sessionLineage();
   const createClient = options.createClient ?? ((clientOptions) => new LiveSessionClient(clientOptions));
   let currentContext: ExtensionContext | undefined;
   let client: LiveSessionClientHandle | undefined;
@@ -92,6 +126,8 @@ export function registerLiveSessionExtension(
   let featureCleanup: (() => void) | undefined;
   let featurePublishTimer: ReturnType<typeof setTimeout> | undefined;
   const pendingFeatureSnapshots = new Map<string, PendingFeatureSnapshot>();
+  const inputQueue: QueuedInput[] = [];
+  let activeInput: QueuedInput | undefined;
   let lastActivityAt = identity.startedAt;
 
   const clientIsReady = (): boolean => {
@@ -106,6 +142,30 @@ export function registerLiveSessionExtension(
     if (!projector || !currentClient || (currentClient.isReady && !currentClient.isReady())) return;
     const event = projector.createEvent(type, data);
     currentClient.publish(event);
+  };
+
+  const drainInputQueue = (): void => {
+    if (activeInput || !currentContext) return;
+    const next = inputQueue.shift();
+    if (!next) return;
+    activeInput = next;
+    const content: Parameters<ExtensionAPI["sendUserMessage"]>[0] = next.images?.length
+      ? [{ type: "text", text: next.text }, ...next.images]
+      : next.text;
+    pi.sendUserMessage(content, {
+      ...(next.deliverAs ? { deliverAs: next.deliverAs } : {}),
+      expandPromptTemplates: next.expandPromptTemplates,
+    });
+  };
+
+  const enqueueInput = (input: QueuedInput): void => {
+    inputQueue.push(input);
+    drainInputQueue();
+  };
+
+  const clearInputQueue = (): void => {
+    inputQueue.length = 0;
+    activeInput = undefined;
   };
 
   const clearFeaturePublishQueue = (): void => {
@@ -156,6 +216,7 @@ export function registerLiveSessionExtension(
     return {
       processInstanceId: identity.processInstanceId,
       sessionId: ctx.sessionManager.getSessionId(),
+      ...lineage,
       ...(ctx.sessionManager.getSessionFile() ? { sessionFile: ctx.sessionManager.getSessionFile() } : {}),
       ...(ctx.sessionManager.getSessionName() ? { sessionName: ctx.sessionManager.getSessionName() } : {}),
       pid: process.pid,
@@ -182,6 +243,22 @@ export function registerLiveSessionExtension(
     };
   };
 
+  pi.registerTool({
+    name: "set_session_title",
+    label: "Set session title",
+    description: "Set a short natural-language title for the current Pi session. Use this when the user's main goal becomes clear or changes. Keep it under 80 characters.",
+    promptSnippet: "Set the current session's short display title.",
+    parameters: Type.Object({
+      title: Type.String({ minLength: 1, maxLength: 80, description: "Short natural-language session title" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const title = params.title.trim().slice(0, 80);
+      if (!title) return { content: [{ type: "text", text: "session title must not be empty" }], details: { code: "invalid_title" }, isError: true };
+      pi.setSessionName(title);
+      return { content: [{ type: "text", text: `Session title set: ${title}` }], details: { title } };
+    },
+  });
+
   const executeCommand = async (envelope: CommandEnvelope): Promise<CommandExecutionResult> => {
     const ctx = currentContext;
     if (!ctx) return commandError("session_unavailable", "Session context is unavailable");
@@ -197,19 +274,17 @@ export function registerLiveSessionExtension(
         const released = lease.release(command.leaseId, "remote_release");
         return { ok: true, result: { released } };
       }
-      if (command.type === "prompt") {
-        lease.assertLease(command.leaseId);
-        if (ctx.isIdle()) {
-          pi.sendUserMessage(command.text, { expandPromptTemplates: false });
-        } else {
-          if (!command.deliverAs) {
-            return commandError("deliver_as_required", "Running sessions require steer or followUp delivery");
-          }
-          pi.sendUserMessage(command.text, {
-            deliverAs: command.deliverAs,
-            expandPromptTemplates: false,
-          });
-        }
+      if (command.type === "input") {
+        // 统一输入模型：与 TUI 逐字等价，命令/skill/template 统一展开。
+        // running 且未显式指定交付方式时，默认 followUp 排队（等价 TUI 运行中继续输入）。
+        const deliverAs = command.deliverAs ?? (!ctx.isIdle() ? "followUp" : undefined);
+        enqueueInput({
+          channel: command.channel,
+          text: command.text,
+          ...(command.images?.length ? { images: command.images.map(image => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })) } : {}),
+          ...(deliverAs ? { deliverAs } : {}),
+          expandPromptTemplates: true,
+        });
         return { ok: true, result: { accepted: true } };
       }
       if (command.type === "abort") {
@@ -217,6 +292,23 @@ export function registerLiveSessionExtension(
         if (ctx.isIdle()) return { ok: true, result: { aborted: false, reason: "idle" } };
         ctx.abort();
         return { ok: true, result: { aborted: true } };
+      }
+      if (command.type === "set_session_name") {
+        const name = command.name.trim().slice(0, 80);
+        if (!name) return commandError("invalid_title", "session title must not be empty");
+        pi.setSessionName(name);
+        return { ok: true, result: { name } };
+      }
+      if (command.type === "get_models") {
+        const models = ctx.modelRegistry.getAvailable().map(model => ({
+          provider: model.provider,
+          id: model.id,
+          name: model.name,
+          reasoning: model.reasoning,
+          contextWindow: model.contextWindow,
+          thinkingLevels: Object.keys(model.thinkingLevelMap || {}),
+        }));
+        return { ok: true, result: { models } };
       }
       if (command.type === "feature_command") {
         lease.assertLease(command.leaseId);
@@ -231,11 +323,11 @@ export function registerLiveSessionExtension(
   };
 
   pi.registerCommand("dashboard-release", {
-    description: "立即归还 Dashboard 对当前 session 的控制权",
+    description: "立即释放 Dashboard 对当前 session 的强控制权限",
     handler: async (_args, ctx) => {
       const released = lease.release(undefined, "local_release");
       ctx.ui.notify(
-        released ? "已收回 Dashboard 控制权。" : "当前 session 未被 Dashboard 接管。",
+        released ? "已释放 Dashboard 强控制权限。" : "当前 session 没有 Dashboard 强控制权限。",
         "info",
       );
     },
@@ -254,6 +346,7 @@ export function registerLiveSessionExtension(
     featureCleanup?.();
     featureCleanup = undefined;
     clearFeaturePublishQueue();
+    clearInputQueue();
     lease.release(undefined, "session_switch");
     projector = new SnapshotProjector({
       processInstanceId: identity.processInstanceId,
@@ -320,7 +413,21 @@ export function registerLiveSessionExtension(
     }, ctx);
   });
   pi.on("message_end", (event, ctx) => {
-    if (isVisibleMessage(event.message)) publish("message_end", { message: event.message }, ctx);
+    if (!isVisibleMessage(event.message)) return;
+    const record = event.message as unknown as Record<string, unknown>;
+    const completedInput = record.role === "user" ? activeInput : undefined;
+    if (completedInput) activeInput = undefined;
+    const entries = typeof ctx.sessionManager.getEntries === "function" ? ctx.sessionManager.getEntries() : [];
+    const entryId = record.role === "user" ? undefined : [...entries].reverse().find(entry => {
+      const candidate = entry as unknown as Record<string, unknown>;
+      return candidate.type === "message" && candidate.message === event.message && typeof candidate.id === "string";
+    }) as unknown as Record<string, unknown> | undefined;
+    publish("message_end", {
+      message: event.message,
+      ...(completedInput ? { channel: completedInput.channel } : {}),
+      ...(entryId?.id ? { entryId: entryId.id } : {}),
+    }, ctx);
+    if (completedInput) queueMicrotask(drainInputQueue);
   });
   pi.on("tool_execution_start", (event, ctx) => publish("tool_execution_start", event, ctx));
   pi.on("tool_execution_update", (event, ctx) => publish("tool_execution_update", event, ctx));
@@ -339,13 +446,14 @@ export function registerLiveSessionExtension(
 
   pi.on("input", (event, ctx) => {
     currentContext = ctx;
-    if (!lease.isClaimed() || event.source === "extension") return { action: "continue" };
-    if (event.source === "interactive") {
-      ctx.ui.notify(
-        "当前 session 由 Dashboard 控制；输入 /dashboard-release 可收回控制权",
-        "warning",
-      );
-    }
+    if (event.source !== "interactive") return { action: "continue" };
+    enqueueInput({
+      channel: "terminal",
+      text: event.text,
+      ...(event.images?.length ? { images: event.images } : {}),
+      ...(event.streamingBehavior ? { deliverAs: event.streamingBehavior } : {}),
+      expandPromptTemplates: true,
+    });
     return { action: "handled" };
   });
 
@@ -354,6 +462,7 @@ export function registerLiveSessionExtension(
     featureCleanup?.();
     featureCleanup = undefined;
     clearFeaturePublishQueue();
+    clearInputQueue();
     client?.stop(event.reason === "quit" ? "session_shutdown" : "session_switch");
     client = undefined;
     projector = undefined;
