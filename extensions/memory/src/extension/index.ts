@@ -249,9 +249,8 @@ function registerTools(pi: PiExtensionAPI, ensure: (ctx: ExtensionContext) => Pr
     name: "memory_remember",
     label: "Remember",
     approval: "write",
-    description: "Persist an explicit user preference or project decision. Agent inference is stored as candidate and never auto-recalled.",
+    description: "Persist an explicit user preference or project decision. Agent inference is stored as candidate and never auto-recalled. Only call after the user asks to remember or establishes a durable preference/decision. Never store secrets, credentials, tokens, or source-code/log bodies.",
     promptSnippet: "Save an explicit memory with scope isolation",
-    promptGuidelines: ["Only call after the user asks to remember or establishes a durable preference/decision.", "Never store secrets, credentials, tokens, or source-code/log bodies."],
     parameters: Type.Object({ content: Type.String({ description: "Short durable fact, preference, or decision" }), scope: Type.Optional(Type.Union([Type.Literal("global"), Type.Literal("repository"), Type.Literal("branch"), Type.Literal("session")])) }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("Cancelled");

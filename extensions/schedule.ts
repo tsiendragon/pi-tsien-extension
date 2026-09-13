@@ -261,12 +261,8 @@ export default function scheduleExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "schedule",
 		label: "Schedule",
-		description: "Create, list, or cancel current-session one-shot and recurring tasks. Use it proactively for periodic execution, long-running work monitoring, background-job follow-up, retries, or progress checks; due tasks send their instruction back to the agent.",
+		description: "Create, list, or cancel current-session one-shot and recurring tasks. Use it proactively for periodic execution, long-running work monitoring, background-job follow-up, retries, or progress checks; due tasks send their instruction back to the agent. Do not use schedule for work that can be completed immediately or for aggressive polling; choose a practical interval, avoid duplicate tasks, and cancel recurring tasks once their purpose is complete.",
 		promptSnippet: "Proactively schedule current-session periodic work, long-running monitoring, follow-ups, retries, or progress checks",
-		promptGuidelines: [
-			"Use schedule proactively, without waiting for an explicit user request, when periodic execution, monitoring long-running work, checking background jobs, retrying later, or reporting progress would materially help complete the current goal.",
-			"Do not use schedule for work that can be completed immediately or for aggressive polling; choose a practical interval, avoid duplicate tasks, and cancel recurring tasks once their purpose is complete.",
-		],
 		parameters: Type.Object({
 			action: StringEnum(["create", "list", "cancel"] as const),
 			title: Type.Optional(Type.String({ minLength: 1 })),
