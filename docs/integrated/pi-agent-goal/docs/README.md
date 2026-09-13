@@ -31,7 +31,7 @@ Use these docs when you need more detail:
 - Hidden active-goal context and `session_before_compact` preservation.
 - Compact active-goal widget, Powerline progress status, readable `/goal status`, blocker overlay/Markdown fallback, actionable errors, and concise tool renderers.
 - Default-on local-fork continuation (explicitly disable with `--goal-continuation=false`); Pi's `agent_settled` event finalizes state but never queues a new turn.
-- Default-on 30-minute silence watchdog, the sole automatic wake-up path, using the concise `继续目标` prompt.
+- Default-on periodic continuation: an active goal queues the concise `继续目标` prompt every 20 minutes by default; configure its positive interval or disable it explicitly.
 - Branch-canonical work items/blockers plus a user-private rebuildable SQLite ledger for audit and reports.
 
 ## Verification

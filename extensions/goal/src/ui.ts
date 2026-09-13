@@ -116,6 +116,7 @@ export function renderGoalSummary(goal: GoalState): string {
 		`Progress: ${goal.progress.lastSummary || "No progress recorded yet."}`,
 	];
 
+	if (goal.pausedReason) lines.push(`Paused reason: ${goal.pausedReason}`);
 	if (goal.progress.current) lines.push(`Current: ${goal.progress.current}`);
 	if (goal.progress.blocked.length > 0) lines.push(`Blocked: ${goal.progress.blocked.length} item(s)`);
 	if (goal.acceptanceCriteria.length > 0) lines.push(`Acceptance: ${goal.acceptanceCriteria.length} item(s)`);

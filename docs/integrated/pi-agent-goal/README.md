@@ -108,11 +108,11 @@ Active goals inject a short hidden `goal-context` before agent turns. Compaction
 
 `/goal start` and `--start` queue one explicit handoff. They do not enable background work.
 
-This local fork enables automatic continuation by default. Disable it explicitly with `--goal-continuation=false`; `--goal-continuation` remains compatible. `agent_settled` only finalizes continuation state after Pi has finished retries, auto-compaction retries, and queued messages; it never queues another turn by itself, so Esc does not immediately restart the agent.
+This local fork enables automatic continuation by default. Disable it with `--goal-continuation=false`; `--goal-continuation` remains compatible. `agent_settled` syncs continuation state after Pi finishes retries and queued messages; it never queues another turn by itself, so Esc does not immediately restart the agent.
 
-The default-on silence watchdog is the only automatic wake-up path. If the current branch receives no new session entry for 30 minutes, the parent agent is idle, no messages are pending, and the normal continuation gates pass, it queues the four-character prompt `继续目标`. Detailed state still arrives through the hidden `goal-context`. UI-only notifications such as `EagleEye task settled` do not reset the timer. Disable the watchdog with `--goal-continuation-watchdog=false` or change the threshold with `--goal-continuation-watchdog-silence-minutes <n>`.
+When a session starts with an active goal, a periodic timer queues the four-character prompt `继续目标` every 20 minutes by default. Configure a positive interval with `--goal-continuation-interval-minutes <n>`. Only one follow-up may be queued for a goal at once; its input clears that queue so the next interval can continue. Pause, complete, clear, disable, or session shutdown stops future periodic follow-ups. This is intentionally periodic, not a silence watchdog: it does not use idle or pending-message state as a trigger.
 
-A goal owns work items and structured blockers. A hard blocker affects only its related items, so independent ready work can continue. The scheduler defaults to no wall-clock budget (0 disables) with no turn cap, while retaining consecutive-no-progress safety limits; it reconstructs its counters from branch custom entries after reload and stops with a persisted Markdown report when all paths are blocked. Set `--goal-continuation-max-turns <n>` to add a positive turn cap or `--goal-continuation-max-duration-hours <n>` to add a wall-clock budget. The session entries remain canonical; a user-private SQLite materialized ledger at `~/.pi/agent/pi-goal.sqlite` supports restart audit and report storage without deciding branch state.
+A goal owns work items and structured blockers. A hard blocker affects only its related items, so independent ready work can continue when the agent is invoked. Session entries remain canonical; a user-private SQLite materialized ledger at `~/.pi/agent/pi-goal.sqlite` supports restart audit and report storage without deciding branch state.
 
 ## Known Codex parity gaps
 
@@ -137,7 +137,7 @@ Live TUI smoke for `/compact`, `/reload`, `/resume`, `/tree`, `/fork`, and the v
 | `/goal edit` fails                       | The editor is interactive-only. Use `/goal <objective> --replace` instead.                                                                          |
 | Draft queued but no review appears       | The chat agent must call `propose_goal_draft`. A prose answer saves nothing.                                                                        |
 | `review_ui_unavailable`                  | Run the review path in the Pi TUI, or use an explicitly approved `create_goal` request.                                                             |
-| Continuation does not start              | Keep the goal active, wait for idle, ensure no user messages are pending, and check the continuation/watchdog flags and recorded stop reason.       |
+| Continuation does not start              | Keep the goal active, confirm `--goal-continuation` is not false, check `--goal-continuation-interval-minutes`, and wait for the next interval. |
 | Goal looks stale after branch navigation | Run `/goal status`; state is reconstructed from the selected branch.                                                                                |
 
 ## Local verification
