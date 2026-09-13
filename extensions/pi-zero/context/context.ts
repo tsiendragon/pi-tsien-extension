@@ -3,7 +3,7 @@ import {
 	type ExtensionCommandContext,
 	estimateTokens,
 } from "@earendil-works/pi-coding-agent";
-import { readDefaultSystemPrompt, replaceSystemPromptIntro } from "../../default-system-prompt.ts";
+import { adjustGuidelinesSection, readDefaultSystemPrompt, replaceSystemPromptIntro } from "../../default-system-prompt.ts";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	showTextPreview,
@@ -89,7 +89,9 @@ async function collectContextBreakdown(ctx: ExtensionCommandContext): Promise<Co
 	let systemPrompt = baseSystemPrompt;
 	try {
 		const customIntro = await readDefaultSystemPrompt();
-		systemPrompt = replaceSystemPromptIntro(baseSystemPrompt, customIntro) ?? baseSystemPrompt;
+		systemPrompt = adjustGuidelinesSection(
+			replaceSystemPromptIntro(baseSystemPrompt, customIntro) ?? baseSystemPrompt,
+		);
 	} catch {
 		// Match the runtime extension: a missing or unreadable custom file leaves Pi's prompt unchanged.
 	}
