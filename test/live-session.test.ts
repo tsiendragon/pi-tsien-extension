@@ -147,20 +147,15 @@ test("Live Session extension executes model and context controls", async () => {
   const claimed = await options!.executeCommand(envelope({ type: "claim", browserClientId: "browser-a", requestedLeaseMs: 30_000 }, "request-claim"));
   const leaseId = claimed.ok ? String((claimed as any).result.leaseId) : "";
   assert.ok(leaseId);
-  const compact = await options!.executeCommand(envelope({ type: "input", text: "/compact", channel: "web" }, "request-compact"));
+  const compact = await options!.executeCommand(envelope({ type: "compact", leaseId }, "request-compact"));
   assert.equal(compact.ok, true);
-  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/compact" } }, ctx);
+  assert.equal(state.compacted, true);
+  const model = await options!.executeCommand(envelope({ type: "set_model", provider: "test", modelId: "next" }, "request-set-model"));
+  assert.equal(model.ok, true);
   const clear = await options!.executeCommand(envelope({ type: "input", text: "/clear", channel: "web" }, "request-clear"));
   assert.equal(clear.ok, true);
   await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/clear" } }, ctx);
-  const model = await options!.executeCommand(envelope({ type: "input", text: "/model test/next", channel: "web" }, "request-model"));
-  assert.equal(model.ok, true);
-  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/model test/next" } }, ctx);
-  assert.deepEqual(harness.sent, [
-    { content: "/compact", options: { expandPromptTemplates: true } },
-    { content: "/clear", options: { expandPromptTemplates: true } },
-    { content: "/model test/next", options: { expandPromptTemplates: true } },
-  ]);
+  assert.deepEqual(harness.sent, [{ content: "/clear", options: { expandPromptTemplates: true } }]);
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
