@@ -3,7 +3,6 @@ import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import vm from "node:vm";
 
-const SUPPORTED_TOOLS = new Set(["read", "find", "grep", "ls", "write", "run"]);
 let allowedTools = new Set(["read", "find", "grep", "ls"]);
 const pendingCalls = new Map();
 let started = false;
@@ -159,7 +158,9 @@ async function runProgram(message) {
     ? message.maxComputeTimeMs
     : maxComputeTimeMs;
   if (Array.isArray(message.allowedTools)) {
-    allowedTools = new Set(message.allowedTools.filter((name) => typeof name === "string" && SUPPORTED_TOOLS.has(name)));
+    allowedTools = new Set(message.allowedTools.filter(
+      (name) => typeof name === "string" && name.length > 0 && name !== "then" && name !== "run_code",
+    ));
   }
   const code = typeof message.code === "string" ? message.code : "";
   if (!code.trim()) throw new Error("PTC program is empty");
