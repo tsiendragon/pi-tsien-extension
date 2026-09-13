@@ -126,14 +126,9 @@ export function registerChildMultiTool(pi: ExtensionAPI): void {
     name: CHILD_MULTI_TOOL_NAME,
     label: "multi_tool_use.parallel",
     description:
-      "Execute up to eight independent active Pi tool calls concurrently and return results in input order. Calls still pass through Pi validation, security hooks, lifecycle events, and abort handling.",
+      "Execute up to eight independent active Pi tool calls concurrently and return results in input order. Calls still pass through Pi validation, security hooks, lifecycle events, and abort handling. Use multi_tool_use_parallel when two or more tool calls are independent; keep dependent calls sequential. Pass the exact active Pi tool name in recipient_name (for example read or bash); functions.read is accepted for compatibility. Do not parallelize writes to the same path, dependent edits, authorization decisions, or irreversible operations.",
     promptSnippet:
       "multi_tool_use_parallel: run independent active tool calls concurrently",
-    promptGuidelines: [
-      "Use multi_tool_use_parallel when two or more tool calls are independent; keep dependent calls sequential.",
-      "Pass the exact active Pi tool name in recipient_name (for example read or bash); functions.read is accepted for compatibility.",
-      "Do not parallelize writes to the same path, dependent edits, authorization decisions, or irreversible operations.",
-    ],
     // Serialize outer aggregators so sequential nested tools cannot overlap across batches.
     // Independent calls inside one allowed batch still run concurrently below.
     executionMode: "sequential",
