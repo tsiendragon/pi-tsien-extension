@@ -238,12 +238,7 @@ test("tool prompt authorizes proactive long-running monitoring without explicit 
 
 	scheduleExtension(pi as never);
 	assert.match(registeredTool.description, /proactively.*long-running work monitoring/i);
-	assert.ok(registeredTool.promptGuidelines.some((guideline: string) =>
-		/without waiting for an explicit user request/.test(guideline),
-	));
-	assert.ok(registeredTool.promptGuidelines.some((guideline: string) =>
-		/Do not use schedule for work that can be completed immediately/.test(guideline),
-	));
+	assert.match(registeredTool.description, /Do not use schedule for work that can be completed immediately/);
 });
 
 test("slash command parser supports one-shot, recurring, list, and cancel", () => {

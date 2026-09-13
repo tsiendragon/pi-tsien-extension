@@ -99,12 +99,8 @@ export function registerBackgroundCommandTools(
   pi.registerTool({
     name: "background_command_start",
     label: "Start background command",
-    description: "Start a user-requested Bash command in the background and return its task ID. Use ordinary bash otherwise.",
+    description: "Start a user-requested Bash command in the background and return its task ID. Use ordinary bash otherwise. Set a timeout for tests and builds; omit it only for long-lived servers. Use the returned task ID with the background status, output, or cancel tools; do not manage its PID directly.",
     promptSnippet: "Start a requested Bash command in the background.",
-    promptGuidelines: [
-      "Set a timeout for tests and builds; omit it only for long-lived servers.",
-      "Use the returned task ID with the background status, output, or cancel tools; do not manage its PID directly.",
-    ],
     parameters: Type.Object({
       command: Type.String({ minLength: 1, description: "Bash command to execute in the current Agent working directory" }),
       title: Type.Optional(Type.String({ maxLength: MAX_BACKGROUND_TITLE_LENGTH, description: "Optional short human-readable label shown in the task UI" })),
