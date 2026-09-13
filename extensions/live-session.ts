@@ -310,6 +310,22 @@ export function registerLiveSessionExtension(
         }));
         return { ok: true, result: { models } };
       }
+      if (command.type === "set_model") {
+        const model = ctx.modelRegistry.find(command.provider, command.modelId);
+        if (!model) return commandError("model_not_found", `${command.provider}/${command.modelId} is not available`);
+        const changed = await pi.setModel(model);
+        return changed ? { ok: true, result: { provider: command.provider, modelId: command.modelId } } : commandError("model_not_changed", "model was not changed");
+      }
+      if (command.type === "compact") {
+        lease.assertLease(command.leaseId);
+        if (!ctx.isIdle()) return commandError("session_busy", "wait for the current response before compacting");
+        ctx.compact();
+        return { ok: true, result: { compacting: true } };
+      }
+      if (command.type === "reload") {
+        pi.sendUserMessage("/reload", { expandPromptTemplates: true, ...(ctx.isIdle() ? {} : { deliverAs: "followUp" }) });
+        return { ok: true, result: { reloading: true } };
+      }
       if (command.type === "feature_command") {
         lease.assertLease(command.leaseId);
         const result = await dispatchLiveFeatureCommand(command.feature, command.command);

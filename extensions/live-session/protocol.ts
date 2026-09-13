@@ -88,6 +88,9 @@ export type LiveSessionCommand =
   | { readonly type: "abort"; readonly leaseId: string }
   | { readonly type: "set_session_name"; readonly name: string }
   | { readonly type: "get_models" }
+  | { readonly type: "set_model"; readonly provider: string; readonly modelId: string }
+  | { readonly type: "compact"; readonly leaseId: string }
+  | { readonly type: "reload" }
   | {
       readonly type: "feature_command";
       readonly leaseId: string;
@@ -238,6 +241,18 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
   }
 
   if (value.type === "get_models" && hasOnlyKeys(value, ["type"])) return { type: "get_models" };
+
+  if (value.type === "set_model" && hasOnlyKeys(value, ["type", "provider", "modelId"])) {
+    if (!isBoundedString(value.provider, 512) || !isBoundedString(value.modelId, 1024)) return undefined;
+    return { type: "set_model", provider: value.provider, modelId: value.modelId };
+  }
+
+  if (value.type === "compact" && hasOnlyKeys(value, ["type", "leaseId"])) {
+    if (!isBoundedString(value.leaseId, 256)) return undefined;
+    return { type: "compact", leaseId: value.leaseId };
+  }
+
+  if (value.type === "reload" && hasOnlyKeys(value, ["type"])) return { type: "reload" };
 
   if (value.type === "feature_command"
     && hasOnlyKeys(value, ["type", "leaseId", "feature", "command"])) {
