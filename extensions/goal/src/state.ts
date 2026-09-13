@@ -91,11 +91,18 @@ export function reduceGoalState(current: GoalState | null, event: GoalStateEvent
 		}
 		case "pause": {
 			if (!isCurrentGoal(current, event.goalId) || current.status !== "active") return current;
-			return { ...current, status: "paused", updatedAt: event.now, completedAt: undefined };
+			return {
+				...current,
+				status: "paused",
+				pausedReason: event.reason?.trim() || undefined,
+				updatedAt: event.now,
+				completedAt: undefined,
+			};
 		}
 		case "resume": {
 			if (!isCurrentGoal(current, event.goalId) || current.status !== "paused") return current;
-			return { ...current, status: "active", updatedAt: event.now, completedAt: undefined };
+			const { pausedReason: _pausedReason, ...activeGoal } = current;
+			return { ...activeGoal, status: "active", updatedAt: event.now, completedAt: undefined };
 		}
 		case "clear":
 			return isCurrentGoal(current, event.goalId) ? null : current;
@@ -454,6 +461,7 @@ function isGoalState(value: unknown): value is GoalState {
 		typeof value.createdAt === "number" &&
 		typeof value.updatedAt === "number" &&
 		(value.completedAt === undefined || typeof value.completedAt === "number") &&
+		(value.pausedReason === undefined || typeof value.pausedReason === "string") &&
 		(value.owner === "user" || value.owner === "model")
 	);
 }

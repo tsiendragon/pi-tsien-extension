@@ -74,6 +74,12 @@ export const completeGoalParams = Type.Object(
 	},
 	{ additionalProperties: false },
 );
+export const pauseGoalParams = Type.Object(
+	{
+		reason: Type.String({ description: "Concrete reason the agent cannot safely continue the active goal." }),
+	},
+	{ additionalProperties: false },
+);
 export const updateGoalProgressParams = Type.Object(
 	{
 		done: Type.Optional(Type.Array(Type.String(), { description: "Completed progress items." })),
@@ -166,17 +172,16 @@ export const proposeGoalDraftPromptSnippet =
 	"Use propose_goal_draft to draft a reviewable /goal proposal exactly once; do not persist it directly.";
 
 export const proposeGoalDraftPromptGuidelines = [
-	"Use propose_goal_draft for plain /goal drafting turns that need user review before anything is saved.",
 	"Preserve the user's meaning and boundaries; do not invent unrelated scope or silently drop constraints.",
-	"Provide objective and editable acceptanceCriteria with concrete completion checks directly implied by the request; include description only as optional non-persisted context metadata.",
-	"Do not leave acceptanceCriteria empty for the drafting flow; if details are uncertain, make the uncertainty explicit rather than creating unrelated checks.",
-	"Call propose_goal_draft exactly once instead of replying with the draft in prose.",
-	"Do not use create_goal for this flow: create_goal persists an already-approved goal after explicit authorization, while propose_goal_draft only opens review.",
+	"Provide objective, editable acceptanceCriteria with concrete completion checks implied by the request; description is optional non-persisted context.",
+	"Do not leave acceptanceCriteria empty; if details are uncertain, state the uncertainty rather than creating unrelated checks.",
+	"Call it once instead of replying with the draft in prose. Use create_goal only for an already-authorized new goal.",
 ] as const;
 
 export type CreateGoalToolInput = Static<typeof createGoalParams>;
 export type ProposeGoalDraftToolInput = Static<typeof proposeGoalDraftParams>;
 export type CompleteGoalToolInput = Static<typeof completeGoalParams>;
+export type PauseGoalToolInput = Static<typeof pauseGoalParams>;
 export type UpdateGoalProgressToolInput = Static<typeof updateGoalProgressParams>;
 export type UpdateGoalGraphToolInput = Static<typeof updateGoalGraphParams>;
 
@@ -202,9 +207,6 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		description: "Get the current long-running goal state and source paths.",
 		promptSnippet:
 			"Use get_goal to read the current /goal state, status, progress, acceptance criteria, and source paths.",
-		promptGuidelines: [
-			"Use get_goal when you need the current long-running objective before acting on goal state.",
-		],
 		parameters: getGoalParams,
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			return executeGetGoal(ctx as GoalToolContext);
@@ -218,11 +220,8 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "create_goal",
 		label: "Create Goal",
 		description:
-			"Create a goal only when explicitly requested by the user or system/developer instructions. Refuses if a goal exists.",
+			"Create a goal only when explicitly requested by the user or system/developer instructions. Refuses if a goal exists. For drafts use propose_goal_draft; never rewrite an existing goal.",
 		promptSnippet: "Use create_goal to persist a user-approved /goal only when no goal exists.",
-		promptGuidelines: [
-			"Use create_goal only for an explicitly approved new goal; use propose_goal_draft for drafts and never rewrite an existing goal.",
-		],
 		parameters: createGoalParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executeCreateGoal(params as CreateGoalToolInput, ctx as GoalToolContext, pi);
@@ -245,9 +244,9 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "propose_goal_draft",
 		label: "Propose Goal Draft",
 		description:
-			"Open a structured /goal draft for user review. Saves only after the user chooses Start in the review UI.",
+			"Open a structured /goal draft for user review. Saves only after the user chooses Start in the review UI. " +
+			proposeGoalDraftPromptGuidelines.join(" "),
 		promptSnippet: proposeGoalDraftPromptSnippet,
-		promptGuidelines: [...proposeGoalDraftPromptGuidelines],
 		parameters: proposeGoalDraftParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executeProposeGoalDraft(params as ProposeGoalDraftToolInput, ctx as GoalToolContext, pi);
@@ -262,11 +261,8 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "complete_goal",
 		label: "Complete Goal",
 		description:
-			"Mark the active goal complete only when the objective is achieved and no required work remains.",
+			"Mark the active goal complete only when the objective is achieved and no required work remains. It cannot pause, resume, or rewrite the objective.",
 		promptSnippet: "Use complete_goal to mark the current /goal complete with evidence.",
-		promptGuidelines: [
-			"Use complete_goal only for an achieved goal with evidence; it cannot pause, resume, or rewrite the objective.",
-		],
 		parameters: completeGoalParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executeCompleteGoal(params as CompleteGoalToolInput, ctx as GoalToolContext, pi);
@@ -286,16 +282,28 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool({
+		name: "pause_goal",
+		label: "Pause Goal",
+		description:
+			"Pause the active goal only when a concrete problem prevents safe progress. Include the reason so the user can resolve it before resuming.",
+		promptSnippet: "Use pause_goal with a concrete reason when a problem prevents safe progress on the active goal.",
+		parameters: pauseGoalParams,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			return executePauseGoal(params as PauseGoalToolInput, ctx as GoalToolContext, pi);
+		},
+		renderCall: (args, theme) =>
+			new Text(formatGoalToolCall("pause_goal", (args as PauseGoalToolInput | undefined)?.reason, theme), 0, 0),
+		renderResult: (result, _options, theme) =>
+			new Text(formatGoalToolResult(result as GoalToolResult, theme), 0, 0),
+	});
+
+	pi.registerTool({
 		name: "update_goal_graph",
 		label: "Update Goal Work Graph",
 		description:
-			"Update work items and structured blockers for the active goal; attempts are append-only audit records.",
+			"Update work items and structured blockers for the active goal; attempts are append-only audit records. Only credentials, permissions, irreversible actions, product decisions, and policy limits need user/external waiting; record each agent-can-try attempt with evidence.",
 		promptSnippet:
 			"Use update_goal_graph to record work-item state, structured blockers, and blocker attempts.",
-		promptGuidelines: [
-			"Use update_goal_graph to record work state, structured blockers, and immutable attempts only.",
-			"Only credentials, permissions, irreversible actions, product decisions, and policy limits need user/external waiting; record each agent-can-try attempt with evidence.",
-		],
 		parameters: updateGoalGraphParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executeUpdateGoalGraph(params as UpdateGoalGraphToolInput, ctx as GoalToolContext, pi);
@@ -310,11 +318,8 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "update_goal_progress",
 		label: "Update Goal Progress",
 		description:
-			"Update execution progress for the active goal without changing objective, source docs, or criteria.",
+			"Update execution progress for the active goal without changing objective, source docs, or criteria. It cannot rewrite objective, source docs, or acceptance criteria.",
 		promptSnippet: "Use update_goal_progress to update /goal progress fields only.",
-		promptGuidelines: [
-			"Use update_goal_progress only for implementation progress; it cannot rewrite objective, source docs, or acceptance criteria.",
-		],
 		parameters: updateGoalProgressParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executeUpdateGoalProgress(params as UpdateGoalProgressToolInput, ctx as GoalToolContext, pi);
@@ -487,6 +492,28 @@ export function executeCompleteGoal(
 	};
 }
 
+export function executePauseGoal(
+	params: PauseGoalToolInput,
+	ctx: GoalToolContext,
+	pi: Pick<ExtensionAPI, "appendEntry">,
+): GoalToolResult {
+	const current = loadGoalState(ctx);
+	if (!current) return refusalResult("No active goal exists to pause.", "no_goal");
+	if (current.status !== "active") return refusalResult("Only active goals can be paused.", "goal_inactive", current);
+	const reason = params.reason.trim();
+	if (!reason) return refusalResult("pause_goal requires a concrete reason.", "empty_reason", current);
+	const next = saveGoalState(
+		pi,
+		{ action: "pause", goalId: current.goalId, now: Date.now(), reason },
+		current,
+	);
+	applyGoalUi(ctx, next);
+	return {
+		content: [{ type: "text", text: `Goal paused. Reason: ${reason}` }],
+		details: { goal: next, reason },
+	};
+}
+
 export function executeUpdateGoalGraph(
 	params: UpdateGoalGraphToolInput,
 	ctx: GoalToolContext,
@@ -628,7 +655,7 @@ function goalToolError(message: string, code: string): Error {
 }
 
 function isSuccessfulGoalToolText(text: string): boolean {
-	return /^(Created goal:|Saved goal draft|Goal progress updated|Goal work graph updated|Goal complete\.)/.test(
+	return /^(Created goal:|Saved goal draft|Goal progress updated|Goal work graph updated|Goal complete\.|Goal paused\.)/.test(
 		text,
 	);
 }
@@ -653,6 +680,8 @@ function goalToolTitle(toolName: string): string {
 			return "Propose goal draft";
 		case "complete_goal":
 			return "✓ Complete goal";
+		case "pause_goal":
+			return "Pause goal";
 		case "update_goal_graph":
 			return "Update goal work graph";
 		case "update_goal_progress":

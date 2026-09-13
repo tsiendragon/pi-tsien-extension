@@ -91,6 +91,7 @@ export interface GoalState {
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;
+	pausedReason?: string;
 	owner: GoalOwner;
 }
 
