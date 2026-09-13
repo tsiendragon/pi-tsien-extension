@@ -319,8 +319,8 @@ export function registerLiveSessionExtension(
       if (command.type === "compact") {
         lease.assertLease(command.leaseId);
         if (!ctx.isIdle()) return commandError("session_busy", "wait for the current response before compacting");
-        ctx.compact();
-        return { ok: true, result: { compacting: true } };
+        await ctx.compact();
+        return { ok: true, result: { compacted: true } };
       }
       if (command.type === "reload") {
         pi.sendUserMessage("/live-session-reload", { expandPromptTemplates: true, ...(ctx.isIdle() ? {} : { deliverAs: "followUp" }) });
