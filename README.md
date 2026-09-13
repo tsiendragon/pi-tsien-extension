@@ -82,6 +82,18 @@
 
 数据默认保存在 `~/.pi/agent/usage-analytics.json`；如果设置了 `PI_CODING_AGENT_DIR`，则保存在该目录。详细口径和限制见 [`docs/usage-analytics-prd.md`](docs/usage-analytics-prd.md)。
 
+### `trajectory-recorder.ts`
+
+记录 Pi 的可复现 Agent 轨迹，供后续质量分析和任务型模型训练使用。
+
+- 记录用户输入、最终 system prompt、system prompt 来源、每次 context、provider payload、assistant 消息、Tool 参数/结果、模型、thinking level、provider effort、usage、错误、压缩和分支事件。
+- 默认目录：`/mnt/workspace/lilong/agent/pi-traces/`；可用 `PI_TRACE_DIR` 覆盖。
+- 每个 session 按 `sessionId` 和进程分别追加写入 `sessions/<session-id>/events-<pid>.jsonl`，不覆盖历史；工具结果默认不截断。
+- 不做凭证或字符串脱敏；provider request/response 的 header 值也完整记录。只做 JSON 序列化处理；`message_update` 和工具流式增量默认不记录，避免数据量失控。
+- process-isolated subagent 会通过 `traceContext` 关联父 session、父 Tool call、父 workflow/work/task、当前 workflow、workId、taskId、taskKey、stageIndex 和 foreach iteration；retry 还记录 source work/workflow 与 attempt，子进程轨迹仍写入同一个 trace 根目录的独立文件。`stageIndex`/`iterationIndex` 使用 0-based。
+- 记录器写入失败只提示警告，不阻断 Pi 主流程。
+- 扩展修改后执行 `/reload`；当前由用户级 `/home/tsien/.pi/agent/extensions.config.json` 的最后一项加载，以观察其他扩展修改后的最终请求。
+
 ### `00-zero.ts`
 
 已将 `pi-zero` 的全部模块迁入本 package：Powerline、工作状态消息、`/context`、Claude Code 风格 Tool 渲染、compact thinking 和 `/transcript`。

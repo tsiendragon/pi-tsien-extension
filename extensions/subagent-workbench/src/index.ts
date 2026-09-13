@@ -50,6 +50,8 @@ import {
   workflowRunPath,
 } from "./workflow-run-store.ts";
 import { compileWorkflowJavaScript } from "./workflow-javascript.ts";
+import type { SubagentTraceContext } from "./subagent-service.ts";
+import { parseTraceContext } from "../../trajectory-recorder.ts";
 const WORKBENCH_API_VERSION = 1 as const;
 const VIEW_ROWS = 18;
 const TOOL_OUTPUT_CHARS = 64 * 1024;
@@ -751,10 +753,29 @@ function currentThinking(ctx: ExtensionContext):
     : undefined;
 }
 
+function parentTraceContext(
+  ctx: ExtensionContext,
+  toolCallId: string,
+): SubagentTraceContext {
+  let parentSessionId: string | undefined;
+  try {
+    parentSessionId = ctx.sessionManager?.getSessionId?.();
+  } catch {
+    parentSessionId = undefined;
+  }
+  const ambient = parseTraceContext(process.env.PI_TRACE_CONTEXT);
+  return {
+    ...(ambient ?? {}),
+    ...(parentSessionId ? { parentSessionId } : {}),
+    parentToolCallId: toolCallId,
+  };
+}
+
 function workflowRequestFromDefinition(
   definition: SavedWorkflowDefinition,
   ctx: ExtensionContext,
   signal?: AbortSignal,
+  traceContext?: SubagentTraceContext,
 ): WorkbenchWorkflowRequest {
   return {
     label: definition.label,
@@ -763,6 +784,7 @@ function workflowRequestFromDefinition(
     model: currentModel(ctx),
     thinking: currentThinking(ctx),
     signal,
+    traceContext,
     stages: definition.stages.map((stage) => ({
       label: stage.label,
       tasks: stage.tasks.map((task) => ({
@@ -1060,14 +1082,9 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_start",
       label: "Subagent Workbench",
       description:
-        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId.",
+        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Use a self-contained task and cwd; parallelize independent work. Use an exact provider/model override; omit model to inherit the current Session model. Never pass a fuzzy short name. Continue while it runs and collect only at a real dependency point; the main Agent retains authorization and final decisions.",
       promptSnippet:
         "Delegate bounded independent work to a full-capability process subagent, normally in background.",
-      promptGuidelines: [
-        "Use a self-contained task and cwd; parallelize independent work.",
-        "Use an exact provider/model override; omit model to inherit the current Session model. Never pass a fuzzy short name.",
-        "Continue while it runs and collect only at a real dependency point; the main Agent retains authorization and final decisions.",
-      ],
       executionMode: "parallel",
       parameters: AgentToolParams,
       async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -1087,6 +1104,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               model: params.model || currentModel(ctx),
               thinking: params.thinking ?? currentThinking(ctx),
               context: params.context,
+              traceContext: parentTraceContext(ctx, toolCallId),
               signal: background ? undefined : signal,
               parentId: toolCallId,
             },
@@ -1148,20 +1166,9 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow",
       label: "Subagent Workflow",
       description:
-        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs.",
+        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs. Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow. Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach. Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates. Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded. Use exact provider/model task overrides; omit model to inherit the current Session model. Never pass fuzzy short names. Use dryRun to preview dynamic or saved definitions without creating work. Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed. Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful. Prefer background; wait only when correctness or delivery depends on the result.",
       promptSnippet:
         "Run recoverable single-task or staged subagent workflows with explicit prior-task handoffs.",
-      promptGuidelines: [
-        "Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow.",
-        "Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach.",
-        "Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates.",
-        "Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded.",
-        "Use exact provider/model task overrides; omit model to inherit the current Session model. Never pass fuzzy short names.",
-        "Use dryRun to preview dynamic or saved definitions without creating work.",
-        "Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed.",
-        "Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful.",
-        "Prefer background; wait only when correctness or delivery depends on the result.",
-      ],
       executionMode: "parallel",
       parameters: WorkflowToolParams,
       async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -1218,6 +1225,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             definition,
             ctx,
             background ? undefined : signal,
+            parentTraceContext(ctx, toolCallId),
           );
           const preflight = current.preflightWorkflow(request);
           if (params.dryRun) {
@@ -1331,17 +1339,12 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow_control",
       label: "Control Subagent Workflow",
       description:
-        "Pause or resume a running workflow, retry a terminal workflow, or retry one failed task while reusing its completed siblings.",
+        "Pause or resume a running workflow, retry a terminal workflow, or retry one failed task while reusing its completed siblings. Pause is cooperative: already-running tasks finish, and the next stage waits. retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage. retry_task requires taskKey and reruns only that failed task; completed or skipped siblings in its Stage are reused.",
       promptSnippet:
         "Pause, resume, retry a workflow, or retry one failed workflow task by workId.",
-      promptGuidelines: [
-        "Pause is cooperative: already-running tasks finish, and the next stage waits.",
-        "retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage.",
-        "retry_task requires taskKey and reruns only that failed task; completed or skipped siblings in its Stage are reused.",
-      ],
       executionMode: "sequential",
       parameters: WorkflowControlParams,
-      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      async execute(toolCallId, params, _signal, _onUpdate, ctx) {
         activeContext = ctx;
         const current = ensureController();
         if (params.action === "pause") {
@@ -1383,6 +1386,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
           };
         }
         const retryTask = params.action === "retry_task";
+        const traceContext = parentTraceContext(ctx, toolCallId);
         if (retryTask && !params.taskKey) {
           return {
             content: [
@@ -1400,8 +1404,8 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
           };
         }
         let retry = retryTask
-          ? current.retryWorkflowTaskJob(params.workId, params.taskKey!)
-          : current.retryWorkflowJob(params.workId);
+          ? current.retryWorkflowTaskJob(params.workId, params.taskKey!, traceContext)
+          : current.retryWorkflowJob(params.workId, traceContext);
         let persistedDefinition: SavedWorkflowDefinition | undefined;
         if (!retry) {
           try {
@@ -1423,18 +1427,25 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               };
             }
             persistedDefinition = record.definition;
-            const request = workflowRequestFromDefinition(record.definition, ctx);
+            const request = workflowRequestFromDefinition(
+              record.definition,
+              ctx,
+              undefined,
+              traceContext,
+            );
             retry = retryTask
               ? current.retryWorkflowTaskFromResult(
                   params.workId,
                   request,
                   record.result,
                   params.taskKey!,
+                  traceContext,
                 )
               : current.retryWorkflowFromResult(
                   params.workId,
                   request,
                   record.result,
+                  traceContext,
                 );
           } catch (error) {
             if (
@@ -1526,13 +1537,8 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_results",
       label: "Subagent Workbench Results",
       description:
-        "Get status or results for subagent work IDs. Use bounded wait only at a real dependency point.",
+        "Get status or results for subagent work IDs. Use bounded wait only at a real dependency point. Use status or collect while other independent work can continue. Use wait only when the next correct action depends on a result; timeout leaves jobs running. Include workIds whenever known; each call accepts at most eight.",
       promptSnippet: "Inspect or collect background subagent results by workId.",
-      promptGuidelines: [
-        "Use status or collect while other independent work can continue.",
-        "Use wait only when the next correct action depends on a result; timeout leaves jobs running.",
-        "Include workIds whenever known; each call accepts at most eight.",
-      ],
       executionMode: "sequential",
       parameters: WorkbenchResultsParams,
       async execute(_toolCallId, params, _signal, onUpdate, ctx) {
@@ -1592,12 +1598,8 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_cancel",
       label: "Cancel Subagent Workbench Jobs",
       description:
-        "Best-effort cancel queued, running, or paused subagent work IDs. Completed jobs are unchanged.",
+        "Best-effort cancel queued, running, or paused subagent work IDs. Completed jobs are unchanged. Cancel only work that is no longer needed or is clearly unsafe to continue. Collect status after cancellation when the final state matters.",
       promptSnippet: "Cancel background subagent jobs by workId.",
-      promptGuidelines: [
-        "Cancel only work that is no longer needed or is clearly unsafe to continue.",
-        "Collect status after cancellation when the final state matters.",
-      ],
       executionMode: "sequential",
       parameters: WorkbenchCancelParams,
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
