@@ -719,6 +719,7 @@ describe("Pi extension", () => {
           ],
         }),
         completed,
+        { parentToolCallId: "retry-persisted" },
       );
       rejectRetry(new Error("cancelled after Session shutdown"));
       await Promise.resolve();
