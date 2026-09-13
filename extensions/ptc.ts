@@ -38,14 +38,13 @@ const MAX_PROTOCOL_BYTES = 256 * 1024;
 const MAX_BINDING_RESULT_BYTES = 64 * 1024;
 const MAX_WRITE_BYTES = 256 * 1024;
 const MAX_RUN_OUTPUT_BYTES = 128 * 1024;
-const MAX_SUB_CALLS = 32;
+const MAX_SUB_CALLS = 256;
 const RUNTIME_HEARTBEAT_GRACE_MS = 250;
 const RUNTIME_WATCHDOG_INTERVAL_MS = 100;
 const MAX_RUN_TIMEOUT_MS = 15_000;
 const BLOCKED_WRITE_SEGMENTS = new Set([".git", ".pi", ".ssh", ".aws", ".gnupg", "node_modules"]);
 
-type PtcMode = "off" | "ptc" | "both" | "full";
-type BindingName = typeof FULL_TOOLS[number];
+type BindingName = string;
 
 type RuntimeCallMessage = {
   type: "call";
@@ -88,6 +87,22 @@ type RuntimeResult = {
   calls: number;
   toolCounts: Record<string, number>;
   computeTimeMs: number;
+};
+
+type RuntimeBindings = {
+  allowedTools: readonly string[];
+  execute(call: RuntimeCallMessage, signal: AbortSignal): Promise<unknown>;
+};
+
+type HigherOrderToolAPI = {
+  executeTool(
+    toolName: string,
+    args: unknown,
+    options?: { toolCallId?: string; signal?: AbortSignal },
+  ): Promise<{
+    result: { content: Array<{ type: string; text?: string }> };
+    isError: boolean;
+  }>;
 };
 
 type StructuredRunResult = {
@@ -168,6 +183,27 @@ function textFromToolResult(result: { content: Array<{ type: string; text?: stri
     .filter((item) => item.type === "text" && typeof item.text === "string")
     .map((item) => item.text as string)
     .join("\n");
+}
+
+const CODE_MODE_SNIPPET = "组合当前工具完成循环、分支、并行、过滤和汇总；确定性多步任务优先使用，单步或需逐步判断时用普通工具。";
+
+function placeCodeModeAfterCoreTools(systemPrompt: string): string {
+  const lines = systemPrompt.split("\n");
+  const toolsStart = lines.indexOf("Available tools:");
+  const toolsEnd = toolsStart >= 0
+    ? lines.findIndex((line, index) => index > toolsStart && line === "In addition to the tools above, you may have access to other custom tools depending on the project.")
+    : -1;
+  if (toolsStart < 0 || toolsEnd < 0) {
+    return `${systemPrompt}\n\nAvailable tool:\n- ${TOOL_NAME}: ${CODE_MODE_SNIPPET}`;
+  }
+
+  for (let index = toolsEnd - 1; index > toolsStart; index -= 1) {
+    if (lines[index].startsWith(`- ${TOOL_NAME}:`)) lines.splice(index, 1);
+  }
+  const adjustedEnd = lines.findIndex((line, index) => index > toolsStart && line === "In addition to the tools above, you may have access to other custom tools depending on the project.");
+  const writeIndex = lines.findIndex((line, index) => index > toolsStart && index < adjustedEnd && line.startsWith("- write:"));
+  lines.splice(writeIndex >= 0 ? writeIndex + 1 : adjustedEnd, 0, `- ${TOOL_NAME}: ${CODE_MODE_SNIPPET}`);
+  return lines.join("\n");
 }
 
 function truncateBindingResult(value: string): string {
@@ -441,6 +477,7 @@ async function runPtcProgram(
   outerSignal: AbortSignal | undefined,
   fullMode: boolean,
   budget: PtcBudgetState,
+  runtimeBindings?: RuntimeBindings,
 ): Promise<RuntimeResult> {
   if (Buffer.byteLength(code, "utf8") > MAX_CODE_BYTES) {
     throw new Error(`PTC program exceeds ${MAX_CODE_BYTES} bytes`);
@@ -555,7 +592,9 @@ async function runPtcProgram(
         send({ type: "result", id: message.id, ok: false, error: "Invalid PTC sub-call id" });
         return;
       }
-      const task = executeBinding(cwd, message, nestedAbort.signal, fullMode, budget)
+      const task = (runtimeBindings
+        ? runtimeBindings.execute(message, nestedAbort.signal)
+        : executeBinding(cwd, message, nestedAbort.signal, fullMode, budget))
         .then(
           (value) => send({ type: "result", id: message.id, ok: true, value }),
           (error) => send({
@@ -575,7 +614,7 @@ async function runPtcProgram(
     code,
     maxCalls: MAX_SUB_CALLS,
     maxComputeTimeMs: computeTimeoutMs,
-    allowedTools: fullMode ? FULL_TOOLS : READ_ONLY_TOOLS,
+    allowedTools: runtimeBindings?.allowedTools ?? (fullMode ? FULL_TOOLS : READ_ONLY_TOOLS),
   });
 
   return new Promise<RuntimeResult>((resolvePromise, rejectPromise) => {
@@ -645,15 +684,10 @@ function renderRuntimeResult(result: RuntimeResult): string {
   return sections.join("\n\n");
 }
 
-function updateStatus(ctx: ExtensionContext, mode: PtcMode, budget?: PtcBudgetState): void {
+function updateStatus(ctx: ExtensionContext, budget?: PtcBudgetState): void {
   if (!ctx.hasUI) return;
-  if (mode === "off") {
-    ctx.ui.setStatus(STATUS_KEY, undefined);
-    return;
-  }
-  const label = mode === "ptc" ? "strict" : mode === "full" ? "full-rwx" : "both";
   const calls = budget ? `${budget.outerRunCodeCalls}/${budget.policy.maxOuterRunCodeCalls}` : "0/?";
-  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `PTC ${label} · calls ${calls}`));
+  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `Code Mode · calls ${calls}`));
 }
 
 const RESULT_CONTRACT_SCHEMA = Type.Optional(Type.Object({
@@ -671,22 +705,16 @@ const RESULT_CONTRACT_SCHEMA = Type.Optional(Type.Object({
 }, { additionalProperties: false }));
 
 export default function ptcExtension(pi: ExtensionAPI): void {
-  let mode: PtcMode = "off";
-  let previousTools: string[] | undefined;
+  const toolApi = pi as ExtensionAPI & HigherOrderToolAPI;
   let budget: PtcBudgetState | undefined;
 
-  const policyMode = () => mode === "full" ? "full" as const : "readOnly" as const;
-  const resetBudget = (ctx: ExtensionContext) => {
-    if (mode === "off") {
-      budget = undefined;
-      return undefined;
-    }
-    budget = createBudgetState(resolvePtcPolicy(policyMode(), ctx.model));
-    updateStatus(ctx, mode, budget);
+  const resetBudget = (ctx: ExtensionContext): PtcBudgetState => {
+    budget = createBudgetState(resolvePtcPolicy("full", ctx.model));
+    updateStatus(ctx, budget);
     return budget;
   };
-  const ensureBudget = (ctx: ExtensionContext) => {
-    const expected = resolvePtcPolicy(policyMode(), ctx.model);
+  const ensureBudget = (ctx: ExtensionContext): PtcBudgetState => {
+    const expected = resolvePtcPolicy("full", ctx.model);
     if (!budget) budget = createBudgetState(expected);
     else if (budget.policy.modelKey !== expected.modelKey || budget.policy.mode !== expected.mode) {
       budget = retargetBudgetState(budget, expected);
@@ -694,87 +722,67 @@ export default function ptcExtension(pi: ExtensionAPI): void {
     return budget;
   };
 
-  const restoreTools = () => {
-    if (!previousTools) return;
-    const available = new Set(pi.getAllTools().map((tool) => tool.name));
-    pi.setActiveTools(previousTools.filter((name) => available.has(name) && name !== TOOL_NAME));
-    previousTools = undefined;
-  };
-
-  const setMode = (nextMode: PtcMode, ctx: ExtensionContext) => {
-    if (nextMode === "off") {
-      restoreTools();
-      mode = "off";
-      budget = undefined;
-      updateStatus(ctx, mode);
-      ctx.ui.notify("PTC 模式已关闭", "info");
-      return;
-    }
-    if (nextMode === "full" && typeof ctx.isProjectTrusted === "function" && !ctx.isProjectTrusted()) {
-      ctx.ui.notify("PTC full 模式要求当前项目已被 Pi 信任", "error");
-      return;
-    }
-
-    if (!previousTools) previousTools = pi.getActiveTools().filter((name) => name !== TOOL_NAME);
-    mode = nextMode;
-    pi.setActiveTools(nextMode === "both" ? [...previousTools, TOOL_NAME] : [TOOL_NAME]);
-    resetBudget(ctx);
-    const message = nextMode === "ptc"
-      ? "PTC 严格只读模式已启用：模型仅看到 run_code"
-      : nextMode === "both"
-        ? "PTC both 模式已启用：保留原工具并增加只读 run_code"
-        : "PTC full 实验模式已启用：允许工作区写入和受限 Node 运行";
-    ctx.ui.notify(message, "warning");
-  };
-
   pi.registerTool({
     name: TOOL_NAME,
-    label: "PTC run_code (experimental)",
-    description: "Run one TypeScript program against the experimental PTC SDK. Full mode adds workspace-confined write and permission-constrained Node execution.",
-    promptSnippet: "run_code: combine PTC read operations, or in explicit full mode perform workspace-confined write/run workflows",
-    promptGuidelines: [
-      "In mixed mode use ordinary tools for one-file lookups, and start deterministic three-or-more-call aggregation with run_code.",
-      "Keep intermediate data inside the program, parallelize only independent calls, and preserve path/result associations.",
-      "Treat find/ls output as newline-delimited text and use manifest paths exactly instead of guessing filenames.",
-      "In PTC full mode, complete one consistent write batch before running the provided Node test entry.",
-    ],
+    label: "Code Mode",
+    description: "Run one TypeScript program that can call any currently active Pi tool. Nested calls use each target tool's normal validation and policy hooks; only printed and returned values come back to the model. Inside run_code, call active tools as await tools.name(args); use Promise.all only for independent calls. Keep intermediate values inside run_code and return only the compact result needed for the next reasoning step.",
+    promptSnippet: CODE_MODE_SNIPPET,
     parameters: Type.Object({
       code: Type.String({ description: "Body of an async TypeScript function with top-level await/return" }),
       description: Type.String({ description: "Short description of what the program does" }),
       resultContract: RESULT_CONTRACT_SCHEMA,
     }, { additionalProperties: false }),
     executionMode: "sequential",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (mode === "off") throw new Error("PTC mode is disabled; run /ptc on, /ptc both, or /ptc full first");
-      const fullMode = mode === "full";
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const activeBudget = ensureBudget(ctx);
       reserveOuterRunCode(activeBudget);
-      updateStatus(ctx, mode, activeBudget);
+      updateStatus(ctx, activeBudget);
+
+      const allowedTools = pi.getActiveTools().filter((name) => name !== TOOL_NAME);
+      const allowed = new Set(allowedTools);
+      const runtimeBindings: RuntimeBindings = {
+        allowedTools,
+        async execute(call, nestedSignal) {
+          if (!allowed.has(call.name)) throw new Error(`Code Mode tool is not active: ${call.name}`);
+          reserveNestedCall(activeBudget, call.name);
+          if (typeof toolApi.executeTool !== "function") {
+            throw new Error("Code Mode requires a Pi runtime with executeTool support");
+          }
+          const nested = await toolApi.executeTool(call.name, call.args, {
+            toolCallId: `${toolCallId}:code:${call.id}`,
+            signal: nestedSignal,
+          });
+          const text = truncateBindingResult(textFromToolResult(nested.result));
+          if (nested.isError) throw new Error(text || `${call.name} failed`);
+          return text;
+        },
+      };
+
       const runStartedAt = performance.now();
       let result: RuntimeResult | undefined;
       try {
-        result = await runPtcProgram(params.code, ctx.cwd, signal, fullMode, activeBudget);
+        result = await runPtcProgram(params.code, ctx.cwd, signal, true, activeBudget, runtimeBindings);
       } finally {
         recordRunUsage(activeBudget, {
           computeTimeMs: result?.computeTimeMs,
           wallTimeMs: performance.now() - runStartedAt,
         });
-        updateStatus(ctx, mode, activeBudget);
+        updateStatus(ctx, activeBudget);
       }
-      if (!result) throw new Error("PTC runtime completed without a result");
+      if (!result) throw new Error("Code Mode runtime completed without a result");
+
       const validated = normalizeAndValidateResult(
         result.result,
         activeBudget.policy.normalizeJsonFence,
         params.resultContract,
       );
-      const rendered = renderRuntimeResult({ ...result, result: validated.value });
       return {
-        content: [{ type: "text", text: rendered }],
+        content: [{ type: "text", text: renderRuntimeResult({ ...result, result: validated.value }) }],
         details: {
-          experimental: true,
-          readOnly: !fullMode,
-          fullMode,
+          codeMode: true,
+          trust: "active-tools",
           description: params.description,
+          availableTools: allowedTools.length,
           subCalls: result.calls,
           toolCounts: result.toolCounts,
           logs: result.logs.length,
@@ -789,45 +797,16 @@ export default function ptcExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("ptc", {
-    description: "实验性 PTC 模式：/ptc on|both|full|off|status",
-    handler: async (args, ctx) => {
-      let action = args.trim().toLowerCase();
-      if (!action && ctx.hasUI) {
-        action = (await ctx.ui.select("PTC 模式", ["on", "both", "full", "off", "status"])) ?? "";
-      }
-      if (action === "on") setMode("ptc", ctx);
-      else if (action === "both") setMode("both", ctx);
-      else if (action === "full") setMode("full", ctx);
-      else if (action === "off") setMode("off", ctx);
-      else if (action === "status") {
-        const snapshot = budgetSnapshot(mode === "off" ? undefined : ensureBudget(ctx));
-        ctx.ui.notify(`PTC 当前状态：${mode}${snapshot ? `\n${JSON.stringify(snapshot, null, 2)}` : ""}`, "info");
-      } else ctx.ui.notify("用法：/ptc on|both|full|off|status", "warning");
-    },
-  });
-
   pi.on("before_agent_start", (event, ctx) => {
-    if (mode === "off") return undefined;
-    const activeBudget = resetBudget(ctx);
-    const fullPrompt = mode === "full" ? FULL_SDK : "\nFilesystem writes, process execution, network access, and shell commands are unavailable.\n";
-    const modePrompt = mode === "both"
-      ? "\nThis is mixed PTC mode. For one file read/search with no cross-file processing, use the ordinary tool directly and do not use run_code. For deterministic filtering, joining, aggregation, or transformation across three or more related files/calls, use run_code as the first data-access tool. After a failed approach, a focused ordinary read is allowed for diagnosis before retrying."
-      : mode === "full"
-        ? "\nThis is strict PTC full mode. Call only run_code directly. If the task needs a shell, a non-Node executable, unsupported patch semantics, or capabilities outside the declared SDK, stop and explain that the user should switch modes instead of attempting a workaround."
-        : "\nThis is strict read-only PTC mode. Call only run_code directly. If the task is not a read-only deterministic workflow supported by the declared SDK, stop and explain that the user should switch modes instead of attempting a workaround.";
-    const policyPrompt = `\nActive model policy: ${JSON.stringify(budgetSnapshot(activeBudget))}. `
-      + "These limits are enforced. Compute and wall ceilings apply independently to each run_code execution; model thinking and ordinary tools do not consume them. Reserve call, sub-call, and token headroom for one correction. Use resultContract only for independently known structure/invariants; avoid brittle exact-key contracts around side-effecting write/run workflows.";
-    return { systemPrompt: `${event.systemPrompt}\n${READ_ONLY_SDK}${fullPrompt}${modePrompt}${policyPrompt}` };
+    resetBudget(ctx);
+    return { systemPrompt: placeCodeModeAfterCoreTools(event.systemPrompt) };
   });
 
   pi.on("message_end", (event, ctx) => {
-    if (mode === "off" || event.message.role !== "assistant") return undefined;
+    if (event.message.role !== "assistant") return undefined;
     const activeBudget = ensureBudget(ctx);
-    // Provider totalTokens includes the full input context on every turn. Charging it
-    // would make PTC unusable in long or compacted sessions, so only new output counts.
     recordAssistantTokens(activeBudget, event.message.usage?.output);
-    updateStatus(ctx, mode, activeBudget);
+    updateStatus(ctx, activeBudget);
     if (!activeBudget.policy.normalizeJsonFence || !Array.isArray(event.message.content)) return undefined;
     if (event.message.content.some((part) => part.type === "toolCall")) return undefined;
     const textIndices = event.message.content
@@ -845,29 +824,18 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("model_select", (event, ctx) => {
-    if (mode === "off") return;
-    const expected = resolvePtcPolicy(policyMode(), event.model);
+    const expected = resolvePtcPolicy("full", event.model);
     budget = budget ? retargetBudgetState(budget, expected) : createBudgetState(expected);
-    updateStatus(ctx, mode, budget);
+    updateStatus(ctx, budget);
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
-    if (mode !== "off") updateStatus(ctx, mode, budget);
-  });
-
+  pi.on("agent_settled", (_event, ctx) => updateStatus(ctx, budget));
   pi.on("session_start", (_event, ctx) => {
-    mode = "off";
-    previousTools = undefined;
     budget = undefined;
-    const active = pi.getActiveTools();
-    if (active.includes(TOOL_NAME)) pi.setActiveTools(active.filter((name) => name !== TOOL_NAME));
-    updateStatus(ctx, mode);
+    updateStatus(ctx);
   });
-
   pi.on("session_shutdown", (_event, ctx) => {
-    restoreTools();
-    mode = "off";
     budget = undefined;
-    updateStatus(ctx, mode);
+    ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 }

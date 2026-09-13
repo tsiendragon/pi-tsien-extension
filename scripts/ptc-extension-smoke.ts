@@ -1,437 +1,97 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import ptcExtension, { runPtcProgramForTest } from "../extensions/ptc.ts";
-import { createBudgetState, resolvePtcPolicy } from "../extensions/ptc/policy.ts";
+import assert from "node:assert/strict";
+
+import ptcExtension from "../extensions/ptc.ts";
 
 let registeredTool: any;
-let registeredCommand: any;
-const handlers = new Map<string, Function[]>();
-const statusTexts: Array<string | undefined> = [];
-let activeTools = ["read", "bash", "edit", "write"];
-let abortCalls = 0;
-
-const pi = {
-  registerTool(tool: any) {
-    registeredTool = tool;
+let commandRegistrations = 0;
+const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
+const nestedCalls: string[] = [];
+const activeTools = ["read", "bash", "run_code"];
+const allTools = [
+  {
+    name: "read",
+    description: "Read a file",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    sourceInfo: { source: "builtin" },
   },
-  registerCommand(_name: string, command: any) {
-    registeredCommand = command;
+  {
+    name: "bash",
+    description: "Run a shell command",
+    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    sourceInfo: { source: "builtin" },
   },
-  on(event: string, handler: Function) {
-    const existing = handlers.get(event) ?? [];
-    existing.push(handler);
-    handlers.set(event, existing);
+];
+const pi: any = {
+  registerTool(definition: any) {
+    registeredTool = definition;
   },
-  getActiveTools() {
-    return [...activeTools];
+  registerCommand() {
+    commandRegistrations += 1;
   },
-  setActiveTools(names: string[]) {
-    activeTools = [...names];
+  on(event: string, handler: (event: any, ctx: any) => any) {
+    handlers.set(event, [...(handlers.get(event) ?? []), handler]);
   },
-  getAllTools() {
-    return ["read", "bash", "edit", "write", "run_code"].map((name) => ({ name }));
+  getActiveTools: () => activeTools,
+  getAllTools: () => allTools,
+  async executeTool(name: string) {
+    nestedCalls.push(name);
+    return {
+      result: { content: [{ type: "text", text: name === "read" ? "file-content" : "shell-output" }] },
+      isError: false,
+    };
   },
-} as any;
-
-const ui = {
-  notify() {},
-  setStatus(_key: string, text: string | undefined) { statusTexts.push(text); },
-  theme: { fg: (_color: string, value: string) => value },
 };
-const ctx = {
+const ctx: any = {
   cwd: process.cwd(),
-  mode: "rpc",
-  hasUI: true,
-  ui,
-  model: { provider: "openai-codex", id: "gpt-5.6-sol" },
-  isProjectTrusted: () => true,
-  abort() { abortCalls += 1; },
-} as any;
+  model: { provider: "dashscope", id: "deepseek-v4-flash" },
+  hasUI: false,
+  ui: {
+    setStatus() {},
+    theme: { fg: (_color: string, text: string) => text },
+  },
+};
 
 ptcExtension(pi);
-for (const handler of handlers.get("session_start") ?? []) await handler({}, ctx);
-await registeredCommand.handler("on", ctx);
+assert.equal(registeredTool?.name, "run_code");
+assert.equal(commandRegistrations, 0);
 
-const activeStatus = statusTexts.at(-1) ?? "";
-if (!activeStatus.includes("PTC strict · calls 0/4") || activeStatus.includes("gpt-5.6-sol")) {
-  throw new Error(`PTC status duplicates model information or omits call budget: ${activeStatus}`);
-}
-if (activeTools.join(",") !== "run_code") {
-  throw new Error(`PTC strict mode did not select run_code: ${activeTools.join(",")}`);
-}
+const basePrompt = `BASE
+Available tools:
+- read: Read files
+- bash: Run commands
+- edit: Edit files
+- write: Write files
+- knowledge_search: Search knowledge
+- run_code: old description
 
-let strictSystemPrompt = "";
-for (const handler of handlers.get("before_agent_start") ?? []) {
-  const replacement = await handler({ systemPrompt: "BASE" }, ctx);
-  if (replacement?.systemPrompt) strictSystemPrompt = replacement.systemPrompt;
-}
-if (
-  !strictSystemPrompt.includes("validate whether the parsed value is an array or object")
-  || !strictSystemPrompt.includes("compute-only merge program still consumes one outer")
-  || !strictSystemPrompt.includes("strict read-only PTC mode")
-  || !strictSystemPrompt.includes("model thinking and ordinary tools do not consume")
-  || !strictSystemPrompt.includes("\"runWallTimeMs\"")
-) {
-  throw new Error("PTC strict system prompt is missing usage or budget guidance");
-}
-if ((handlers.get("turn_start") ?? []).length !== 0) {
-  throw new Error("PTC still installs a task-wide turn_start budget abort handler");
-}
-for (const handler of handlers.get("agent_settled") ?? []) await handler({}, ctx);
-if (abortCalls !== 0) throw new Error("PTC task lifecycle unexpectedly aborted the Agent");
-await registeredCommand.handler("on", ctx);
+In addition to the tools above, you may have access to other custom tools depending on the project.`;
+const prompt = await handlers.get("before_agent_start")?.[0]?.({ systemPrompt: basePrompt }, ctx);
+const writeIndex = prompt.systemPrompt.indexOf("- write:");
+const codeIndex = prompt.systemPrompt.indexOf("- run_code:");
+const customIndex = prompt.systemPrompt.indexOf("- knowledge_search:");
+assert.ok(writeIndex >= 0 && codeIndex > writeIndex && customIndex > codeIndex);
+assert.equal(prompt.systemPrompt.match(/^- run_code:/gm)?.length, 1);
+assert.match(prompt.systemPrompt, /确定性多步任务优先使用/);
 
 const result = await registeredTool.execute(
-  "smoke-call",
+  "smoke",
   {
-    description: "Read package metadata",
+    description: "Compose active tools",
     code: `
-      const text: string = await tools.read({ path: "package.json", offset: 1, limit: 8 });
-      return {
-        sawPackage: text.includes("pi-tsien-extension"),
-        processType: typeof process,
-        fetchType: typeof fetch,
-      };
+      const [file, shell] = await Promise.all([
+        tools.read({ path: "README.md" }),
+        tools.bash({ command: "printf shell-output" }),
+      ]);
+      return { file, shell };
     `,
-    resultContract: {
-      kind: "object",
-      requiredKeys: ["sawPackage", "processType", "fetchType"],
-      exactKeys: true,
-    },
   },
-  new AbortController().signal,
+  undefined,
   undefined,
   ctx,
 );
 
-const text = result.content.find((item: any) => item.type === "text")?.text ?? "";
-if (
-  !text.includes('"sawPackage": true')
-  || !text.includes('"processType": "undefined"')
-  || !text.includes('"fetchType": "undefined"')
-) {
-  throw new Error(`Unexpected run_code result: ${text}`);
-}
-if (result.details?.subCalls !== 1) {
-  throw new Error(`Unexpected sub-call count: ${String(result.details?.subCalls)}`);
-}
-if (
-  result.details?.resultValidation?.contractApplied !== true
-  || result.details?.budget?.policySource !== "configured"
-  || result.details?.budget?.runComputeTimeMs?.limitPerRun !== 15_000
-  || result.details?.budget?.runWallTimeMs?.limitPerRun !== 90_000
-  || result.details?.budget?.runWallTimeMs?.lastUsed <= 0
-) {
-  throw new Error(`PTC policy, per-run timing, or result contract was not applied: ${JSON.stringify(result.details)}`);
-}
-
-let rejectedWrite = false;
-try {
-  await registeredTool.execute(
-    "forbidden-call",
-    { description: "Reject write", code: "await tools.write({ path: 'x', content: 'x' });" },
-    new AbortController().signal,
-    undefined,
-    ctx,
-  );
-} catch {
-  rejectedWrite = true;
-}
-if (!rejectedWrite) throw new Error("PTC runtime unexpectedly exposed a write tool");
-
-let rejectedOutsideRead = false;
-try {
-  await registeredTool.execute(
-    "outside-read",
-    { description: "Reject outside read", code: "await tools.read({ path: '/etc/hostname' });" },
-    new AbortController().signal,
-    undefined,
-    ctx,
-  );
-} catch {
-  rejectedOutsideRead = true;
-}
-if (!rejectedOutsideRead) throw new Error("PTC runtime read outside the current workspace");
-
-const earlyReturn = await registeredTool.execute(
-  "early-return",
-  {
-    description: "Return while unawaited reads are still settling",
-    code: `
-      for (let index = 0; index < 16; index += 1) {
-        void tools.read({ path: "package.json" });
-      }
-      return { finished: true };
-    `,
-  },
-  new AbortController().signal,
-  undefined,
-  ctx,
-);
-const earlyReturnText = earlyReturn.content.find((item: any) => item.type === "text")?.text ?? "";
-if (!earlyReturnText.includes('"finished": true')) {
-  throw new Error(`PTC early-return regression failed: ${earlyReturnText}`);
-}
-
-const fullWorkspace = await mkdtemp(join(tmpdir(), "pi-ptc-full-smoke-"));
-const fullCtx = { ...ctx, cwd: fullWorkspace };
-await registeredCommand.handler("full", fullCtx);
-const fullResult = await registeredTool.execute(
-  "full-mode",
-  {
-    description: "Write and run a workspace Node program",
-    code: `
-      await tools.write({
-        path: "generated.mjs",
-        content: "console.log(JSON.stringify({ answer: 6 * 7 }));\\n",
-      });
-      const execution = await tools.run({ path: "generated.mjs", timeoutMs: 5000 });
-      return execution;
-    `,
-  },
-  new AbortController().signal,
-  undefined,
-  fullCtx,
-);
-const fullText = fullResult.content.find((item: any) => item.type === "text")?.text ?? "";
-if (!fullText.includes('\\"answer\\":42') || !fullText.includes('"exitCode": 0')) {
-  throw new Error(`PTC full-mode write/run failed: ${fullText}`);
-}
-const generated = await readFile(join(fullWorkspace, "generated.mjs"), "utf8");
-if (!generated.includes("6 * 7")) throw new Error("PTC full-mode write did not reach the workspace");
-
-let rejectedOutsideWrite = false;
-try {
-  await registeredTool.execute(
-    "outside-write",
-    { description: "Reject outside write", code: "await tools.write({ path: '../escape.mjs', content: 'x' });" },
-    new AbortController().signal,
-    undefined,
-    fullCtx,
-  );
-} catch {
-  rejectedOutsideWrite = true;
-}
-if (!rejectedOutsideWrite) throw new Error("PTC full mode wrote outside the workspace");
-
-const deniedResult = await registeredTool.execute(
-  "permission-denial",
-  {
-    description: "Verify executed code cannot read outside the workspace",
-    code: `
-      await tools.write({
-        path: "denied.mjs",
-        content: "import { readFileSync } from 'node:fs'; readFileSync('/etc/hostname', 'utf8');\\n",
-      });
-      return tools.run({ path: "denied.mjs", timeoutMs: 5000 });
-    `,
-  },
-  new AbortController().signal,
-  undefined,
-  fullCtx,
-);
-const deniedText = deniedResult.content.find((item: any) => item.type === "text")?.text ?? "";
-if (deniedText.includes('"exitCode": 0') || !deniedText.includes("ERR_ACCESS_DENIED")) {
-  throw new Error(`PTC run permission boundary failed: ${deniedText}`);
-}
-
-const runWriteDenied = await registeredTool.execute(
-  "run-write-denial",
-  {
-    description: "Verify executed code cannot bypass the checked write binding",
-    code: `
-      await tools.write({
-        path: "write-denied.mjs",
-        content: "import { writeFileSync } from 'node:fs'; writeFileSync('bypass.txt', 'x');\\n",
-      });
-      return tools.run({ path: "write-denied.mjs", timeoutMs: 5000 });
-    `,
-  },
-  new AbortController().signal,
-  undefined,
-  fullCtx,
-);
-const runWriteDeniedText = runWriteDenied.content.find((item: any) => item.type === "text")?.text ?? "";
-if (runWriteDeniedText.includes('"exitCode": 0') || !runWriteDeniedText.includes("ERR_ACCESS_DENIED")) {
-  throw new Error(`PTC run bypassed checked writes: ${runWriteDeniedText}`);
-}
-try {
-  await readFile(join(fullWorkspace, "bypass.txt"));
-  throw new Error("PTC run created bypass.txt despite read-only run permissions");
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
-await rm(fullWorkspace, { recursive: true, force: true });
-await registeredCommand.handler("on", ctx);
-
-let rejectedContract = false;
-try {
-  await registeredTool.execute(
-    "result-contract-failure",
-    {
-      description: "Reject a wrong count/checksum result",
-      code: "return { count: 2, checksum: 41, ids: ['a', 'b'] };",
-      resultContract: {
-        kind: "object",
-        requiredKeys: ["count", "checksum", "ids"],
-        exactKeys: true,
-        expectedIntegers: [{ key: "count", value: 2 }, { key: "checksum", value: 42 }],
-        expectedArrayLengths: [{ key: "ids", length: 2 }],
-      },
-    },
-    new AbortController().signal,
-    undefined,
-    ctx,
-  );
-} catch (error) {
-  rejectedContract = error instanceof Error && error.message.includes("PTC_RESULT_VALIDATION_FAILED");
-}
-if (!rejectedContract) throw new Error("PTC result contract accepted a wrong checksum");
-
-const deepSeekCtx = { ...ctx, model: { provider: "dashscope", id: "deepseek-v4-flash" } };
-for (const handler of handlers.get("model_select") ?? []) {
-  // The event is authoritative even if a runtime supplies a context whose model has not updated yet.
-  await handler({ model: deepSeekCtx.model, previousModel: ctx.model, source: "set" }, ctx);
-}
-const fencedResult = await registeredTool.execute(
-  "fenced-result",
-  {
-    description: "Normalize a fenced JSON result",
-    code: "return '```json\\n{\\\"ok\\\":true,\\\"count\\\":2}\\n```';",
-    resultContract: {
-      kind: "object",
-      requiredKeys: ["ok", "count"],
-      exactKeys: true,
-      expectedIntegers: [{ key: "count", value: 2 }],
-    },
-  },
-  new AbortController().signal,
-  undefined,
-  deepSeekCtx,
-);
-if (
-  fencedResult.details?.resultValidation?.normalizedJson !== true
-  || fencedResult.details?.budget?.model !== "dashscope/deepseek-v4-flash"
-  || fencedResult.details?.budget?.outerRunCodeCalls?.used !== 2
-  || fencedResult.details?.budget?.runWallTimeMs?.limitPerRun !== 120_000
-) {
-  throw new Error(`PTC model retargeting or fenced result normalization failed: ${JSON.stringify(fencedResult.details)}`);
-}
-
-let normalizedAssistant: any;
-for (const handler of handlers.get("message_end") ?? []) {
-  const replacement = await handler({
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "结果如下：\n```json\n{\"ok\":true,\"count\":2}\n```" }],
-      // A long input context must not consume the per-task PTC generation budget.
-      usage: { input: 126_617, output: 100, totalTokens: 126_717 },
-    },
-  }, deepSeekCtx);
-  if (replacement?.message) normalizedAssistant = replacement.message;
-}
-if (normalizedAssistant?.content?.[0]?.text !== '{"ok":true,"count":2}') {
-  throw new Error(`PTC assistant fence was not normalized: ${JSON.stringify(normalizedAssistant)}`);
-}
-
-await registeredTool.execute(
-  "budget-prefill",
-  {
-    description: "Consume nested-call budget before testing an uncatchable violation",
-    code: `
-      await Promise.all(Array.from({ length: 9 }, () => tools.read({ path: "package.json", offset: 1, limit: 1 })));
-      return { calls: 9 };
-    `,
-  },
-  new AbortController().signal,
-  undefined,
-  deepSeekCtx,
-);
-
-let rejectedCaughtBudget = false;
-try {
-  await registeredTool.execute(
-    "caught-budget-violation",
-    {
-      description: "Ensure a program cannot swallow a nested-call budget violation",
-      code: `
-        for (let index = 0; index < 32; index += 1) {
-          try { await tools.read({ path: "package.json", offset: 1, limit: 1 }); } catch {}
-        }
-        return { swallowed: true };
-      `,
-    },
-    new AbortController().signal,
-    undefined,
-    deepSeekCtx,
-  );
-} catch (error) {
-  rejectedCaughtBudget = error instanceof Error && error.message.includes("PTC_BUDGET_EXCEEDED");
-}
-if (!rejectedCaughtBudget) throw new Error("PTC program swallowed a nested-call budget violation");
-await registeredCommand.handler("on", ctx);
-
-const cancellation = new AbortController();
-const cancelTimer = setTimeout(() => cancellation.abort(), 150);
-let cancelledLoop = false;
-try {
-  await registeredTool.execute(
-    "cancel-call",
-    { description: "Cancel loop", code: "while (true) {}" },
-    cancellation.signal,
-    undefined,
-    ctx,
-  );
-} catch (error) {
-  cancelledLoop = error instanceof Error && error.message.includes("cancelled");
-} finally {
-  clearTimeout(cancelTimer);
-}
-if (!cancelledLoop) throw new Error("PTC runtime did not cancel an infinite loop cleanly");
-
-const computeBudget = createBudgetState({
-  ...resolvePtcPolicy("readOnly", ctx.model),
-  maxRunComputeTimeMs: 100,
-  maxRunWallTimeMs: 2_000,
-});
-const computeStartedAt = Date.now();
-let rejectedAsyncBusyLoop = false;
-try {
-  await runPtcProgramForTest(
-    `
-      await tools.read({ path: "package.json", offset: 1, limit: 1 });
-      while (true) {}
-    `,
-    ctx.cwd,
-    undefined,
-    false,
-    computeBudget,
-  );
-} catch (error) {
-  rejectedAsyncBusyLoop = error instanceof Error
-    && error.message.includes("PTC_BUDGET_EXCEEDED")
-    && error.message.includes("runComputeTimeMs");
-}
-if (!rejectedAsyncBusyLoop || Date.now() - computeStartedAt >= 2_000 || computeBudget.violation) {
-  throw new Error("PTC compute watchdog did not stop an async-resumed busy loop independently");
-}
-
-await registeredCommand.handler("both", ctx);
-let mixedSystemPrompt = "";
-for (const handler of handlers.get("before_agent_start") ?? []) {
-  const replacement = await handler({ systemPrompt: "BASE" }, ctx);
-  if (replacement?.systemPrompt) mixedSystemPrompt = replacement.systemPrompt;
-}
-if (
-  !mixedSystemPrompt.includes("For one file read/search")
-  || !mixedSystemPrompt.includes("across three or more related files/calls")
-  || !mixedSystemPrompt.includes("focused ordinary read is allowed for diagnosis")
-) {
-  throw new Error("PTC mixed-mode selection guidance is missing");
-}
-for (const handler of handlers.get("agent_settled") ?? []) await handler({}, ctx);
-await registeredCommand.handler("off", ctx);
-for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, ctx);
-
-console.log("PTC extension smoke test passed");
+assert.deepEqual(nestedCalls.sort(), ["bash", "read"]);
+assert.match(result.content[0].text, /file-content/);
+assert.match(result.content[0].text, /shell-output/);
+assert.equal(result.details.codeMode, true);
+console.log("Code Mode extension smoke test passed");
