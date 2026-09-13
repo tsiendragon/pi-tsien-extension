@@ -323,7 +323,7 @@ export function registerLiveSessionExtension(
         return { ok: true, result: { compacting: true } };
       }
       if (command.type === "reload") {
-        pi.sendUserMessage("/reload", { expandPromptTemplates: true, ...(ctx.isIdle() ? {} : { deliverAs: "followUp" }) });
+        pi.sendUserMessage("/live-session-reload", { expandPromptTemplates: true, ...(ctx.isIdle() ? {} : { deliverAs: "followUp" }) });
         return { ok: true, result: { reloading: true } };
       }
       if (command.type === "feature_command") {
@@ -346,6 +346,13 @@ export function registerLiveSessionExtension(
         released ? "已释放 Dashboard 强控制权限。" : "当前 session 没有 Dashboard 强控制权限。",
         "info",
       );
+    },
+  });
+
+  pi.registerCommand("live-session-reload", {
+    description: "通过 live-session 触发 reload（重载 extensions/skills/prompts/themes）",
+    handler: async (_args, ctx) => {
+      await ctx.reload();
     },
   });
 
