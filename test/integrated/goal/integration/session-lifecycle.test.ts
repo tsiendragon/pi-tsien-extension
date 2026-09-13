@@ -249,14 +249,10 @@ describe("session lifecycle integration coverage", () => {
 		const api = {
 			appendEntry,
 			sendUserMessage,
-			getFlag: vi.fn((name: string) =>
-				name === "goal-continuation" ? true : name === "goal-continuation-max-no-progress-turns" ? 1 : 2,
-			),
+			getFlag: vi.fn((name: string) => (name === "goal-continuation" ? true : undefined)),
 		};
 		const ctx = {
 			sessionManager: { getBranch: vi.fn(() => branch) },
-			isIdle: vi.fn(() => true),
-			hasPendingMessages: vi.fn(() => false),
 			ui: { setStatus: vi.fn(), setWidget: vi.fn() },
 		};
 		const continuation = createGoalContinuationState();
@@ -276,13 +272,6 @@ describe("session lifecycle integration coverage", () => {
 		);
 		branch.push(customEntry(replace.entry));
 		startQueuedGoalContinuation(api, continuation, ctx, 20);
-		expect(continuation.stoppedReason).toBe("stale-goal");
-
-		const freshBranch = [customEntry(create.entry)];
-		ctx.sessionManager.getBranch.mockReturnValue(freshBranch);
-		const noProgress = createGoalContinuationState();
-		noProgress.queuedGoalId = "goal-1";
-		startQueuedGoalContinuation(api, noProgress, ctx, 30);
-		expect(finishRunningGoalContinuation(api, noProgress, ctx, 40)).toBe("no-progress-budget");
+		expect(continuation.queuedGoalId).toBe("goal-1");
 	});
 });

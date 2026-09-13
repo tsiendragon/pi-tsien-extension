@@ -3,6 +3,7 @@ import {
 	completeGoalParams,
 	createGoalParams,
 	executeCompleteGoal,
+	executePauseGoal,
 	executeCreateGoal,
 	executeGetGoal,
 	executeProposeGoalDraft,
@@ -17,6 +18,7 @@ import {
 	proposeGoalDraftParams,
 	proposeGoalDraftPromptGuidelines,
 	proposeGoalDraftPromptSnippet,
+	pauseGoalParams,
 	registerGoalTools,
 	updateGoalGraphParams,
 	updateGoalProgressParams,
@@ -32,6 +34,7 @@ function createHarness() {
 		{
 			name: string;
 			parameters: unknown;
+			description?: string;
 			promptSnippet?: string;
 			promptGuidelines?: string[];
 			execute: (...args: never[]) => Promise<unknown>;
@@ -78,6 +81,7 @@ describe("goal tool schemas and registration", () => {
 			"acceptance_criteria",
 		]);
 		expect(Object.keys(completeGoalParams.properties)).toEqual(["evidence"]);
+		expect(Object.keys(pauseGoalParams.properties)).toEqual(["reason"]);
 		expect(Object.keys(updateGoalProgressParams.properties)).toEqual([
 			"done",
 			"current",
@@ -102,10 +106,11 @@ describe("goal tool schemas and registration", () => {
 			"create_goal",
 			"propose_goal_draft",
 			"complete_goal",
+			"pause_goal",
 			"update_goal_graph",
 			"update_goal_progress",
 		]);
-		expect(pi.registerTool).toHaveBeenCalledTimes(6);
+		expect(pi.registerTool).toHaveBeenCalledTimes(7);
 	});
 
 	it("documents propose_goal_draft as the review-only drafting path separate from create_goal", () => {
@@ -113,20 +118,17 @@ describe("goal tool schemas and registration", () => {
 		expect(proposeGoalDraftPromptSnippet).toContain("do not persist");
 		expect(proposeGoalDraftPromptGuidelines).toEqual(
 			expect.arrayContaining([
-				expect.stringContaining("Use propose_goal_draft for plain /goal drafting turns"),
 				expect.stringContaining("Preserve the user's meaning and boundaries"),
 				expect.stringContaining("editable acceptanceCriteria"),
 				expect.stringContaining("Do not leave acceptanceCriteria empty"),
-				expect.stringContaining("Call propose_goal_draft exactly once"),
-				expect.stringContaining("create_goal persists an already-approved goal"),
+				expect.stringContaining("Use create_goal only for an already-authorized new goal"),
 			]),
 		);
 
 		const { pi, tools } = createHarness();
 		registerGoalTools(pi);
-		const createGoalGuidance = tools.get("create_goal")?.promptGuidelines?.join("\n") ?? "";
-		expect(createGoalGuidance).toContain("create_goal only for an explicitly approved new goal");
-		expect(createGoalGuidance).toContain("use propose_goal_draft for drafts");
+		const createGoalGuidance = tools.get("create_goal")?.description ?? "";
+		expect(createGoalGuidance).toContain("For drafts use propose_goal_draft");
 		expect(createGoalGuidance).toContain("never rewrite an existing goal");
 
 		for (const toolName of [
@@ -134,12 +136,12 @@ describe("goal tool schemas and registration", () => {
 			"create_goal",
 			"propose_goal_draft",
 			"complete_goal",
+			"pause_goal",
 			"update_goal_graph",
 			"update_goal_progress",
 		]) {
 			const tool = tools.get(toolName);
 			expect(tool?.promptSnippet).toContain(toolName);
-			expect(tool?.promptGuidelines?.join("\n")).toContain(toolName);
 		}
 	});
 });
@@ -218,6 +220,20 @@ describe("goal tool execution", () => {
 		expect(duplicate).toMatchObject({ details: { status: "refused", reason: "goal_exists" } });
 		expect(duplicate).not.toHaveProperty("isError");
 		expect(latestGoalEntry(branch).state?.objective).toBe("Allowed");
+	});
+
+	it("pauses an active goal with a durable reason", () => {
+		const { pi, ctx } = createHarness();
+		executeCreateGoal({ objective: "Pause safely", explicit_request: true }, ctx, pi);
+
+		const result = executePauseGoal({ reason: "Waiting for the required credential" }, ctx, pi);
+		expect(result).toMatchObject({ details: { reason: "Waiting for the required credential" } });
+		expect(executeGetGoal(ctx).details).toMatchObject({
+			goal: { status: "paused", pausedReason: "Waiting for the required credential" },
+		});
+		expect(executePauseGoal({ reason: "again" }, ctx, pi)).toMatchObject({
+			details: { status: "refused", reason: "goal_inactive" },
+		});
 	});
 
 	it("propose_goal_draft saves and starts only after Start review", async () => {

@@ -104,10 +104,10 @@
 
 ### `goal.ts`
 
-已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项和显式 continuation。
+已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项、每 20 分钟自动 continuation 和 Agent 可说明原因的暂停。
 
 - `/goal`、`/goal status`、`/goal start`、`/goal import`、`/goal pause|resume|complete|clear`
-- Tools：`get_goal`、`create_goal`、`propose_goal_draft`、`complete_goal`、`update_goal_progress`、`update_goal_graph`
+- Tools：`get_goal`、`create_goal`、`propose_goal_draft`、`complete_goal`、`pause_goal`、`update_goal_progress`、`update_goal_graph`
 
 ### `memory.ts`
 
