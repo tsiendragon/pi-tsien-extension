@@ -28,7 +28,7 @@ function extensionHarness() {
   return { pi, handlers, commands, sent };
 }
 
-function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; notifications: string[] }): ExtensionContext {
+function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[] }): ExtensionContext {
   return {
     mode: "tui",
     cwd: "/mnt/workspace/lilong/repos/worktree/task-a",
@@ -47,6 +47,7 @@ function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; 
       find: () => ({ provider: "test", id: "next", name: "Next", reasoning: true, contextWindow: 100, thinkingLevelMap: {} }),
     },
     compact: () => { state.compacted = true; },
+    reload: async () => { state.reloaded = true; },
     isIdle: () => state.idle,
     abort: () => { state.aborted = true; },
     ui: { notify: (message: string) => state.notifications.push(message) },
@@ -130,7 +131,7 @@ test("Live Session extension shares prompt input while keeping strong controls l
 
 test("Live Session extension executes model and context controls", async () => {
   const harness = extensionHarness();
-  const state = { idle: true, aborted: false, compacted: false, notifications: [] as string[] };
+  const state = { idle: true, aborted: false, compacted: false, reloaded: false, notifications: [] as string[] };
   let options: LiveSessionClientOptions | undefined;
   registerLiveSessionExtension(harness.pi, {
     identity: { processInstanceId: "process-a", startedAt: 1 },
@@ -155,7 +156,14 @@ test("Live Session extension executes model and context controls", async () => {
   const clear = await options!.executeCommand(envelope({ type: "input", text: "/clear", channel: "web" }, "request-clear"));
   assert.equal(clear.ok, true);
   await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "/clear" } }, ctx);
-  assert.deepEqual(harness.sent, [{ content: "/clear", options: { expandPromptTemplates: true } }]);
+  const reload = await options!.executeCommand(envelope({ type: "reload" }, "request-reload"));
+  assert.equal(reload.ok, true);
+  await harness.commands.get("live-session-reload").handler("", ctx);
+  assert.equal(state.reloaded, true);
+  assert.deepEqual(harness.sent, [
+    { content: "/clear", options: { expandPromptTemplates: true } },
+    { content: "/live-session-reload", options: { expandPromptTemplates: true } },
+  ]);
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
