@@ -131,10 +131,30 @@ export type ProviderEvent =
       readonly isError: boolean;
     };
 
+export interface SubagentTraceContext {
+  readonly parentSessionId?: string;
+  readonly parentToolCallId?: string;
+  readonly parentWorkflowId?: string;
+  readonly parentWorkId?: string;
+  readonly parentTaskId?: string;
+  readonly workflowId?: string;
+  readonly workId?: string;
+  readonly taskId?: string;
+  readonly taskKey?: string;
+  /** Zero-based workflow stage index. */
+  readonly stageIndex?: number;
+  /** Zero-based foreach iteration index. */
+  readonly iterationIndex?: number;
+  readonly sourceWorkId?: string;
+  readonly sourceWorkflowId?: string;
+  readonly attempt?: number;
+}
+
 export interface ProviderRunRequest {
   readonly sessionId: string;
   readonly runId: string;
   readonly task: string;
+  readonly traceContext?: SubagentTraceContext;
   readonly contextMode: ContextMode;
   readonly context?: string;
   readonly cwd: string;
@@ -155,6 +175,7 @@ export interface SubagentProvider {
 
 export interface StartAgentRequest {
   readonly task: string;
+  readonly traceContext?: SubagentTraceContext;
   readonly label?: string;
   readonly sessionId?: string;
   readonly contextMode?: ContextMode;
@@ -195,6 +216,7 @@ export interface AgentRunSnapshot {
 
 export interface SubagentRunStartConfig {
   readonly cwd: string;
+  readonly traceContext?: SubagentTraceContext;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
   /** Controller-owned work handle for result collection and cancellation. */
@@ -583,6 +605,9 @@ export class SubagentService {
       ...(request.workflowId === undefined
         ? {}
         : { workflowId: request.workflowId }),
+      ...(request.traceContext === undefined
+        ? {}
+        : { traceContext: request.traceContext }),
     });
     this.emitEvent(
       Object.freeze({
@@ -600,6 +625,7 @@ export class SubagentService {
         sessionId: session.id,
         runId,
         task: request.task,
+        traceContext: request.traceContext,
         contextMode,
         context: request.context,
         cwd,

@@ -21,6 +21,7 @@ import {
   type AgentUsage,
   type ProviderEvent,
   type SubagentServiceEvent,
+  type SubagentTraceContext,
 } from "./subagent-service.ts";
 import {
   evaluateWorkflowWhen,
@@ -145,6 +146,7 @@ export interface WorkbenchJobQuery {
 
 export interface WorkbenchAgentRequest {
   readonly task: string;
+  readonly traceContext?: SubagentTraceContext;
   readonly label?: string;
   readonly cwd: string;
   readonly model?: string;
@@ -178,6 +180,7 @@ export interface WorkbenchWorkflowStageRequest {
 
 export interface WorkbenchWorkflowRequest {
   readonly workflowId?: string;
+  readonly traceContext?: SubagentTraceContext;
   readonly label?: string;
   readonly stages: readonly WorkbenchWorkflowStageRequest[];
   readonly cwd: string;
@@ -369,6 +372,9 @@ function reusableWorkflowRequest(
   return {
     label: request.label,
     cwd: request.cwd,
+    traceContext: request.traceContext
+      ? { ...request.traceContext }
+      : undefined,
     model: request.model,
     thinking: request.thinking,
     parameters: request.parameters
@@ -733,6 +739,7 @@ export class WorkbenchController {
       model: request.model,
       thinking: request.thinking,
       parentId: request.parentId,
+      traceContext: request.traceContext,
       signal: request.signal
         ? AbortSignal.any([request.signal, this.lifetimeAbort.signal])
         : this.lifetimeAbort.signal,
@@ -753,10 +760,24 @@ export class WorkbenchController {
       label: request.label?.trim() || request.task.slice(0, 48),
       background,
     });
+    const traceContext: SubagentTraceContext = {
+      ...request.traceContext,
+      ...(request.traceContext?.workflowId
+        ? { parentWorkflowId: request.traceContext.workflowId }
+        : {}),
+      ...(request.traceContext?.workId
+        ? { parentWorkId: request.traceContext.workId }
+        : {}),
+      ...(request.traceContext?.taskId
+        ? { parentTaskId: request.traceContext.taskId }
+        : {}),
+      workId: created.handle.workId,
+    };
     const completion = Promise.resolve().then(async () => {
       try {
         const result = await this.runAgent({
           ...request,
+          traceContext,
           foreground: !background,
           parentId: created.handle.workId,
           signal: request.signal
@@ -802,21 +823,44 @@ export class WorkbenchController {
     });
     this.reservedWorkflowSessions += reservedSessionSlots;
     const workflowId = request.workflowId ?? `workflow_${created.handle.workId}`;
+    const traceContext: SubagentTraceContext = {
+      ...request.traceContext,
+      ...(request.traceContext?.workflowId
+        ? { parentWorkflowId: request.traceContext.workflowId }
+        : {}),
+      ...(request.traceContext?.workId
+        ? { parentWorkId: request.traceContext.workId }
+        : {}),
+      ...(request.traceContext?.taskId
+        ? { parentTaskId: request.traceContext.taskId }
+        : {}),
+      workflowId,
+      workId: created.handle.workId,
+      ...(retry?.sourceWorkId ? { sourceWorkId: retry.sourceWorkId } : {}),
+      ...(retry?.previousResult?.workflowId
+        ? { sourceWorkflowId: retry.previousResult.workflowId }
+        : {}),
+      ...(retry?.attempt === undefined ? {} : { attempt: retry.attempt }),
+    };
+    const workflowRequest = {
+      ...request,
+      workflowId,
+      traceContext,
+    };
     this.workflowSessionReservations.set(workflowId, reservedSessionSlots);
     this.jobs.associate(created.handle.workId, { workflowId });
     this.workflowRequests.set(
       created.handle.workId,
-      reusableWorkflowRequest(request),
+      reusableWorkflowRequest(workflowRequest),
     );
     const completion = Promise.resolve().then(async () => {
       this.jobs.start(created.handle.workId);
       try {
         const result = await this.runWorkflow(
           {
-            ...request,
-            workflowId,
-            signal: request.signal
-              ? AbortSignal.any([request.signal, created.signal])
+            ...workflowRequest,
+            signal: workflowRequest.signal
+              ? AbortSignal.any([workflowRequest.signal, created.signal])
               : created.signal,
           },
           reservedSessionSlots,
@@ -914,6 +958,7 @@ export class WorkbenchController {
 
   retryWorkflowJob(
     workId: string,
+    traceContext?: SubagentTraceContext,
   ): WorkbenchSubmission<WorkbenchWorkflowResult> | undefined {
     const job = this.jobs.get(workId);
     if (
@@ -925,13 +970,14 @@ export class WorkbenchController {
     const request = this.workflowRequests.get(workId);
     const previousResult = workflowResultFrom(job.result);
     if (!request || !previousResult) return undefined;
-    return this.retryWorkflowFromResult(workId, request, previousResult);
+    return this.retryWorkflowFromResult(workId, request, previousResult, traceContext);
   }
 
   retryWorkflowFromResult(
     sourceWorkId: string,
     request: WorkbenchWorkflowRequest,
     previousResult: WorkbenchWorkflowResult,
+    traceContext?: SubagentTraceContext,
   ): WorkbenchSubmission<WorkbenchWorkflowResult> {
     if (
       !["completed", "failed", "cancelled"].includes(previousResult.status)
@@ -942,7 +988,10 @@ export class WorkbenchController {
       (stage) => stage.status !== "completed",
     );
     const fromStage = firstIncomplete < 0 ? 0 : firstIncomplete;
-    return this.submitWorkflow(request, true, {
+    return this.submitWorkflow({
+      ...request,
+      traceContext: { ...request.traceContext, ...traceContext },
+    }, true, {
       sourceWorkId,
       attempt: (previousResult.attempt ?? 1) + 1,
       fromStage,
@@ -953,6 +1002,7 @@ export class WorkbenchController {
   retryWorkflowTaskJob(
     workId: string,
     taskKey: string,
+    traceContext?: SubagentTraceContext,
   ): WorkbenchSubmission<WorkbenchWorkflowResult> | undefined {
     const job = this.jobs.get(workId);
     if (
@@ -969,6 +1019,7 @@ export class WorkbenchController {
       request,
       previousResult,
       taskKey,
+      traceContext,
     );
   }
 
@@ -977,6 +1028,7 @@ export class WorkbenchController {
     request: WorkbenchWorkflowRequest,
     previousResult: WorkbenchWorkflowResult,
     taskKey: string,
+    traceContext?: SubagentTraceContext,
   ): WorkbenchSubmission<WorkbenchWorkflowResult> {
     if (!WORKFLOW_TASK_KEY.test(taskKey)) {
       throw new TypeError(`Invalid workflow task key: ${taskKey}`);
@@ -998,7 +1050,10 @@ export class WorkbenchController {
     if (["completed", "skipped"].includes(previousTask.status)) {
       throw new TypeError(`Workflow task ${taskKey} is already complete.`);
     }
-    return this.submitWorkflow(request, true, {
+    return this.submitWorkflow({
+      ...request,
+      traceContext: { ...request.traceContext, ...traceContext },
+    }, true, {
       sourceWorkId,
       attempt: (previousResult.attempt ?? 1) + 1,
       fromStage: stageIndex,
@@ -1612,6 +1667,17 @@ export class WorkbenchController {
                       ? `${taskResult.id}:iteration:${index + 1}`
                       : taskResult.id,
                     workflowId,
+                    traceContext: {
+                      ...request.traceContext,
+                      workflowId,
+                      ...(request.traceContext?.workId
+                        ? { workId: request.traceContext.workId }
+                        : {}),
+                      taskId: taskResult.id,
+                      taskKey: taskResult.key,
+                      stageIndex,
+                      ...(task.foreach ? { iterationIndex: index } : {}),
+                    },
                     signal: abort.signal,
                     ...(explicitContext
                       ? {

@@ -5,7 +5,34 @@ import type {
   AgentUsage,
   ProviderRunRequest,
   SubagentProvider,
+  SubagentTraceContext,
 } from "../subagent-service.ts";
+
+export function serializeTraceContext(
+  traceContext: SubagentTraceContext | undefined,
+): string | undefined {
+  return traceContext ? JSON.stringify(traceContext) : undefined;
+}
+
+function traceContextKey(traceContext: SubagentTraceContext | undefined): string {
+  if (!traceContext) return "";
+  return JSON.stringify([
+    traceContext.parentSessionId ?? "",
+    traceContext.parentToolCallId ?? "",
+    traceContext.parentWorkflowId ?? "",
+    traceContext.parentWorkId ?? "",
+    traceContext.parentTaskId ?? "",
+    traceContext.workflowId ?? "",
+    traceContext.workId ?? "",
+    traceContext.taskId ?? "",
+    traceContext.taskKey ?? "",
+    traceContext.stageIndex ?? -1,
+    traceContext.iterationIndex ?? -1,
+    traceContext.sourceWorkId ?? "",
+    traceContext.sourceWorkflowId ?? "",
+    traceContext.attempt ?? -1,
+  ]);
+}
 
 export type PiRpcProviderErrorCode =
   | "invalid_options"
@@ -154,6 +181,7 @@ interface ProviderSession {
   readonly cwd: string;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
+  readonly traceContext?: SubagentTraceContext;
   readonly client: PiRpcClient;
   activeRun?: symbol;
 }
@@ -696,11 +724,13 @@ export class PiRpcProcessProvider implements SubagentProvider {
       if (
         session.cwd !== request.cwd ||
         session.model !== effectiveModel ||
-        session.thinking !== effectiveThinking
+        session.thinking !== effectiveThinking ||
+        (request.traceContext !== undefined &&
+          traceContextKey(session.traceContext) !== traceContextKey(request.traceContext))
       ) {
         throw new PiRpcProviderError(
           "session_configuration_mismatch",
-          `Pi RPC session ${request.sessionId} cannot change cwd, model, or thinking.`,
+          `Pi RPC session ${request.sessionId} cannot change cwd, model, thinking, or trace context.`,
         );
       }
       session.activeRun = runToken;
@@ -807,6 +837,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
       ...(thinking ? ["--thinking", thinking] : []),
       ...this.cliArgs,
     ];
+    const serializedTraceContext = serializeTraceContext(request.traceContext);
     const client = new PiRpcClient(
       this.executable,
       args,
@@ -815,6 +846,9 @@ export class PiRpcProcessProvider implements SubagentProvider {
         PI_SKIP_VERSION_CHECK: "1",
         PI_TELEMETRY: "0",
         ...this.environment,
+        ...(serializedTraceContext
+          ? { PI_TRACE_CONTEXT: serializedTraceContext }
+          : {}),
         PI_SUBAGENT_WORKBENCH_CHILD: "1",
       },
       this.commandTimeoutMs,
@@ -826,6 +860,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
       cwd: request.cwd,
       model,
       thinking,
+      traceContext: request.traceContext,
       client,
       activeRun: runToken,
     };
