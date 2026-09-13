@@ -115,17 +115,16 @@ Status key:
 
 | Criterion                                                                                                                                                                                                                                       | Status        |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| Explicit start handoff remains separate from automatic idle continuation.                                                                                                                                                                       | Source review |
+| Explicit start handoff remains separate from automatic periodic continuation.                                                                                                                                                                   | Source review |
 | `/goal start` and `--start` do not enable background work.                                                                                                                                                                                      | Source review |
 | Continuation finalizes on `agent_settled`, not `agent_end`, after retries and queued messages settle; this event never queues another turn.                                                                                                     | Automated     |
-| Default-on local-fork continuation only runs when the goal is active, Pi is idle, no pending user messages exist, and it was not explicitly disabled.                                                                                           | Automated     |
-| The default-on watchdog is the sole automatic trigger and queues one guarded follow-up after 30 minutes without a new branch entry.                                                                                                             | Automated     |
+| Default-on local-fork continuation runs only for an active goal unless it was explicitly disabled.                                                                                                                                            | Automated     |
+| A periodic timer queues one `继续目标` follow-up every 20 minutes by default; a positive interval setting overrides the default.                                                                                                                | Automated     |
 | The automatic follow-up prompt is `继续目标`, which is no more than 10 characters; detailed state comes from hidden goal context.                                                                                                               | Automated     |
-| A sub-agent notification resets the silent window, while UI-only `EagleEye task settled` notifications do not.                                                                                                                                  | Automated     |
-| Watchdog queues are restored across reload and do not produce duplicate wake-ups.                                                                                                                                                               | Automated     |
-| Continuation re-checks `goalId` before queuing and before starting work.                                                                                                                                                                        | Automated     |
-| Continuation stops on an explicitly configured duration budget (default off), no-progress budget, all paths blocked, completion, pause, clear, user interrupt, replacement, duplicate queue, pending messages, busy state, explicit disable, or a configured max-turn cap. | Automated     |
-| Work-item readiness, hard-blocker isolation, report rendering, and SQLite ledger synchronization.                                                                                                                                               | Automated     |
+| Only one follow-up is queued for a goal at once; consuming it allows the next periodic tick to queue another.                                                                                                                                     | Automated     |
+| Continuation re-checks active `goalId` before queuing and before starting work.                                                                                                                                                                  | Automated     |
+| Continuation does not queue when disabled, paused, complete, cleared, stale, or already queued; session shutdown clears the timer.                                                                                                              | Automated     |
+| Work-item readiness, hard-blocker isolation, report rendering, and SQLite ledger synchronization.                                                                                                                                                 | Automated     |
 | Exact Codex token/time budget accounting.                                                                                                                                                                                                       | Future work   |
 | Codex SQLite `thread_goals` schema and app-server RPC compatibility.                                                                                                                                                                            | Future work   |
 | Exact Codex goal menu UI.                                                                                                                                                                                                                       | Future work   |
@@ -159,9 +158,9 @@ Live interactive TUI lifecycle checks are a **release-blocking evidence gap unti
 | `/goal` command lifecycle.                                                                                 | Automated                                                       |
 | Reload, resume, tree, and fork reconstruction behavior.                                                    | Automated with simulated session events and branch fixtures     |
 | Compaction hook behavior.                                                                                  | Automated                                                       |
-| `agent_settled` finalization without immediate queueing, including after interruption.                     | Automated                                                       |
-| Watchdog 30-minute silence threshold, concise prompt, idle/no-progress/stale/duplicate/max-turn guards.    | Automated                                                       |
-| Sub-agent notification reset, UI-only settled isolation, and watchdog reload dedupe.                       | Automated                                                       |
+| `agent_settled` ledger synchronization without immediate queueing, including after interruption.           | Automated                                                       |
+| Periodic timer default/custom interval, concise prompt, disable, active-state, and duplicate-queue guards.  | Automated                                                       |
+| Follow-up consumption enables the next interval; session shutdown clears the periodic timer.                | Automated                                                       |
 | Live TUI tests for `/reload`, `/resume`, `/tree`, `/fork`, `/compact`, and the visible active-goal widget. | **Blocked for release until manual smoke evidence is recorded** |
 
 ## Manual session lifecycle smoke checklist
@@ -188,14 +187,14 @@ Before release, run these checks in a real TUI session and record command sequen
 11. Trigger `/compact`; confirm `/goal status` still shows objective, criteria, source brief, and progress. Then send a normal prompt and verify hidden goal context is regenerated for the active goal.
 12. Run `/reload` or restart/resume the session. Confirm the active-goal widget and `/goal status` reconstruct from current branch custom entries.
 13. Use `/fork` or `/tree` to navigate between branches with different goal mutations. Confirm each branch shows its own goal state and stale context from the other branch is absent.
-14. Start Pi with the default continuation behavior (or explicitly tune its budgets):
+14. Start Pi with the default periodic continuation behavior (or configure its interval):
 
     ```bash
-    pi --no-extensions -e ./extensions/index.ts --goal-continuation-max-duration-hours 48 --goal-continuation-max-turns 0 --goal-continuation-max-no-progress-turns 2
+    pi --no-extensions -e ./extensions/index.ts --goal-continuation-interval-minutes 20
     ```
 
-15. Update progress through `update_goal_progress`, then let idle continuation queue. Confirm it stops after no progress or the max-turn cap and does not duplicate the queue.
-16. Confirm automatic continuation is distinct from `/goal start` and `--start`; it should queue only while Pi is idle unless `--goal-continuation=false` was supplied. Also run `/goal blockers --markdown` and inspect the Powerline progress status.
+15. Keep an active goal through one interval. Confirm `继续目标` queues once, consume it, then confirm the next interval queues one more follow-up. Pause or complete the goal and confirm later ticks do not queue messages.
+16. Restart with `--goal-continuation=false` and confirm no automatic follow-up queues. Confirm automatic continuation remains distinct from `/goal start` and `--start`, then run `/goal blockers --markdown` and inspect the Powerline progress status.
 17. Run quick non-interactive load checks:
 
     ```bash

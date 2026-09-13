@@ -51,11 +51,17 @@ describe("goal state reducer", () => {
 		expect(state?.constraints).toEqual(["stay scoped"]);
 		expect(state?.acceptanceCriteria).toEqual(["tests pass"]);
 
-		state = reduceGoalState(state, { action: "pause", goalId: "goal-1", now: baseTime + 2 });
-		expect(state?.status).toBe("paused");
+		state = reduceGoalState(state, {
+			action: "pause",
+			goalId: "goal-1",
+			now: baseTime + 2,
+			reason: "Waiting for required input",
+		});
+		expect(state).toMatchObject({ status: "paused", pausedReason: "Waiting for required input" });
 
 		state = reduceGoalState(state, { action: "resume", goalId: "goal-1", now: baseTime + 3 });
 		expect(state?.status).toBe("active");
+		expect(state?.pausedReason).toBeUndefined();
 
 		state = reduceGoalState(state, {
 			action: "progress",

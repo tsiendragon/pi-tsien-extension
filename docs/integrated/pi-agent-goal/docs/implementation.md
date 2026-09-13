@@ -135,28 +135,11 @@ Canonical state still comes from `goal-state` entries after compaction. The comp
 
 `/goal start` and `--start` queue one explicit follow-up prompt for the current active `goalId`. They do not enable recurring idle work and do not bypass paused or complete states.
 
-Automatic continuation is enabled by default in this local fork. Pass `--goal-continuation=false` to disable it; the positive flag remains compatible. Conservative caps are configurable:
+Automatic continuation is enabled by default in this local fork. Pass `--goal-continuation=false` to disable it; the positive flag remains compatible. Set a positive interval with `--goal-continuation-interval-minutes <n>`; the default is 20 minutes.
 
-```bash
-pi --no-extensions -e ./extensions/index.ts --goal-continuation-max-duration-hours 48 --goal-continuation-max-turns 0 --goal-continuation-max-no-progress-turns 2
-```
+At `session_start`, the runtime starts one recursive timer. Each tick re-reads the current branch snapshot and queues `继续目标` only when continuation is enabled, the goal is active, and no follow-up for that goal is already queued. The prompt stays small because the hidden `goal-context` supplies the objective, work graph, blockers, and progress on the next turn. The timer is deliberately periodic: it does not wait for a silence window or inspect idle/pending-message state.
 
-Continuation queues only when:
-
-- continuation was not explicitly disabled,
-- the current branch has an active goal,
-- Pi is idle,
-- no pending user messages exist,
-- no continuation is already queued or running,
-- the max-turn and consecutive-no-progress caps are not reached,
-- a ready work item exists, or a bounded `agent_can_try` blocker exploration is eligible,
-- the goal ID still matches after re-read.
-
-Finalization runs on `agent_settled`, not `agent_end`, after Pi has resolved retries, auto-compaction retries, and queued messages. This lifecycle event never queues another turn, so an Esc interruption can settle without immediately restarting the agent.
-
-The default-on silence watchdog is the sole automatic scheduling path. It observes real entries on the current session branch. After 30 minutes without a new entry, it reuses the continuation guards and queues at most one `继续目标` follow-up for that silent window. The four-character prompt stays small because the hidden `goal-context` supplies the objective, work graph, blockers, and progress on the next turn. Configure the behavior with `--goal-continuation-watchdog=false` or `--goal-continuation-watchdog-silence-minutes <n>`. UI calls such as `ctx.ui.notify("EagleEye task settled")` are not branch entries and do not refresh the timer.
-
-It records `goal-continuation` custom entries with source, turn, and no-progress counters, reconstructs unconsumed queues and counters after reload, and defaults to no wall-clock duration budget with no turn cap (`--goal-continuation-max-duration-hours 0`, `--goal-continuation-max-turns 0`; set a positive value to enable either cap). It stops on stale goal, pause, clear, complete, replacement, user interrupt, duplicate queue, pending messages, busy state, explicit disable, duration budget, no-progress budget, or a positive max-turn cap. A new non-continuation user message clears a `no-progress-budget` or `all-paths-blocked` stalemate stop (resetting the no-progress counter) so the next watchdog re-evaluates ready work; `max-turns` remains sticky until the goal is replaced. When every unfinished item is covered by hard blockers or dependency closure, it persists an `all_paths_blocked` Markdown report in the canonical state and SQLite ledger.
+The incoming continuation prompt clears the queued state and records a `started` continuation entry, allowing the next timer tick to queue another follow-up. Pause, complete, clear, replacement, explicit disable, stale state, duplicate queue, and session shutdown prevent future sends. `agent_settled` only synchronizes the ledger; it never queues another turn, so Esc does not immediately restart the agent.
 
 ## UI behavior
 
@@ -196,7 +179,7 @@ No legacy footer replacement is rendered.
 | Commands     | Main goal lifecycle plus explicit `/goal start`, non-interactive `--start`, confirmations, and clean flag parsing.                               |
 | Model tools  | Narrow tools only. No general objective rewrite tool.                                                                                            |
 | Compaction   | `session_before_compact` preserves active-goal summary/details while canonical state stays in custom entries.                                    |
-| Continuation | Default-on only in this local fork, capped by turns/no-progress and guarded by idle, pending-message, stale-goal, work-graph, and policy checks. |
+| Continuation | Default-on only in this local fork. An active goal receives one `继续目标` follow-up per configured interval after the prior follow-up starts; disable it with `--goal-continuation=false`. |
 | UI           | Compact active-goal widget, `/goal status`, and tool renderers.                                                                                  |
 
 Intentional gaps: no Codex app-server RPC compatibility, no exact token/time accounting, and no exact Codex menu UI.
@@ -219,8 +202,8 @@ Live TUI smoke is still manual and release-blocking for `/compact`, `/reload`, `
 | Draft queued but no review appears     | The agent must call `propose_goal_draft`; a prose answer saves nothing.                                                                         |
 | `review_ui_unavailable`                | Use the Pi TUI review path or an explicitly approved `create_goal` request.                                                                     |
 | `/goal start` does not queue           | Confirm the goal exists, is active, and follow-up messaging is available.                                                                       |
-| Continuation does not queue            | Keep the goal active, wait for idle, ensure no pending messages exist, and confirm it was not explicitly disabled.                              |
-| Background completion does not resume  | The silence watchdog queues one guarded follow-up after 30 minutes; check its flags and continuation stop reason.                               |
+| Continuation does not queue            | Keep the goal active, confirm it is not paused or complete, ensure `--goal-continuation` is not false, and wait for the configured interval. |
+| Periodic follow-up does not resume     | Confirm the previous follow-up was consumed, then check the continuation flag and interval value.                                             |
 | Goal appears branch-stale              | Run `/goal status`; branch `goal-state` entries are the source of truth.                                                                        |
 
 ## Future work

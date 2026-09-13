@@ -56,7 +56,7 @@ To start an already active goal:
 /goal start
 ```
 
-This queues one explicit handoff. It is not automatic idle continuation.
+This queues one explicit handoff. It is not automatic periodic continuation.
 
 ## Non-interactive starts
 
@@ -69,16 +69,16 @@ pi -e npm:pi-agent-goal -p "/goal resume --start"
 
 Plain `/goal <objective> --start` in non-interactive mode only queues the draft/review path. It does not persist or start work by itself.
 
-## Silence watchdog
+## Periodic follow-up
 
-Automatic continuation is driven only by the silence watchdog; `agent_settled` finalizes state but does not queue work. After 30 minutes without a new session entry, the watchdog queues the concise `继续目标` follow-up only when the goal is active, Pi is idle, no messages are pending, and all normal continuation gates pass.
+Automatic continuation is a periodic timer. A session with an active goal queues the concise `继续目标` follow-up every 20 minutes by default. The timer does not wait for a silence window, idle state, or pending-message state. Only one follow-up can be queued at a time; pause, complete, clear, disable, or session shutdown stops future ticks.
 
 ```bash
-pi --goal-continuation-watchdog=false
-pi --goal-continuation-watchdog-silence-minutes 90
+pi --goal-continuation=false
+pi --goal-continuation-interval-minutes 45
 ```
 
-The visible `EagleEye task settled` notification is UI-only and does not reset this timer.
+Use a positive interval value. The visible `EagleEye task settled` notification does not schedule a continuation.
 
 ## Settings.json form
 
