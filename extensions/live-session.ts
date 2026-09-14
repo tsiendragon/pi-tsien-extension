@@ -152,9 +152,20 @@ export function registerLiveSessionExtension(
     const content: Parameters<ExtensionAPI["sendUserMessage"]>[0] = next.images?.length
       ? [{ type: "text", text: next.text }, ...next.images]
       : next.text;
-    pi.sendUserMessage(content, {
-      ...(next.deliverAs ? { deliverAs: next.deliverAs } : {}),
-      expandPromptTemplates: next.expandPromptTemplates,
+    // Release the in-flight input when this dispatch actually completes.
+    // For a model prompt sendUserMessage resolves at the end of the turn; for a
+    // slash command (e.g. /effort raising a dialog) pi executes the extension
+    // command and returns without any agent turn, so a turn-based release
+    // (agent_end) never fires and would wedge the queue forever.
+    void Promise.resolve(
+      pi.sendUserMessage(content, {
+        ...(next.deliverAs ? { deliverAs: next.deliverAs } : {}),
+        expandPromptTemplates: next.expandPromptTemplates,
+      }),
+    ).catch(() => {}).finally(() => {
+      if (activeInput !== next) return;
+      activeInput = undefined;
+      queueMicrotask(drainInputQueue);
     });
   };
 
@@ -426,16 +437,7 @@ export function registerLiveSessionExtension(
     running = true;
     publish("agent_start", {}, ctx);
   });
-  pi.on("agent_end", (event, ctx) => {
-    publish("agent_end", { messages: event.messages }, ctx);
-    // 可靠释放：以 turn 结束为准释放当前在途输入。slash command 经 expandPromptTemplates
-    // 派发后不产生 user 角色 message_end，仅靠 message_end 释放会让 activeInput 卡死，
-    // 后续 TUI 输入被 `if (activeInput) return` 挡住。agent_end 对每条 turn 都触发。
-    if (activeInput) {
-      activeInput = undefined;
-      queueMicrotask(drainInputQueue);
-    }
-  });
+  pi.on("agent_end", (event, ctx) => publish("agent_end", { messages: event.messages }, ctx));
   pi.on("agent_settled", (_event, ctx) => {
     running = false;
     publish("agent_settled", {}, ctx);
