@@ -13,6 +13,7 @@ function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
   const commands = new Map<string, any>();
   const sent: Array<{ content: unknown; options: unknown }> = [];
+  const pendingSends: Array<() => void> = [];
   const pi = {
     on(name: string, handler: (event: any, ctx: ExtensionContext) => any) {
       const list = handlers.get(name) || [];
@@ -21,12 +22,15 @@ function extensionHarness() {
     },
     registerCommand(name: string, command: unknown) { commands.set(name, command); },
     registerTool() {},
-    sendUserMessage(content: unknown, options: unknown) { sent.push({ content, options }); },
+    sendUserMessage(content: unknown, options: unknown) {
+      sent.push({ content, options });
+      return new Promise<void>(resolve => { pendingSends.push(resolve); });
+    },
     setModel: async () => true,
     setThinkingLevel() {},
     getThinkingLevel: () => "high",
   } as unknown as ExtensionAPI;
-  return { pi, handlers, commands, sent };
+  return { pi, handlers, commands, sent, pendingSends };
 }
 
 function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[] }): ExtensionContext {
@@ -97,7 +101,8 @@ test("Live Session extension shares prompt input while keeping strong controls l
   assert.equal(prompt.ok, true);
   assert.deepEqual(harness.sent, [{ content: "from terminal", options: { expandPromptTemplates: true } }]);
   // agent_end 释放在途 terminal → drain dashboard
-  await harness.handlers.get("agent_end")?.[0]({ messages: [] }, ctx);
+  harness.pendingSends.shift()?.();
+  await new Promise(resolve => setTimeout(resolve, 0));
   await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "from dashboard" } }, ctx);
   const imagePrompt = await options!.executeCommand(envelope({
     type: "input",
@@ -107,7 +112,8 @@ test("Live Session extension shares prompt input while keeping strong controls l
   }, "request-image-prompt"));
   assert.equal(imagePrompt.ok, true);
   // agent_end 释放 dashboard → drain image
-  await harness.handlers.get("agent_end")?.[0]({ messages: [] }, ctx);
+  harness.pendingSends.shift()?.();
+  await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(harness.sent, [
     { content: "from terminal", options: { expandPromptTemplates: true } },
     { content: "from dashboard", options: { expandPromptTemplates: true } },
@@ -411,9 +417,10 @@ test("Live Session drains queued input after a slash-command turn with no user m
   assert.equal(next.ok, true);
   assert.deepEqual(harness.sent, [{ content: "/effort high", options: { deliverAs: "followUp", expandPromptTemplates: true } }]);
 
-  // agent_end releases the in-flight command even without a user message_end, so
-  // the queued input drains instead of wedging forever (the fix).
-  await harness.handlers.get("agent_end")?.[0]({ messages: [] }, ctx);
+  // A slash command completes when pi executes the extension command and returns
+  // (no agent turn), so the dispatch promise settling is the release signal — not
+  // agent_end, which never fires here. This drains the next queued input.
+  harness.pendingSends.shift()?.();
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(harness.sent, [
     { content: "/effort high", options: { deliverAs: "followUp", expandPromptTemplates: true } },
