@@ -501,6 +501,12 @@ export function registerLiveSessionExtension(
     );
   });
 
+  // One-way notifications: /goal prints its command options via ctx.ui.notify,
+  // which must mirror to the web UI just like the interactive dialogs above.
+  pi.on("extension_ui_notify", (event, ctx) =>
+    publish("extension_ui_notify", { message: event.message, notifyType: event.notifyType }, ctx),
+  );
+
   pi.on("input", (event, ctx) => {
     currentContext = ctx;
     if (event.source !== "interactive") return { action: "continue" };

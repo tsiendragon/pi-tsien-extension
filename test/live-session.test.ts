@@ -216,6 +216,26 @@ test("Live Session extension echoes the input channel on injected user messages"
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
+test("Live Session extension projects extension notifications to the web", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: () => ({ start() {}, publish: message => published.push(message), sendSnapshot() {}, stop() {} }),
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  // /goal prints its command options via ctx.ui.notify; the bridge must mirror it.
+  await harness.handlers.get("extension_ui_notify")?.[0]({ message: "Next actions: /goal status, /goal pause", notifyType: "info" }, ctx);
+  const note = published.find(message => message.event.type === "extension_ui_notify");
+  assert.ok(note);
+  assert.deepEqual(note!.event.data, { message: "Next actions: /goal status, /goal pause", notifyType: "info" });
+  assert.equal(published.filter(message => message.event.type === "extension_ui_notify").length, 1);
+
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
 test("Live Session extension skips disconnected events and coalesces feature snapshots", async () => {
   const harness = extensionHarness();
   const published: EventMessage[] = [];
