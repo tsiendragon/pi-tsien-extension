@@ -426,7 +426,16 @@ export function registerLiveSessionExtension(
     running = true;
     publish("agent_start", {}, ctx);
   });
-  pi.on("agent_end", (event, ctx) => publish("agent_end", { messages: event.messages }, ctx));
+  pi.on("agent_end", (event, ctx) => {
+    publish("agent_end", { messages: event.messages }, ctx);
+    // 可靠释放：以 turn 结束为准释放当前在途输入。slash command 经 expandPromptTemplates
+    // 派发后不产生 user 角色 message_end，仅靠 message_end 释放会让 activeInput 卡死，
+    // 后续 TUI 输入被 `if (activeInput) return` 挡住。agent_end 对每条 turn 都触发。
+    if (activeInput) {
+      activeInput = undefined;
+      queueMicrotask(drainInputQueue);
+    }
+  });
   pi.on("agent_settled", (_event, ctx) => {
     running = false;
     publish("agent_settled", {}, ctx);
@@ -446,7 +455,6 @@ export function registerLiveSessionExtension(
     if (!isVisibleMessage(event.message)) return;
     const record = event.message as unknown as Record<string, unknown>;
     const completedInput = record.role === "user" ? activeInput : undefined;
-    if (completedInput) activeInput = undefined;
     const entries = typeof ctx.sessionManager.getEntries === "function" ? ctx.sessionManager.getEntries() : [];
     const entryId = record.role === "user" ? undefined : [...entries].reverse().find(entry => {
       const candidate = entry as unknown as Record<string, unknown>;
@@ -457,7 +465,6 @@ export function registerLiveSessionExtension(
       ...(completedInput ? { channel: completedInput.channel } : {}),
       ...(entryId?.id ? { entryId: entryId.id } : {}),
     }, ctx);
-    if (completedInput) queueMicrotask(drainInputQueue);
   });
   pi.on("tool_execution_start", (event, ctx) => publish("tool_execution_start", event, ctx));
   pi.on("tool_execution_update", (event, ctx) => publish("tool_execution_update", event, ctx));
