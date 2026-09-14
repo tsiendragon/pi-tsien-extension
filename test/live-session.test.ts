@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { registerLiveSessionExtension, type LiveSessionClientHandle } from "../extensions/live-session.ts";
 import { LeaseManager } from "../extensions/live-session/lease.ts";
 import { SnapshotProjector, sanitizeJson } from "../extensions/live-session/projector.ts";
+import { parseBrokerMessage } from "../extensions/live-session/protocol.ts";
 import type { CommandEnvelope, EventMessage } from "../extensions/live-session/protocol.ts";
 import type { LiveSessionClientOptions } from "../extensions/live-session/client.ts";
 import { publishLiveFeature, registerLiveFeatureCommandHandler } from "../extensions/lib/live-observer.ts";
@@ -418,4 +419,36 @@ test("Live Session drains queued input after a slash-command turn with no user m
     { content: "/effort high", options: { deliverAs: "followUp", expandPromptTemplates: true } },
     { content: "after command", options: { deliverAs: "followUp", expandPromptTemplates: true } },
   ]);
+});
+
+test("Live Session broker protocol parses the answer_ui command", () => {
+  // Regression: answer_ui was missing from parseCommand, so the client treated
+  // the broker command as invalid and destroyed the socket (surfacing as HTTP 500).
+  assert.deepEqual(
+    parseBrokerMessage({
+      type: "command",
+      requestId: "req-1",
+      processInstanceId: "process-a",
+      command: { type: "answer_ui", id: "ui-1", value: "high" },
+    }),
+    {
+      type: "command",
+      requestId: "req-1",
+      processInstanceId: "process-a",
+      command: { type: "answer_ui", id: "ui-1", value: "high" },
+    },
+  );
+
+  const cancelled = parseBrokerMessage({
+    type: "command",
+    requestId: "req-2",
+    processInstanceId: "process-a",
+    command: { type: "answer_ui", id: "ui-2", cancelled: true },
+  }) as unknown as { command?: unknown } | undefined;
+  assert.deepEqual(cancelled?.command, { type: "answer_ui", id: "ui-2", cancelled: true });
+
+  // Still fail closed on malformed payloads (missing id, unknown fields, wrong types).
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui" } }), undefined);
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui", id: "ui", bogus: 1 } }), undefined);
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui", id: "ui", value: 3 } }), undefined);
 });
