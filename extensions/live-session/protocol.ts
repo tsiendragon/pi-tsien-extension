@@ -286,6 +286,18 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
     };
   }
 
+  if (value.type === "answer_ui" && hasOnlyKeys(value, ["type", "id"], ["value", "cancelled"])) {
+    if (!isBoundedString(value.id, 256)) return undefined;
+    if (value.value !== undefined && typeof value.value !== "string") return undefined;
+    if (value.cancelled !== undefined && typeof value.cancelled !== "boolean") return undefined;
+    return {
+      type: "answer_ui",
+      id: value.id,
+      ...(value.value === undefined ? {} : { value: value.value }),
+      ...(value.cancelled === undefined ? {} : { cancelled: value.cancelled }),
+    };
+  }
+
   return undefined;
 }
 
