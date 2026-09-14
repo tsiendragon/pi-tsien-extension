@@ -91,8 +91,12 @@ test("Live Session extension shares prompt input while keeping strong controls l
 
   await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "from terminal" } }, ctx);
   assert.equal((published.at(-1)?.event.data as any).channel, "terminal");
+  // dashboard 输入先排队：terminal 仍在途（activeInput），未释放前不投下一条
   const prompt = await options!.executeCommand(envelope({ type: "input", text: "from dashboard", channel: "web" }, "request-prompt"));
   assert.equal(prompt.ok, true);
+  assert.deepEqual(harness.sent, [{ content: "from terminal", options: { expandPromptTemplates: true } }]);
+  // agent_end 释放在途 terminal → drain dashboard
+  await harness.handlers.get("agent_end")?.[0]({ messages: [] }, ctx);
   await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "from dashboard" } }, ctx);
   const imagePrompt = await options!.executeCommand(envelope({
     type: "input",
@@ -101,6 +105,8 @@ test("Live Session extension shares prompt input while keeping strong controls l
     images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
   }, "request-image-prompt"));
   assert.equal(imagePrompt.ok, true);
+  // agent_end 释放 dashboard → drain image
+  await harness.handlers.get("agent_end")?.[0]({ messages: [] }, ctx);
   assert.deepEqual(harness.sent, [
     { content: "from terminal", options: { expandPromptTemplates: true } },
     { content: "from dashboard", options: { expandPromptTemplates: true } },
@@ -357,4 +363,39 @@ test("Live Session extension answers UI requests through respondExtensionUi", as
   assert.equal(cancelledRes.ok, true);
   assert.equal(answered.length, 2);
   assert.deepEqual(answered[1].response, { cancelled: true });
+});
+
+test("Live Session drains queued input after a slash-command turn with no user message_end", async () => {
+  const harness = extensionHarness();
+  // isIdle=false → inputs arrive while the agent runs and queue as followUp.
+  const state = { idle: false, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, publish() {}, sendSnapshot() {}, stop() {} }; },
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const claimed = await options!.executeCommand(envelope({ type: "claim", browserClientId: "browser-a", requestedLeaseMs: 30_000 }));
+  assert.ok(claimed.ok && String((claimed.result as any).leaseId));
+
+  // A slash command dispatches through the queue but its turn emits no role:"user"
+  // message_end — the exact wedge. It lands as the single in-flight input.
+  const command = await options!.executeCommand(envelope({ type: "input", text: "/effort high", channel: "web", deliverAs: "followUp" }, "req-cmd"));
+  assert.equal(command.ok, true);
+  assert.deepEqual(harness.sent, [{ content: "/effort high", options: { deliverAs: "followUp", expandPromptTemplates: true } }]);
+
+  // The next input is held behind activeInput (serialized), not yet delivered.
+  const next = await options!.executeCommand(envelope({ type: "input", text: "after command", channel: "web" }, "req-next"));
+  assert.equal(next.ok, true);
+  assert.deepEqual(harness.sent, [{ content: "/effort high", options: { deliverAs: "followUp", expandPromptTemplates: true } }]);
+
+  // agent_end releases the in-flight command even without a user message_end, so
+  // the queued input drains instead of wedging forever (the fix).
+  await harness.handlers.get("agent_end")?.[0]({ messages: [] }, ctx);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(harness.sent, [
+    { content: "/effort high", options: { deliverAs: "followUp", expandPromptTemplates: true } },
+    { content: "after command", options: { deliverAs: "followUp", expandPromptTemplates: true } },
+  ]);
 });
