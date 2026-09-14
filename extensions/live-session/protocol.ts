@@ -96,6 +96,12 @@ export type LiveSessionCommand =
       readonly leaseId: string;
       readonly feature: "btw";
       readonly command: { readonly type: "open" | "close" };
+    }
+  | {
+      readonly type: "answer_ui";
+      readonly id: string;
+      readonly value?: string;
+      readonly cancelled?: boolean;
     };
 
 export interface HelloMessage {
