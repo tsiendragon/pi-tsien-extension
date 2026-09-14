@@ -298,3 +298,63 @@ test("SnapshotProjector redacts sensitive keys and enforces event sequence", () 
   assert.equal(projector.createEvent("agent_settled", {}).sequence, 2);
   assert.equal(projector.createSnapshot().summary.eventSequence, 2);
 });
+
+test("Live Session extension projects extension_ui requests and their close signal", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  const published: EventMessage[] = [];
+  const handle: LiveSessionClientHandle = {
+    start: () => {}, publish: message => published.push(message), sendSnapshot: () => {}, stop: () => {},
+  };
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: () => handle,
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  const onUi = harness.handlers.get("extension_ui")?.[0];
+  assert.ok(onUi, "extension_ui handler is registered");
+
+  await onUi?.({ type: "extension_ui", id: "ui-1", method: "select", title: "Pick one", options: ["a", "b"] }, ctx);
+  const uiEvent = published.find(message => message.event.type === "extension_ui");
+  assert.ok(uiEvent, "extension_ui request is projected");
+  assert.equal((uiEvent!.event.data as any).id, "ui-1");
+  assert.equal((uiEvent!.event.data as any).method, "select");
+  assert.deepEqual((uiEvent!.event.data as any).options, ["a", "b"]);
+
+  await onUi?.({ type: "extension_ui", id: "ui-1", method: "select", title: "Pick one", closed: true }, ctx);
+  const closedEvent = published.find(message => message.event.type === "extension_ui_closed");
+  assert.ok(closedEvent, "close signal is projected as extension_ui_closed");
+  assert.equal((closedEvent!.event.data as any).id, "ui-1");
+});
+
+test("Live Session extension answers UI requests through respondExtensionUi", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  let options: LiveSessionClientOptions | undefined;
+  const handle: LiveSessionClientHandle = {
+    start: () => {}, publish: () => {}, sendSnapshot: () => {}, stop: () => {},
+  };
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => { options = value; return handle; },
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  const answered: Array<{ id: string; response: unknown }> = [];
+  (harness.pi as unknown as { respondExtensionUi: (id: string, r: unknown) => boolean }).respondExtensionUi =
+    (id, response) => { answered.push({ id, response }); return true; };
+
+  const valueRes = await options!.executeCommand(envelope({ type: "answer_ui", id: "ui-1", value: "a" }, "req-1"));
+  assert.equal(valueRes.ok, true);
+  assert.equal(answered.length, 1);
+  assert.equal(answered[0].id, "ui-1");
+  assert.deepEqual(answered[0].response, { value: "a" });
+
+  const cancelledRes = await options!.executeCommand(envelope({ type: "answer_ui", id: "ui-2", cancelled: true }, "req-2"));
+  assert.equal(cancelledRes.ok, true);
+  assert.equal(answered.length, 2);
+  assert.deepEqual(answered[1].response, { cancelled: true });
+});

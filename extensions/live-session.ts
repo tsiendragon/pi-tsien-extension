@@ -331,6 +331,13 @@ export function registerLiveSessionExtension(
         const result = await dispatchLiveFeatureCommand(command.feature, command.command);
         return { ok: true, result: result as JsonObject };
       }
+      if (command.type === "answer_ui") {
+        // 首答胜出，任意渠道可应答，故不做 lease 校验。
+        const accepted = pi.respondExtensionUi(command.id, {
+          ...(command.cancelled ? { cancelled: true } : { value: command.value }),
+        });
+        return { ok: true, result: { accepted } };
+      }
       return { ok: true, result: { resynced: true } };
     } catch (error) {
       if (error instanceof LeaseError) return commandError(error.code, error.message);
@@ -466,6 +473,26 @@ export function registerLiveSessionExtension(
     level: event.level,
     previousLevel: event.previousLevel,
   }, ctx));
+
+  pi.on("extension_ui", (event, ctx) => {
+    if (event.closed) {
+      publish("extension_ui_closed", { id: event.id }, ctx);
+      return;
+    }
+    publish(
+      "extension_ui",
+      {
+        id: event.id,
+        method: event.method,
+        title: event.title,
+        ...(event.message !== undefined ? { message: event.message } : {}),
+        ...(event.options !== undefined ? { options: event.options } : {}),
+        ...(event.placeholder !== undefined ? { placeholder: event.placeholder } : {}),
+        ...(event.prefill !== undefined ? { prefill: event.prefill } : {}),
+      },
+      ctx,
+    );
+  });
 
   pi.on("input", (event, ctx) => {
     currentContext = ctx;
