@@ -459,3 +459,101 @@ test("Live Session broker protocol parses the answer_ui command", () => {
   assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui", id: "ui", bogus: 1 } }), undefined);
   assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui", id: "ui", value: 3 } }), undefined);
 });
+
+/**
+ * The dashboard graph page drives session-tree writes through the plain `input`
+ * channel (`/ls-navigate`, `/ls-fork`) to avoid a wire-protocol change. Two
+ * guarantees are covered here: the capability flag the dashboard gates on, and
+ * the guards that stop a stale/incorrect client from polluting the model
+ * context or fighting a live turn.
+ */
+test("Live Session advertises the session_tree capability and re-snapshots on tree navigation", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  let options: LiveSessionClientOptions | undefined;
+  const published: EventMessage[] = [];
+  let snapshots = 0;
+  const handle: LiveSessionClientHandle = {
+    start: () => {},
+    publish: message => published.push(message),
+    sendSnapshot: () => { snapshots += 1; },
+    stop: () => {},
+  };
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-tree", startedAt: 1 },
+    createClient: value => { options = value; return handle; },
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree"]);
+
+  // Terminal `/tree` (or our own command) must push a fresh snapshot: the
+  // snapshot only carries the ACTIVE branch, so an event alone would leave the
+  // web transcript on the abandoned branch.
+  await harness.handlers.get("session_tree")?.[0]({ type: "session_tree", newLeafId: "m2", oldLeafId: "m1" }, ctx);
+  assert.equal(snapshots, 1);
+  const last = published.at(-1);
+  assert.equal(last?.event.type, "session_tree");
+  assert.equal(last?.event.data?.newLeafId, "m2");
+});
+
+test("ls-navigate / ls-fork call the command-context tree actions", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-tree", startedAt: 1 },
+    createClient: () => ({ start: () => {}, publish: () => {}, sendSnapshot: () => {}, stop: () => {} }),
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  const calls: string[] = [];
+  const commandCtx = {
+    ...ctx,
+    navigateTree: async (targetId: string) => { calls.push(`navigate:${targetId}`); return { cancelled: false }; },
+    fork: async (entryId: string) => { calls.push(`fork:${entryId}`); return { cancelled: false }; },
+  };
+
+  await harness.commands.get("ls-navigate").handler("m2", commandCtx);
+  await harness.commands.get("ls-fork").handler("m3", commandCtx);
+  assert.deepEqual(calls, ["navigate:m2", "fork:m3"]);
+});
+
+test("session-tree writes are refused while running, without args, or under another browser's lease", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-tree", startedAt: 1 },
+    createClient: value => { options = value; return { start: () => {}, publish: () => {}, sendSnapshot: () => {}, stop: () => {} }; },
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  let navigated = 0;
+  const commandCtx = { ...ctx, navigateTree: async () => { navigated += 1; return { cancelled: false }; } };
+  const navigate = harness.commands.get("ls-navigate");
+
+  // 1) missing target id
+  await navigate.handler("", commandCtx);
+  assert.equal(navigated, 0);
+
+  // 2) agent is not idle: pi rejects navigateTree mid-turn, so refuse early
+  state.idle = false;
+  await navigate.handler("m2", commandCtx);
+  assert.equal(navigated, 0);
+  assert.ok(state.notifications.some(message => message.includes("正在运行")));
+  state.idle = true;
+
+  // 3) another browser holds the lease: a lease-less call must be refused
+  const claimed = await options!.executeCommand(envelope({ type: "claim", browserClientId: "browser-a", requestedLeaseMs: 30_000 }));
+  const leaseId = claimed.ok ? String((claimed.result as any).leaseId) : "";
+  assert.ok(leaseId);
+  await navigate.handler("m2", commandCtx);
+  assert.equal(navigated, 0);
+
+  // ...and accepted once the matching lease is supplied
+  await navigate.handler(`m2 ${leaseId}`, commandCtx);
+  assert.equal(navigated, 1);
+});
