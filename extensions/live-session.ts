@@ -218,6 +218,14 @@ export function registerLiveSessionExtension(
     },
   });
 
+  /**
+   * Capabilities this bridge advertises to the dashboard (see
+   * `LiveSessionSummary.capabilities`). `session_tree` means the `/ls-navigate`
+   * and `/ls-fork` extension commands below are registered, so the dashboard may
+   * send them. Additive: no protocol version bump.
+   */
+  const LIVE_SESSION_CAPABILITIES: readonly string[] = ["session_tree"];
+
   const summary = (): LiveSessionSummaryBase => {
     const ctx = currentContext;
     if (!ctx) throw new Error("Live Session context is unavailable");
@@ -242,6 +250,7 @@ export function registerLiveSessionExtension(
         : { state: "unclaimed" },
       startedAt: identity.startedAt,
       lastActivityAt,
+      capabilities: LIVE_SESSION_CAPABILITIES,
       ...(usage
         ? {
             contextUsage: {
@@ -374,6 +383,101 @@ export function registerLiveSessionExtension(
     },
   });
 
+  /**
+   * Session-tree actions for the dashboard graph page.
+   *
+   * These are plain extension slash commands on purpose: the dashboard already
+   * has an `input` command channel that runs text through
+   * `pi.sendUserMessage(..., { expandPromptTemplates: true })`, and pi executes
+   * a leading `/` as a command (same mechanism as `/live-session-reload`). That
+   * keeps the whole feature inside the two repos with **no wire-protocol change**
+   * and no `parseHello` version negotiation.
+   *
+   * Trust model: like `input`, this channel carries no browserClientId, so a
+   * caller cannot be authenticated here. Two guards apply instead — the action
+   * is refused while the agent is not idle (pi rejects `navigateTree` during a
+   * turn/compaction anyway), and when the session IS claimed by a browser the
+   * matching leaseId must be supplied. Every navigation then broadcasts
+   * `session_tree`, so all viewers (terminal + web) stay consistent.
+   */
+  const treeActionDenial = (leaseId: string | undefined): string | null => {
+    const claim = lease.snapshot();
+    if (claim.state !== "claimed") return null;
+    if (!leaseId) return "该会话已被浏览器接管，请在 Dashboard 图谱页重新发起操作。";
+    try {
+      lease.assertLease(leaseId);
+      return null;
+    } catch {
+      return "Dashboard 接管已失效，请刷新页面后重试。";
+    }
+  };
+
+  const parseTreeArgs = (args: string): { targetId: string; leaseId?: string } => {
+    const [targetId = "", leaseId] = args.trim().split(/\s+/);
+    return { targetId, ...(leaseId ? { leaseId } : {}) };
+  };
+
+  pi.registerCommand("ls-navigate", {
+    description: "切换到会话树的指定节点（pi-dashboard 图谱页调用）",
+    handler: async (args, ctx) => {
+      const { targetId, leaseId } = parseTreeArgs(args);
+      if (!targetId) {
+        ctx.ui.notify("用法：/ls-navigate <entry-id> [leaseId]", "error");
+        return;
+      }
+      const denial = treeActionDenial(leaseId);
+      if (denial) {
+        ctx.ui.notify(denial, "error");
+        return;
+      }
+      if (!ctx.isIdle()) {
+        ctx.ui.notify("会话正在运行，请等当前回合结束后再切换分支。", "warning");
+        return;
+      }
+      try {
+        const result = await ctx.navigateTree(targetId);
+        ctx.ui.notify(result.cancelled ? "已取消分支切换。" : `已切换到 ${targetId}。`, "info");
+      } catch (error) {
+        ctx.ui.notify(`切换分支失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("ls-fork", {
+    description: "从会话树的指定节点分叉出新会话（pi-dashboard 图谱页调用）",
+    handler: async (args, ctx) => {
+      const { targetId, leaseId } = parseTreeArgs(args);
+      if (!targetId) {
+        ctx.ui.notify("用法：/ls-fork <entry-id> [leaseId]", "error");
+        return;
+      }
+      const denial = treeActionDenial(leaseId);
+      if (denial) {
+        ctx.ui.notify(denial, "error");
+        return;
+      }
+      if (!ctx.isIdle()) {
+        ctx.ui.notify("会话正在运行，请等当前回合结束后再分叉。", "warning");
+        return;
+      }
+      try {
+        const result = await ctx.fork(targetId, { position: "at" });
+        if (result.cancelled) {
+          ctx.ui.notify("已取消分叉。", "info");
+          return;
+        }
+        // A fork swaps the session file in place, and pi has no post-fork event,
+        // so push a fresh snapshot explicitly instead of waiting for the next
+        // event: the web needs the new sessionId/sessionFile immediately.
+        projector?.markChanged();
+        client?.sendSnapshot();
+        publish("session_tree", { newLeafId: null, oldLeafId: null, fromExtension: true }, ctx);
+      } catch (error) {
+        ctx.ui.notify(`分叉失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     currentContext = ctx;
     running = !ctx.isIdle();
@@ -433,6 +537,20 @@ export function registerLiveSessionExtension(
   });
 
   pi.on("session_info_changed", (event, ctx) => publish("session_info_changed", { name: event.name ?? null }, ctx));
+  // Tree navigation (terminal `/tree`, or the web `/ls-navigate` above).
+  // The snapshot only carries the ACTIVE branch, so without this subscription a
+  // terminal-side branch switch would leave the web transcript showing the old
+  // branch. `markChanged()` bumps the revision and `sendSnapshot()` pushes the
+  // re-projected branch.
+  pi.on("session_tree", (event, ctx) => {
+    projector?.markChanged();
+    client?.sendSnapshot();
+    publish("session_tree", {
+      newLeafId: event.newLeafId,
+      oldLeafId: event.oldLeafId,
+      fromExtension: event.fromExtension ?? false,
+    }, ctx);
+  });
   pi.on("agent_start", (_event, ctx) => {
     running = true;
     publish("agent_start", {}, ctx);
