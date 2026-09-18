@@ -48,6 +48,16 @@ export interface LiveSessionSummary {
     readonly contextWindow: number;
     readonly percent: number | null;
   };
+  /**
+   * Additive, optional capability list. Absent = older bridge. Adding values is
+   * backward compatible in both directions and does NOT change
+   * `LIVE_SESSION_PROTOCOL_VERSION` (an old dashboard ignores unknown fields).
+   * `"session_tree"` = this bridge registers the `/ls-navigate` and `/ls-fork`
+   * extension commands, so the dashboard may drive session-tree writes. Without
+   * it the dashboard must NOT send those commands: pi falls back to submitting
+   * an unrecognized `/command` text as a normal model prompt.
+   */
+  readonly capabilities?: readonly string[];
 }
 
 export type LiveSessionSummaryBase = Omit<LiveSessionSummary, "revision" | "eventSequence">;
