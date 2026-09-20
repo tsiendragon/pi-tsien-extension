@@ -1,0 +1,82 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { aggregateTestOutput, isTestCommand } from "../extensions/tool-result-pipeline/rtk/techniques/test-output.ts";
+import { filterBuildOutput, isBuildCommand } from "../extensions/tool-result-pipeline/rtk/techniques/build.ts";
+
+test("vendored RTK does not treat ordinary commands as test runs", () => {
+	for (const command of [
+		"ls test",
+		"cat test",
+		"rm -rf test",
+		"echo test",
+		"grep -c test file.txt",
+		"cd test",
+		"find . -name test",
+	]) {
+		assert.equal(isTestCommand(command), false, command);
+		assert.equal(aggregateTestOutput("-rw-r--r-- 1 u g 0 Jan 1 test\n", command), null, command);
+	}
+});
+
+test("vendored RTK still recognizes real test runners", () => {
+	for (const command of [
+		"npm test",
+		"npm run test",
+		"npm run test:node",
+		"yarn test",
+		"pnpm test",
+		"bun test",
+		"node --test",
+		"node --import tsx --test test/x.test.ts",
+		"npx vitest run",
+		"vitest run",
+		"jest",
+		"pytest -q",
+		"mocha",
+		"go test ./...",
+		"cargo test",
+		"cd repo && npm test",
+	]) {
+		assert.equal(isTestCommand(command), true, command);
+	}
+});
+
+test("vendored RTK does not treat substrings as builds", () => {
+	for (const command of [
+		"grep -rn tsc .",
+		"cat makefile",
+		"rg make",
+		"echo tsc",
+		"git log --grep=mvn",
+		"python -c 'print(\"mvn\")'",
+	]) {
+		assert.equal(isBuildCommand(command), false, command);
+		assert.equal(filterBuildOutput("hello\ntsc\n", command), null, command);
+	}
+});
+
+test("vendored RTK still recognizes real build commands", () => {
+	for (const command of [
+		"tsc --noEmit",
+		"node_modules/.bin/tsc --noEmit",
+		"npx tsc -p .",
+		"make",
+		"sudo make install",
+		"cmake .",
+		"gradle build",
+		"mvn package",
+		"cargo build",
+		"cargo check",
+		"bun build x.ts",
+		"npm run build",
+		"yarn build",
+		"pnpm build",
+		"go build ./...",
+		"go install",
+		"pip install foo",
+		"python setup.py build",
+	]) {
+		assert.equal(isBuildCommand(command), true, command);
+	}
+});
