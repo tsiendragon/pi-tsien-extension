@@ -92,7 +92,74 @@
 - 不做凭证或字符串脱敏；provider request/response 的 header 值也完整记录。只做 JSON 序列化处理；`message_update` 和工具流式增量默认不记录，避免数据量失控。
 - process-isolated subagent 会通过 `traceContext` 关联父 session、父 Tool call、父 workflow/work/task、当前 workflow、workId、taskId、taskKey、stageIndex 和 foreach iteration；retry 还记录 source work/workflow 与 attempt，子进程轨迹仍写入同一个 trace 根目录的独立文件。`stageIndex`/`iterationIndex` 使用 0-based。
 - 记录器写入失败只提示警告，不阻断 Pi 主流程。
+- 同时写一份紧凑计时账本（每个模型调用、Tool 调用、Agent run 一行，约 200B），用于 dashboard 的时间分析，避免解析数十 GB 的完整 trace：
+  - 默认目录 `/mnt/workspace/lilong/agent/pi/timing/<sessionId>.jsonl`；可用 `PI_TIMING_DIR` 覆盖，或用 `timingEnabled: false` 关闭。
+  - `model`：`provider`、`model`、`attempt`、`totalMs`、`ttftMs`（首个流式增量，≈首个 token）、`responseMs`（HTTP 首字节）、`thinkingMs`、`outputTokens`、`reasoningTokens`、`stopReason`、`isError`。
+  - `tool`：`toolName`、`durationMs`、`isError`。
+  - `run`：`durationMs`（agent_start → agent_settled）、`modelMs`、`toolMs`、`modelCount`、`toolCount`、`turnCount`。
+  - 每条记录用 `scope`（`root`/`child`）标记是否为子代理进程，便于 dashboard 避免父子墙钟重复计数。
+  - 不记录提示词、Tool 参数或 Tool 输出。
 - 扩展修改后执行 `/reload`；当前由用户级 `/home/tsien/.pi/agent/extensions.config.json` 的最后一项加载，以观察其他扩展修改后的最终请求。
+
+### `observation-pack.ts`
+
+把大型工具结果在投影层替换为简短占位符，原始字节归档到本地，需要时用 `obs_recall` 精确分页取回；不改写已存会话历史。
+
+- 默认关闭；在 `~/.pi/agent/observation-pack.json` 设置 `observationPack.enabled: true` 后执行 `/reload` 生效。
+- 归档根目录由 `archiveDir` 配置（默认 `/mnt/workspace/lilong/agent/archiv`），可用 `PI_OBSERVATION_DIR` 覆盖；按 session 隔离存放。
+- 仅当纯文本非错误结果超过 `thresholdBytes`（默认 10 KiB）时参与；前 `fullSends`（默认 2）次请求发送全量，之后替换为占位符。
+- `obs_recall` 仅在启用时注册，避免默认关闭时占用请求里的 tool schema；按 `offset` 分页，起点向后对齐到 UTF-8 字符边界，配合返回的 `next_offset` 连续读取。
+- 会话恢复后可继续读取；原生压缩会省略旧工具结果，压缩后不保证仍能发现 observation id。
+- `/obs-prune [--days N] [--yes]`：列出或清理过期归档，默认 dry-run，`--yes` 才移入 `.trash`。
+- 与 RTK 并存：`bash`/`read`/`grep` 归档的是 RTK 过滤后的文本，`run_code` 等自定义工具归档真原文。
+
+### `tool-result-pipeline.ts`
+
+`tool_result` 这一层的**唯一入口**。RTK 过滤（stage 1）与 bash-digest（stage 2）不再是两个争抢同一钩子的独立扩展，而是同一流水线里显式有序的 stage：
+
+```ts
+export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
+```
+
+- stage 契约：`(event, ctx) => Promise<{ content } | undefined>`；返回 `undefined` 表示不改写，**每个 stage 必须 fail-open**（内部出错即返回 `undefined`），坏掉的 stage 只会退化成“输出不变”，不会丢工具输出。
+- 前一个 stage 的输出喂给下一个，所以 bash-digest 摘要的就是 RTK 过滤后的文本。这个顺序由代码声明、由 `test/tool-result-pipeline.test.ts` 断言，不再依赖 `~/.pi/agent/extensions.config.json` 里 `loadOrder` 的先后（以前只是注释里的一句“排在 RTK 之后”）。
+- RTK 的其余界面（8 个 `rtk-*` 命令、`rtk_configure` 工具、系统提示注入、配置、统计）原样保留，由 `registerRtkSurface(pi)` 注册。源码来源与两处命令匹配补丁见 `extensions/tool-result-pipeline/rtk/PROVENANCE.md`。
+- 新增机制 = 新增一个 stage，而不是再多一个扩展。
+
+### `bash-digest`（pipeline stage 2）
+把超过阈值的 `bash` 输出在进入上下文前改写为一段短摘要，原文按 observation-pack 布局归档，摘要头带 obs id，细节仍可用 `obs_recall` 取回。
+
+- 默认关闭；在 `~/.pi/agent/bash-digest.json` 设置 `enabled: true` 后执行 `/reload` 生效。
+- 摘要被当作**索引**而不是替代品：**observation-pack 未启用时本扩展完全惰性**，因为失去召回路径的有损改写不可接受。
+- 判定：纯文本、非错误、命令未命中 `excludePatterns`、预清洗后 > `thresholdBytes`（默认 1200 ≈ 300 token）、且代码特征行占比 ≤ `codeDumpRatio`（默认 0.3）。
+- 摘要模型由 `digestModel` 指定（默认 `dashscope/qwen3.8-flash`，non-thinking、`temperature=0`），预算按原文比例给（`clamp(0.6 × 原文, 128, 256)`），`timeoutMs` 默认 6000、`maxConcurrent` 默认 2。
+- 采纳还需摘要 < 原文 `maxDigestRatio`（默认 0.6），否则回落原文；任何失败（超时、报错、守卫不过、信号量饱和）一律返回原文，绝不抛错。
+- `excludePatterns` 默认排除“列出条目”类命令（`ls`/`find`/`git log`/`grep`/`cat`/`sed`/`head`/`wc` …），按子命令边界匹配，只测真正产出 stdout 的那一段。理由：这些命令的输出就是调用方要的条目集合，**摘要只能靠丢行压缩，而丢掉的行就是丢事实**。实测过一次丢行导致的错误回答。
+- 改写形如 `[digest 703 tok -> 60 tok | raw: obs_xxx]` + 摘要正文；同一 `toolCallId` 命中缓存不重复调用。
+
+### `large-read-pack`（pipeline stage 3，**实测否决，默认关闭**）
+
+把过大的 `read` 结果在进入上下文前换成“头部 + 尾部 + observation id”的包，**全文先归档**，所以 `obs_recall` 能把省掉的每一个字节取回来——改写是指针，不是删除。
+
+> **为什么不启用**：离线机会确实有（`read` 占 25.6% of replay，封顶 2000 tok 可去 5.1%），但隔离 A/B 里**反而贵 47%**（质量没退化，6/6 全对）。原因是不对称单价 + 重取率：省下的是**缓存价** token（$0.03/M），被 `obs_recall`/二次 `read` 取回的是**全价**字节（$0.30/M），还多出每请求 ≈$0.004 的固定成本；实测 39.5% 的 >8KB `read` 之后会再读同一路径。细节见 `docs/session-context-token-plan.md` §10。代码与单测保留，改一行配置即可复现该实验。
+
+- **默认关闭**：`~/.pi/agent/large-read-pack.json` 里 `enabled: true` 才生效（`observation-pack` 未启用时仍保持惰性，理由同 bash-digest）。
+- 阈值：`thresholdBytes` 8192（只处理大于 8 KiB 的结果）、`headBytes` 6144、`tailBytes` 1500，切口对齐行边界，不会把一行截成两半。
+- 守卫 `minSavedRatio` 0.5：包（含头尾样板开销）必须小于原文的一半才改写，否则原文返回；只裁掉一行的情况不会触发。
+- 头部带可执行召回指引：`[read-pack 6600 tok -> 1900 tok | kept lines 1-278 and 1033-1100 | omitted lines 279-1032 (18756 bytes, ~4689 tok) | raw: obs_x | retrieve: call obs_recall with {"id":"obs_x","offset":0}]`，中间还有一行显式省略标记。
+- 为什么只做 `read`：全量 replay 里 `read` 占 25.6% 的 replay 权重，把 >2000 tok 的 `read` 封顶就能去掉 5.1% of replay（`scripts/context-age-analysis.ts`）。
+- 为什么必须在插入时改写：它挂在流水线上（`pi.on("tool_result")`），写进的是会话本身；若改成投影时改写会从改写点起击穿前缀缓存，在 `cacheRead:input = 1:10` 下反而更贵（见 `docs/session-context-token-plan.md` §7/§10）。
+- 与 RTK 并存：摘要输入是 RTK 过滤后的文本（已确认 pi 的 `tool_result` handler 是链式生效）；改写后的结果不再触发 observation-pack 的占位符替换。
+- 实测（3 天真实数据）：安全口径覆盖 7.0% 的 bash token、摘要路径压缩 88%、bash 总省 6.0%；激进口径（清空 `excludePatterns`）可达 bash 省 ~60% 但有丢行风险。取舍与 A/B 见 `docs/session-context-token-plan.md`。
+
+### `auto-compact-target.ts`
+
+把所有模型的压缩触发点统一到 `min(270000, 0.75 × contextWindow)`，而不是只对 ≥1M 窗口的模型按 50% 触发。
+
+- 覆盖模型窗口差异：1M/1.05M → 270,000；272K → 204,000；262,144 → 196,608；128K → 96,000。
+- 触发由扩展调用 `ctx.compact()` 完成；**不改** `settings.json` 的 `compaction.reserveTokens`，因为 pi 用它推导摘要输出预算（`maxTokens = min(0.8 × reserveTokens, model.maxTokens)`），放大它会产生超大输出预算的请求。
+- 带 `ctx.isIdle()` 守卫，只在 run 边界（`agent_settled` / `session_start` / `model_select`）真正触发；长自治 run 可能越过目标，pi 内置阈值仍是最后防线。
+- 可选配置 `~/.pi/agent/auto-compact-target.json`：`targetTokens`、`windowRatio`、`modelOverrides`。
 
 ### `00-zero.ts`
 
@@ -160,6 +227,21 @@ pi -e /mnt/workspace/lilong/repos/pi-tsien-extension
 否则 Pi 可能同时加载两份 extension，重名命令可能显示为 `/git-graph:1`、`/git-graph:2`。当前会话信息侧栏由本 package 的 `extensions/sidebar.ts` 提供。
 
 本仓库不会自动修改或删除其他全局 extension。
+
+## Vendored packages
+
+个别第三方 package 上游存在影响正常使用的缺陷，本仓库保留一份打补丁的副本
+放在 `vendor/`，并通过 `extensions.config.json` 的本地路径 source 加载：
+
+- `pi-rtk` — 已**合并进本仓库**（原 `vendor/pi-rtk/` → `extensions/tool-result-pipeline/rtk/`），不再随上游同步；
+  源码来源、合并时的改动与两处命令匹配补丁见 `extensions/tool-result-pipeline/rtk/PROVENANCE.md`。
+- `vendor/pi-web-tools/` — 修复 DuckDuckGo lite 抓取正则（WebSearch 全空返回），
+  见 `vendor/pi-web-tools/VENDORED.md`。WebFetch 依赖的 `jsdom` / `turndown` /
+  `@mozilla/readability` / `turndown-plugin-gfm` 由仓库根 `package.json` 声明，
+  根目录 `npm install` 即可。
+
+守卫测试：`test/pi-rtk-vendor.test.ts`（合并后的命令匹配补丁）、
+`test/pi-web-tools-vendor.test.ts`、`test/tool-result-pipeline.test.ts`（stage 顺序与“单入口”契约）。
 
 ## 开发
 
