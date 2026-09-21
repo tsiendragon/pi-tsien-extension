@@ -185,7 +185,7 @@ function textFromToolResult(result: { content: Array<{ type: string; text?: stri
     .join("\n");
 }
 
-const CODE_MODE_SNIPPET = "组合当前工具完成循环、分支、并行、过滤和汇总；确定性多步任务优先使用，单步或需逐步判断时用普通工具。";
+const CODE_MODE_SNIPPET = "默认首选：只要任务需要多次工具调用、循环、分支、并行、批量读取、过滤或汇总，就用一段程序一次完成，不要在普通工具之间来回多轮；仅当单步操作、或每一步都必须依据上一步结果临时判断时才改用普通工具。";
 
 function placeCodeModeAfterCoreTools(systemPrompt: string): string {
   const lines = systemPrompt.split("\n");
@@ -725,7 +725,7 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Code Mode",
-    description: "Run one TypeScript program that can call any currently active Pi tool. Nested calls use each target tool's normal validation and policy hooks; only printed and returned values come back to the model. Inside run_code, call active tools as await tools.name(args); use Promise.all only for independent calls. Keep intermediate values inside run_code and return only the compact result needed for the next reasoning step.",
+    description: "Run one TypeScript program that can call any currently active Pi tool. Nested calls use each target tool's normal validation and policy hooks; only printed and returned values come back to the model. Inside run_code, call active tools as await tools.name(args); use Promise.all only for independent calls. Keep intermediate values inside run_code and return only the compact result needed for the next reasoning step. Prefer run_code for any task that needs more than one tool call, a loop, a branch, parallelism, bulk reads, filtering, or aggregation: write one program instead of many separate tool turns (for example, read several files, filter, and return one summary). Use ordinary tools only for a single call or when each next action depends on fresh step-by-step judgment.",
     promptSnippet: CODE_MODE_SNIPPET,
     parameters: Type.Object({
       code: Type.String({ description: "Body of an async TypeScript function with top-level await/return" }),
