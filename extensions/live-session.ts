@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { Type } from "typebox";
-import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import { LiveSessionClient, type LiveSessionClientOptions } from "./live-session/client.ts";
 import { LeaseError, LeaseManager, type LeaseSnapshot } from "./live-session/lease.ts";
 import { SnapshotProjector } from "./live-session/projector.ts";
@@ -42,6 +43,30 @@ type QueuedInput = {
   images?: InputEvent["images"];
   deliverAs?: "steer" | "followUp";
   expandPromptTemplates: boolean;
+};
+
+/**
+ * Outcome of a `/ls-navigate` or `/ls-fork` command, published as a
+ * `tree_action` event so the dashboard can show what actually happened.
+ *
+ * The terminal-only `ctx.ui.notify` is not visible in the web UI, which made a
+ * refused action indistinguishable from a broken button.
+ */
+type TreeActionOutcome = {
+  action: "fork" | "navigate";
+  ok: boolean;
+  entryId: string;
+  message: string;
+  /** Wall-clock stamp so the dashboard can ignore an already-shown outcome. */
+  at: number;
+  /** Session file the action landed on (post-fork this is the NEW file). */
+  sessionFile?: string;
+  /**
+   * `action === "fork"` only: pi created the new session but has not written its
+   * file yet (no assistant message on the forked path), so the graph — which
+   * reads files from disk — cannot show it until the first reply lands.
+   */
+  filePending?: boolean;
 };
 
 interface ProcessIdentity {
@@ -139,6 +164,16 @@ export function registerLiveSessionExtension(
   let featurePublishTimer: ReturnType<typeof setTimeout> | undefined;
   const pendingFeatureSnapshots = new Map<string, PendingFeatureSnapshot>();
   const inputQueue: QueuedInput[] = [];
+  /**
+   * A tree action outcome waiting for a connected client.
+   *
+   * A fork replaces the live client, and the dashboard ignores an event whose
+   * sequence is not `snapshot.sequence + 1`. The new client sends its snapshot
+   * right after `welcome`, so the outcome must be flushed AFTER that snapshot —
+   * publishing it eagerly (or from `onConnected`, which runs just before the
+   * snapshot) silently drops it.
+   */
+  let pendingTreeAction: TreeActionOutcome | undefined;
   let activeInput: QueuedInput | undefined;
   let lastActivityAt = identity.startedAt;
 
@@ -436,28 +471,98 @@ export function registerLiveSessionExtension(
     return { targetId, ...(leaseId ? { leaseId } : {}) };
   };
 
+  /**
+   * Report the outcome of a `/ls-*` tree action to every viewer.
+   *
+   * The terminal `notify` is **invisible on the dashboard**, so a refusal (busy
+   * session, stale entry id, expired lease) or a fork that pi defers to disk
+   * looked exactly like "the button did nothing". Publishing the same message
+   * as an event is the only way the graph page can show the real reason.
+   *
+   * Delivery is retried because a fork replaces the live client: the fresh
+   * client may still be connecting when the command returns.
+   */
+  /** Send the pending outcome once the client is connected AND has sent its snapshot. */
+  let treeActionRetry: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Send the pending outcome once the client is connected AND has sent its
+   * snapshot.
+   *
+   * A fork briefly drops the live connection (measured: ready can go false again
+   * right after the new session starts, i.e. AFTER the last `onConnected`), so
+   * waiting for a connection event alone can leave the outcome parked forever —
+   * which is exactly how “分叉后没有创建新会话” stays unexplained. Retry with a
+   * bound instead.
+   */
+  const flushTreeAction = (attempt = 0): void => {
+    const payload = pendingTreeAction;
+    if (!payload) return;
+    if (clientIsReady()) {
+      pendingTreeAction = undefined;
+      publish("tree_action", payload);
+      return;
+    }
+    if (attempt >= 120 || treeActionRetry) return;
+    treeActionRetry = setTimeout(() => {
+      treeActionRetry = undefined;
+      flushTreeAction(attempt + 1);
+    }, 1_000);
+    treeActionRetry.unref?.();
+  };
+
+  /**
+   * @param ctx Context to notify on. Post-fork this MUST be the `withSession`
+   * context: pi marks a captured command ctx stale after a session replacement
+   * and throws when it is touched (“This extension ctx is stale after session
+   * replacement”), which previously swallowed the outcome before it was sent.
+   */
+  const reportTreeAction = (outcome: Omit<TreeActionOutcome, "at">, ctx?: ExtensionCommandContext): void => {
+    const payload: TreeActionOutcome = { ...outcome, at: Date.now() };
+    pendingTreeAction = payload;
+    try {
+      (ctx ?? currentContext)?.ui.notify(payload.message, payload.ok ? "info" : "error");
+    } catch {
+      // The terminal notice is best-effort; the dashboard event is the contract.
+    }
+    // Never pass a ctx here: `publish` would adopt it as `currentContext`, and a
+    // stale fork ctx must not become the live context.
+    flushTreeAction();
+  };
+
   pi.registerCommand("ls-navigate", {
     description: "切换到会话树的指定节点（pi-dashboard 图谱页调用）",
     handler: async (args, ctx) => {
       const { targetId, leaseId } = parseTreeArgs(args);
       if (!targetId) {
-        ctx.ui.notify("用法：/ls-navigate <entry-id> [leaseId]", "error");
+        reportTreeAction({ action: "navigate", ok: false, entryId: "", message: "用法：/ls-navigate <entry-id> [leaseId]" });
         return;
       }
       const denial = treeActionDenial(leaseId);
       if (denial) {
-        ctx.ui.notify(denial, "error");
+        reportTreeAction({ action: "navigate", ok: false, entryId: targetId, message: denial });
         return;
       }
       if (!ctx.isIdle()) {
-        ctx.ui.notify("会话正在运行，请等当前回合结束后再切换分支。", "warning");
+        reportTreeAction({ action: "navigate", ok: false, entryId: targetId, message: "会话正在运行，请等当前回合结束后再切换分支。" });
         return;
       }
       try {
         const result = await ctx.navigateTree(targetId);
-        ctx.ui.notify(result.cancelled ? "已取消分支切换。" : `已切换到 ${targetId}。`, "info");
+        const sessionFile = currentContext?.sessionManager.getSessionFile();
+        reportTreeAction({
+          action: "navigate",
+          ok: true,
+          entryId: targetId,
+          ...(sessionFile ? { sessionFile } : {}),
+          message: result.cancelled ? "已取消分支切换。" : `已切换到 ${targetId}。`,
+        });
       } catch (error) {
-        ctx.ui.notify(`切换分支失败：${error instanceof Error ? error.message : String(error)}`, "error");
+        reportTreeAction({
+          action: "navigate",
+          ok: false,
+          entryId: targetId,
+          message: `切换分支失败：${error instanceof Error ? error.message : String(error)}`,
+        });
       }
     },
   });
@@ -467,37 +572,62 @@ export function registerLiveSessionExtension(
     handler: async (args, ctx) => {
       const { targetId, leaseId } = parseTreeArgs(args);
       if (!targetId) {
-        ctx.ui.notify("用法：/ls-fork <entry-id> [leaseId]", "error");
+        reportTreeAction({ action: "fork", ok: false, entryId: "", message: "用法：/ls-fork <entry-id> [leaseId]" });
         return;
       }
       const denial = treeActionDenial(leaseId);
       if (denial) {
-        ctx.ui.notify(denial, "error");
+        reportTreeAction({ action: "fork", ok: false, entryId: targetId, message: denial });
         return;
       }
       if (!ctx.isIdle()) {
-        ctx.ui.notify("会话正在运行，请等当前回合结束后再分叉。", "warning");
+        reportTreeAction({ action: "fork", ok: false, entryId: targetId, message: "会话正在运行，请等当前回合结束后再分叉。" });
         return;
       }
       try {
-        const result = await ctx.fork(targetId, { position: "at" });
+        const result = await ctx.fork(targetId, {
+          position: "at",
+          // Everything after a fork belongs in `withSession`: pi replaces the
+          // session and the captured command ctx goes stale (touching it throws),
+          // so the outcome must be computed and reported with THIS ctx.
+          withSession: async (next) => {
+            // pi defers the new file when the forked path has no assistant
+            // message yet: `createBranchedSession` writes the file immediately
+            // only if the path contains an assistant message, otherwise it
+            // appears together with the first reply. Say so explicitly — the
+            // dashboard reads the graph from disk, so a deferred file looks
+            // like "no new session".
+            const sessionFile = next.sessionManager.getSessionFile();
+            const filePending = Boolean(sessionFile) && !existsSync(sessionFile as string);
+            reportTreeAction({
+              action: "fork",
+              ok: true,
+              entryId: targetId,
+              ...(sessionFile ? { sessionFile } : {}),
+              filePending,
+              message: filePending
+                ? `已从 ${targetId} 分叉出新会话，但 pi 还没把它写入磁盘（该文件会随新会话的第一条回复生成）。`
+                : `已从 ${targetId} 分叉出新会话。`,
+            }, next);
+            projector?.markChanged();
+            client?.sendSnapshot();
+          },
+        });
         if (result.cancelled) {
-          ctx.ui.notify("已取消分叉。", "info");
-          return;
+          reportTreeAction({ action: "fork", ok: false, entryId: targetId, message: "已取消分叉。" });
         }
-        // A fork swaps the session file in place, and pi has no post-fork event,
-        // so push a fresh snapshot explicitly instead of waiting for the next
-        // event: the web needs the new sessionId/sessionFile immediately.
-        projector?.markChanged();
-        client?.sendSnapshot();
-        publish("session_tree", { newLeafId: null, oldLeafId: null, fromExtension: true }, ctx);
       } catch (error) {
-        ctx.ui.notify(`分叉失败：${error instanceof Error ? error.message : String(error)}`, "error");
+        reportTreeAction({
+          action: "fork",
+          ok: false,
+          entryId: targetId,
+          message: `分叉失败：${error instanceof Error ? error.message : String(error)}`,
+        });
       }
     },
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     currentContext = ctx;
     running = !ctx.isIdle();
     reconnecting = false;
@@ -505,20 +635,49 @@ export function registerLiveSessionExtension(
     if (!isLiveSessionActive(ctx)) return;
     const mode: LiveSessionMode = ctx.mode;
 
+    const rebuildProjector = (): void => {
+      projector = new SnapshotProjector({
+        processInstanceId: identity.processInstanceId,
+        snapshotEntryLimit: options.snapshotEntryLimit,
+        getSummary: summary,
+        getBranch: () => currentContext?.sessionManager.getBranch() ?? [],
+      });
+    };
+
+    // `/ls-fork` keeps the SAME pi process and broker connection — only the
+    // session file changes. Tearing the live client down here costs ~1.5 minutes
+    // of reconnect backoff, during which the dashboard sees nothing at all
+    // (no snapshot, no events), which is reported as “分叉后没有创建新会话”.
+    // Re-point the existing connection and push the new snapshot immediately.
+    if (event.reason === "fork" && client && clientIsReady()) {
+      clearFeaturePublishQueue();
+      clearInputQueue();
+      lease.release(undefined, "session_switch");
+      rebuildProjector();
+      featureCleanup?.();
+      featureCleanup = subscribeLiveFeatures((feature, snapshot) => {
+        queueFeatureSnapshot(feature, snapshot, ctx);
+      });
+      // New projector starts its sequence at 0; the snapshot below is what
+      // re-aligns the broker's expected sequence.
+      client.sendSnapshot();
+      queueMicrotask(flushTreeAction);
+      return;
+    }
+
     client?.stop("session_switch");
     featureCleanup?.();
     featureCleanup = undefined;
     clearFeaturePublishQueue();
     clearInputQueue();
     lease.release(undefined, "session_switch");
-    projector = new SnapshotProjector({
-      processInstanceId: identity.processInstanceId,
-      snapshotEntryLimit: options.snapshotEntryLimit,
-      getSummary: summary,
-      getBranch: () => currentContext?.sessionManager.getBranch() ?? [],
-    });
+    rebuildProjector();
     client = createClient({
       processInstanceId: identity.processInstanceId,
+      // A fork replaces the runtime and drops the live connection for a moment.
+      // The default backoff climbs to 30s, which leaves the dashboard blind for
+      // over a minute right after “从此分叉”; keep the early retries tight.
+      reconnectDelaysMs: [250, 500, 1_000, 2_000, 5_000, 10_000, 30_000],
       getHello: (brokerToken) => ({
         type: "hello",
         protocolVersion: LIVE_SESSION_PROTOCOL_VERSION,
@@ -536,6 +695,9 @@ export function registerLiveSessionExtension(
       executeCommand,
       onConnected: () => {
         reconnecting = false;
+        // `onConnected` runs just BEFORE `sendSnapshot()`, so defer to a microtask
+        // to stay sequence-contiguous.
+        queueMicrotask(flushTreeAction);
         lease.markBrokerConnected();
         projector?.markChanged();
         // The client sends its initial session snapshot immediately after this callback.
