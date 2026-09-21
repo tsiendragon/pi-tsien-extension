@@ -77,7 +77,7 @@ In addition to the tools above, you may have access to other custom tools depend
   const customIndex = prompt.systemPrompt.indexOf("- knowledge_search:");
   assert.ok(writeIndex >= 0 && codeIndex > writeIndex && customIndex > codeIndex);
   assert.equal(prompt.systemPrompt.match(/^- run_code:/gm)?.length, 1);
-  assert.match(prompt.systemPrompt, /确定性多步任务优先使用/);
+  assert.match(prompt.systemPrompt, /默认首选/);
 
   const result = await registeredTool.execute(
     "outer-call",
