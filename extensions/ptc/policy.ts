@@ -78,6 +78,12 @@ function readConfig(url: URL): PolicyConfig {
 const readOnlyConfig = readConfig(new URL("../../docs/ptc-model-complexity-config.json", import.meta.url));
 const fullConfig = readConfig(new URL("../../docs/ptc-full-tool-config.json", import.meta.url));
 
+/**
+ * Sentinel for a budget that should not stop a program. It is the maximum delay
+ * Node's setTimeout and vm `timeout` accept without clamping/overflow.
+ */
+export const PTC_UNLIMITED = 2_147_483_647;
+
 function positiveInteger(value: unknown, fallback: number): number {
   return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : fallback;
 }
@@ -119,6 +125,12 @@ function isReasoningModel(model: { provider?: string; id?: string } | undefined)
   return model?.id != null && REASONING_MODEL_HINTS.test(model.id);
 }
 
+/** Treat an explicit `null` limit as unlimited; otherwise fall back to a positive integer. */
+function limitOrUnlimited(value: unknown, fallback: number): number {
+  if (value === null) return PTC_UNLIMITED;
+  return positiveInteger(value, fallback);
+}
+
 export function resolvePtcPolicy(
   mode: PolicyMode,
   model: { provider?: string; id?: string } | undefined,
@@ -135,11 +147,11 @@ export function resolvePtcPolicy(
     modelKey: key,
     source: configured ? "configured" : "fallback",
     mode,
-    maxOuterRunCodeCalls: positiveInteger(modeRecommended?.maxOuterRunCodeCalls, 4),
-    maxRunComputeTimeMs: positiveInteger(modeConfig.common?.maxRunComputeTimeMs, 15_000),
-    maxRunWallTimeMs: positiveInteger(
+    maxOuterRunCodeCalls: limitOrUnlimited(modeRecommended?.maxOuterRunCodeCalls, PTC_UNLIMITED),
+    maxRunComputeTimeMs: limitOrUnlimited(modeConfig.common?.maxRunComputeTimeMs, PTC_UNLIMITED),
+    maxRunWallTimeMs: limitOrUnlimited(
       modeRecommended?.maxRunWallTimeMs ?? modeRecommended?.maxWallTimeMs,
-      90_000,
+      PTC_UNLIMITED,
     ),
     // Keep reading the benchmark config's legacy maxTotalTokens field, but enforce it
     // only against newly generated assistant output. Input already present in a long
@@ -177,8 +189,8 @@ export class PtcPolicyError extends Error {
         ...details,
         suggestedAction: code === "PTC_BUDGET_EXCEEDED"
           ? details.budget === "runComputeTimeMs" || details.budget === "runWallTimeMs"
-            ? "Reduce this program, split it across run_code calls, or switch to ordinary tools with /ptc off."
-            : "Reduce the workload, split it into a new user turn, or switch to ordinary tools with /ptc off."
+            ? "Reduce this program or split it across run_code calls."
+            : "Reduce the workload or split it into a new user turn."
           : "Return JSON matching resultContract, or correct the expected count/checksum values.",
       },
     }));

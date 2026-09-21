@@ -22,10 +22,11 @@
   "common": {
     "mode": "full",
     "perProgramSubCallHardLimit": 32,
-    "maxRunComputeTimeMs": 15000,
+    "maxRunComputeTimeMs": null,
     "maxWriteBytes": 262144,
     "maxRunOutputBytes": 131072,
     "maxRunTimeoutMs": 15000,
+    "nullMeansUnlimited": "null for maxOuterRunCodeCalls / maxRunComputeTimeMs / maxRunWallTimeMs removes that limit",
     "runEntryExtensions": [
       ".js",
       ".mjs"
@@ -47,10 +48,10 @@
       },
       "recommended": {
         "maxModules": 128,
-        "maxOuterRunCodeCalls": 12,
+        "maxOuterRunCodeCalls": null,
         "maxNestedWrites": 160,
         "maxNestedRuns": 3,
-        "maxRunWallTimeMs": 130000,
+        "maxRunWallTimeMs": null,
         "maxTotalTokens": 150000
       },
       "rationale": "Passed every tested level; F7 completed with 128 writes, one test run, about 97k tokens."
@@ -63,10 +64,10 @@
       },
       "recommended": {
         "maxModules": 80,
-        "maxOuterRunCodeCalls": 8,
+        "maxOuterRunCodeCalls": null,
         "maxNestedWrites": 100,
         "maxNestedRuns": 3,
-        "maxRunWallTimeMs": 120000,
+        "maxRunWallTimeMs": null,
         "maxTotalTokens": 120000
       },
       "rationale": "Passed F7, but F7 rose to about 190k tokens; F6 is the practical unattended limit."
@@ -79,10 +80,10 @@
       },
       "recommended": {
         "maxModules": 48,
-        "maxOuterRunCodeCalls": 6,
+        "maxOuterRunCodeCalls": null,
         "maxNestedWrites": 60,
         "maxNestedRuns": 3,
-        "maxRunWallTimeMs": 90000,
+        "maxRunWallTimeMs": null,
         "maxTotalTokens": 80000
       },
       "rationale": "F1-F5 passed, while both F6 and F7 were 2/3. Bulk-write planning becomes stochastic above 48 modules."
@@ -95,10 +96,10 @@
       },
       "recommended": {
         "maxModules": 48,
-        "maxOuterRunCodeCalls": 8,
+        "maxOuterRunCodeCalls": null,
         "maxNestedWrites": 60,
         "maxNestedRuns": 3,
-        "maxRunWallTimeMs": 90000,
+        "maxRunWallTimeMs": null,
         "maxTotalTokens": 100000
       },
       "rationale": "Passed F7 historically, but token use climbed from about 51k at F5 to 119k at F6 and 283k at F7. A monitored F3 correction needed a seventh run_code and about 81k tokens; the revised call/token budget permits that correction, the per-run wall ceiling covers nested-tool waits, and the 60-write cap still prevents repeated full rewrites at the 48-module recommendation."
@@ -111,10 +112,10 @@
       },
       "recommended": {
         "maxModules": 80,
-        "maxOuterRunCodeCalls": 8,
+        "maxOuterRunCodeCalls": null,
         "maxNestedWrites": 100,
         "maxNestedRuns": 3,
-        "maxRunWallTimeMs": 100000,
+        "maxRunWallTimeMs": null,
         "maxTotalTokens": 100000
       },
       "rationale": "F6 completed near 70k tokens. F7 passed but rewrote all 128 modules twice and used about 185k tokens."
