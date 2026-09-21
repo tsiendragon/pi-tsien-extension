@@ -77,6 +77,7 @@ test("trajectory recorder preserves the final prompt, model effort, messages, an
     let id = 0;
     registerTrajectoryRecorder(harness.pi, {
       traceDir,
+      timingDir: join(traceDir, "timing"),
       processId: 99,
       now: () => ++clock,
       idFactory: () => `id-${++id}`,
@@ -259,6 +260,7 @@ test("session replacement keeps events in the correct session file", async () =>
     ctx.sessionManager.getSessionFile = () => sessionFile;
     registerTrajectoryRecorder(harness.pi, {
       traceDir,
+      timingDir: join(traceDir, "timing"),
       processId: 99,
       idFactory: (() => {
         let id = 0;
@@ -321,6 +323,103 @@ test("JSON conversion is non-mutating and preserves sensitive values", () => {
   assert.equal(serialized.self, "[CIRCULAR]");
   assert.equal(serialized.tokenText, "prefix sk-1234567890123456 suffix");
   assert.equal(original.authorization, "secret");
+});
+
+test("timing ledger records per-model latency, thinking, tool, and run summaries", async () => {
+  const traceDir = mkdtempSync(join(tmpdir(), "pi-timing-"));
+  try {
+    const harness = extensionHarness();
+    const ctx = context();
+    let clock = 1_000;
+    let id = 0;
+    registerTrajectoryRecorder(harness.pi, {
+      traceDir,
+      timingDir: join(traceDir, "timing"),
+      processId: 99,
+      now: () => clock,
+      idFactory: () => `timing-${++id}`,
+    });
+
+    clock = 1_000;
+    await emit(harness.handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    clock = 1_100;
+    await emit(harness.handlers, "agent_start", { type: "agent_start" }, ctx);
+    clock = 1_110;
+    await emit(harness.handlers, "turn_start", { type: "turn_start", turnIndex: 0 }, ctx);
+    clock = 1_200;
+    await emit(harness.handlers, "before_provider_request", { type: "before_provider_request", payload: {} }, ctx);
+    clock = 1_300;
+    await emit(harness.handlers, "after_provider_response", { type: "after_provider_response", status: 200, headers: {} }, ctx);
+    clock = 1_400;
+    await emit(harness.handlers, "message_update", {
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    }, ctx);
+    clock = 1_800;
+    await emit(harness.handlers, "message_update", {
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+    }, ctx);
+    clock = 2_200;
+    await emit(harness.handlers, "message_end", {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        provider: "anthropic",
+        model: "claude-test",
+        usage: { input: 100, output: 20, reasoning: 12, totalTokens: 120 },
+        stopReason: "toolUse",
+        timestamp: 1_200,
+      },
+    }, ctx);
+    clock = 2_300;
+    await emit(harness.handlers, "tool_execution_start", {
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "bash",
+      args: { command: "npm test" },
+    }, ctx);
+    clock = 2_600;
+    await emit(harness.handlers, "tool_execution_end", {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "bash",
+      result: {},
+      isError: false,
+    }, ctx);
+    clock = 2_700;
+    await emit(harness.handlers, "agent_settled", { type: "agent_settled" }, ctx);
+
+    const records = readFileSync(join(traceDir, "timing", "session-a.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+    const model = records.find(record => record.kind === "model");
+    assert.equal(model.provider, "anthropic");
+    assert.equal(model.model, "claude-test");
+    assert.equal(model.attempt, 1);
+    assert.equal(model.ttftMs, 200);
+    assert.equal(model.responseMs, 100);
+    assert.equal(model.totalMs, 1_000);
+    assert.equal(model.thinkingMs, 400);
+    assert.equal(model.outputTokens, 20);
+    assert.equal(model.reasoningTokens, 12);
+    assert.equal(model.isError, false);
+    assert.equal(model.scope, "root");
+    const tool = records.find(record => record.kind === "tool");
+    assert.equal(tool.toolName, "bash");
+    assert.equal(tool.durationMs, 300);
+    const run = records.find(record => record.kind === "run");
+    assert.deepEqual(
+      { durationMs: run.durationMs, modelMs: run.modelMs, toolMs: run.toolMs, modelCount: run.modelCount, toolCount: run.toolCount, turnCount: run.turnCount },
+      { durationMs: 1_600, modelMs: 1_000, toolMs: 300, modelCount: 1, toolCount: 1, turnCount: 1 },
+    );
+    assert.ok(records.every(record => record.v === 1 && typeof record.id === "string"));
+  } finally {
+    rmSync(traceDir, { recursive: true, force: true });
+  }
 });
 
 test("provider thinking extraction keeps provider-specific effort controls", () => {
