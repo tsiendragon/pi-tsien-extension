@@ -615,3 +615,80 @@ test("session-tree writes are refused while running, without args, or under anot
   await navigate.handler(`m2 ${leaseId}`, commandCtx);
   assert.equal(navigated, 1);
 });
+
+/**
+ * The dashboard cannot see `ctx.ui.notify`, so every `/ls-*` outcome is published
+ * as a `tree_action` event. Two traps this pins down, both found by driving a real
+ * pi session: (1) pi makes the captured command ctx STALE after a fork, so
+ * post-fork work must use the `withSession` ctx; and (2) pi defers the forked
+ * session file when the branch has no assistant message yet, which the dashboard
+ * must be told about instead of showing “no new session”.
+ */
+test("ls-fork reports its outcome through withSession and flags a deferred session file", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  const published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-tree", startedAt: 1 },
+    createClient: () => ({ start: () => {}, publish: message => published.push(message), sendSnapshot: () => {}, stop: () => {} }),
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  const oldCtxNotifications: string[] = [];
+  const newCtxNotifications: string[] = [];
+  const missingFile = `/tmp/does-not-exist-${Math.random().toString(36).slice(2)}.jsonl`;
+  const commandCtx = {
+    ...ctx,
+    ui: { notify: (message: string) => oldCtxNotifications.push(message) },
+    fork: async (_entryId: string, options: { withSession?: (next: unknown) => Promise<void> }) => {
+      await options.withSession?.({
+        ...ctx,
+        ui: { notify: (message: string) => newCtxNotifications.push(message) },
+        sessionManager: { ...(ctx as any).sessionManager, getSessionFile: () => missingFile },
+      });
+      return { cancelled: false };
+    },
+  };
+
+  await harness.commands.get("ls-fork").handler("m3", commandCtx);
+
+  // The outcome reached the dashboard...
+  const action = published.find(message => message.event.type === "tree_action");
+  assert.equal(action?.event.data?.ok, true);
+  assert.equal(action?.event.data?.entryId, "m3");
+  assert.equal(action?.event.data?.filePending, true);
+  assert.equal(action?.event.data?.sessionFile, missingFile);
+  // ...and the terminal notice used the REPLACEMENT ctx, never the stale one.
+  assert.equal(newCtxNotifications.length, 1);
+  assert.ok(newCtxNotifications[0].includes("还没把它写入磁盘"));
+  assert.deepEqual(oldCtxNotifications, []);
+});
+
+test("a refused ls-navigate is published, not just notified", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  const published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-tree", startedAt: 1 },
+    createClient: () => ({ start: () => {}, publish: message => published.push(message), sendSnapshot: () => {}, stop: () => {} }),
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  state.idle = false; // pi refuses navigateTree mid-turn
+  await harness.commands.get("ls-navigate").handler("m2", { ...ctx, navigateTree: async () => ({ cancelled: false }) });
+
+  const action = published.find(message => message.event.type === "tree_action");
+  assert.equal(action?.event.data?.ok, false);
+  assert.equal(action?.event.data?.action, "navigate");
+  assert.ok(String(action?.event.data?.message).includes("正在运行"));
+
+  // A cancelled fork is an outcome too: the graph must not claim success.
+  state.idle = true;
+  await harness.commands.get("ls-fork").handler("m3", { ...ctx, fork: async () => ({ cancelled: true }) });
+  const cancelled = published.filter(message => message.event.type === "tree_action").at(-1);
+  assert.equal(cancelled?.event.data?.action, "fork");
+  assert.equal(cancelled?.event.data?.ok, false);
+  assert.ok(String(cancelled?.event.data?.message).includes("已取消"));
+});
