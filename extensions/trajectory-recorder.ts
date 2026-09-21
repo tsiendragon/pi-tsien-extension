@@ -5,6 +5,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 export const TRACE_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TRACE_DIR = "/mnt/workspace/lilong/agent/pi-traces";
+export const TIMING_SCHEMA_VERSION = 1 as const;
+export const DEFAULT_TIMING_DIR = "/mnt/workspace/lilong/agent/pi/timing";
 
 export interface TrajectoryTraceContext {
   readonly parentSessionId?: string;
@@ -32,6 +34,12 @@ type PendingRequest = {
   startedAt: number;
   attempt: number;
   turnIndex?: number;
+  /** Client-observed first stream delta (≈ first token). */
+  firstDeltaAt?: number;
+  /** HTTP response headers received (≈ server first byte). */
+  responseMs?: number;
+  thinkingMs: number;
+  thinkingStartedAt: Map<number, number>;
 };
 
 type PendingToolExecution = {
@@ -55,11 +63,23 @@ type RecorderState = {
   pendingRequest?: PendingRequest;
   toolExecutions: Map<string, PendingToolExecution>;
   writeFailureReported: boolean;
+  /** Compact timing ledger; undefined when disabled. */
+  timingPath?: string;
+  runStartedAt?: number;
+  runModelMs: number;
+  runToolMs: number;
+  runModelCount: number;
+  runToolCount: number;
+  runTurnCount: number;
 };
 
 export interface TrajectoryRecorderOptions {
   /** Defaults to PI_TRACE_DIR or /mnt/workspace/lilong/agent/pi-traces. */
   traceDir?: string;
+  /** Compact timing ledger directory. Defaults to PI_TIMING_DIR or /mnt/workspace/lilong/agent/pi/timing. */
+  timingDir?: string;
+  /** Disable the compact timing ledger (trace recording is unaffected). */
+  timingEnabled?: boolean;
   /** Capture token-level streaming updates. Disabled by default. */
   includeStreamingUpdates?: boolean;
   /** Parent/workflow identifiers propagated to child Pi processes. */
@@ -72,6 +92,26 @@ export interface TrajectoryRecorderOptions {
 
 export function resolveTraceDirectory(traceDir?: string): string {
   return resolve(traceDir || process.env.PI_TRACE_DIR || DEFAULT_TRACE_DIR);
+}
+
+export function resolveTimingDirectory(timingDir?: string): string {
+  return resolve(timingDir || process.env.PI_TIMING_DIR || DEFAULT_TIMING_DIR);
+}
+
+function timingScope(traceContext?: TrajectoryTraceContext): "root" | "child" {
+  if (process.env.PI_SUBAGENT_WORKBENCH_CHILD === "1") return "child";
+  if (!traceContext) return "root";
+  return traceContext.parentSessionId ||
+    traceContext.parentToolCallId ||
+    traceContext.parentWorkId ||
+    traceContext.workflowId ||
+    traceContext.workId
+    ? "child"
+    : "root";
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -250,6 +290,8 @@ export function registerTrajectoryRecorder(
   const now = options.now ?? (() => Date.now());
   const idFactory = options.idFactory ?? randomUUID;
   const traceDir = resolveTraceDirectory(options.traceDir);
+  const timingDir = resolveTimingDirectory(options.timingDir);
+  const timingEnabled = options.timingEnabled ?? true;
   const includeStreamingUpdates = options.includeStreamingUpdates ?? false;
   const configuredTraceContext = options.traceContext ?? traceContextFromEnvironment();
   const processId = options.processId ?? process.pid;
@@ -262,15 +304,24 @@ export function registerTrajectoryRecorder(
     ensureDirectory(join(traceDir, "sessions"));
     ensureDirectory(sessionDir);
     const eventsPath = join(sessionDir, `events-${safePathPart(String(processId))}.jsonl`);
+    const timingPath = timingEnabled
+      ? (ensureDirectory(timingDir), join(timingDir, `${safePathPart(sessionId)}.jsonl`))
+      : undefined;
     return {
       sessionId,
       sessionFile: sessionValue(ctx, "getSessionFile") as string | undefined,
       traceContext: configuredTraceContext,
       sessionDir,
       eventsPath,
+      ...(timingPath ? { timingPath } : {}),
       attempt: 0,
       toolExecutions: new Map(),
       writeFailureReported: false,
+      runModelMs: 0,
+      runToolMs: 0,
+      runModelCount: 0,
+      runToolCount: 0,
+      runTurnCount: 0,
     };
   };
 
@@ -284,7 +335,7 @@ export function registerTrajectoryRecorder(
     if (current.writeFailureReported) return;
     current.writeFailureReported = true;
     const message = error instanceof Error ? error.message : String(error);
-    if (ctx.hasUI) ctx.ui.notify(`轨迹记录失败，Pi 仍会继续运行：${message}`, "warning");
+    if (ctx.hasUI) ctx.ui.notify(`轨迹/计时记录失败，Pi 仍会继续运行：${message}`, "warning");
   };
 
   const record = (type: string, data: unknown, ctx: ExtensionContext): void => {
@@ -319,6 +370,99 @@ export function registerTrajectoryRecorder(
     } catch (error) {
       reportWriteFailure(ctx, current, error);
     }
+  };
+
+  /**
+   * Compact, append-only timing ledger (one small JSON line per model call, tool
+   * call, and agent run). Kept separate from the trace file, which stores full
+   * payloads, so the dashboard can aggregate latency without scanning 10s of GB.
+   */
+  const writeTiming = (current: RecorderState, payload: UnknownRecord, ctx: ExtensionContext): void => {
+    if (!current.timingPath) return;
+    const at = now();
+    const entry: UnknownRecord = {
+      v: TIMING_SCHEMA_VERSION,
+      id: idFactory(),
+      at,
+      sessionId: current.sessionId,
+      scope: timingScope(current.traceContext),
+      ...(current.sessionFile ? { sessionFile: current.sessionFile } : {}),
+      cwd: ctx.cwd,
+      mode: ctx.mode,
+      ...(current.runId ? { runId: current.runId } : {}),
+      ...payload,
+    };
+    try {
+      appendFileSync(current.timingPath, `${JSON.stringify(toJsonSafe(entry))}\n`, { encoding: "utf8", mode: 0o600 });
+      try {
+        chmodSync(current.timingPath, 0o600);
+      } catch {
+        // Best effort on platforms/filesystems that do not support chmod.
+      }
+    } catch (error) {
+      reportWriteFailure(ctx, current, error);
+    }
+  };
+
+  const trackThinkingTiming = (current: RecorderState, assistantMessageEvent: unknown, at: number): void => {
+    const pending = current.pendingRequest;
+    if (!pending) return;
+    const event = asRecord(assistantMessageEvent);
+    if (!event) return;
+    if (pending.firstDeltaAt === undefined) pending.firstDeltaAt = at;
+    const contentIndex = optionalIndex(event.contentIndex);
+    if (contentIndex === undefined) return;
+    if (event.type === "thinking_start") {
+      pending.thinkingStartedAt.set(contentIndex, at);
+      return;
+    }
+    if (event.type === "thinking_end") {
+      const startedAt = pending.thinkingStartedAt.get(contentIndex);
+      if (startedAt === undefined) return;
+      pending.thinkingMs += Math.max(0, at - startedAt);
+      pending.thinkingStartedAt.delete(contentIndex);
+    }
+  };
+
+  const closeOpenThinking = (pending: PendingRequest, at: number): void => {
+    for (const startedAt of pending.thinkingStartedAt.values()) {
+      pending.thinkingMs += Math.max(0, at - startedAt);
+    }
+    pending.thinkingStartedAt.clear();
+  };
+
+  const writeModelTiming = (
+    current: RecorderState,
+    message: UnknownRecord,
+    pending: PendingRequest,
+    endedAt: number,
+    ctx: ExtensionContext,
+  ): void => {
+    closeOpenThinking(pending, endedAt);
+    const usage = asRecord(message.usage);
+    const totalMs = Math.max(0, endedAt - pending.startedAt);
+    const ttftMs = pending.firstDeltaAt !== undefined
+      ? Math.max(0, pending.firstDeltaAt - pending.startedAt)
+      : pending.responseMs;
+    const stopReason = optionalString(message.stopReason);
+    const isError = stopReason === "error" || message.errorMessage !== undefined;
+    current.runModelMs += totalMs;
+    current.runModelCount += 1;
+    writeTiming(current, {
+      kind: "model",
+      provider: optionalString(message.provider),
+      model: optionalString(message.responseModel) || optionalString(message.model),
+      attempt: pending.attempt,
+      totalMs,
+      ...(ttftMs === undefined ? {} : { ttftMs }),
+      ...(pending.responseMs === undefined ? {} : { responseMs: pending.responseMs }),
+      ...(pending.thinkingMs > 0 ? { thinkingMs: pending.thinkingMs } : {}),
+      ...(finiteNumber(usage?.output) === undefined ? {} : { outputTokens: usage?.output }),
+      ...(finiteNumber(usage?.reasoning) === undefined ? {} : { reasoningTokens: usage?.reasoning }),
+      ...(pending.turnIndex === undefined ? {} : { turnIndex: pending.turnIndex }),
+      ...(stopReason ? { stopReason } : {}),
+      isError,
+    }, ctx);
   };
 
   pi.on("session_start", (event, ctx) => {
@@ -383,6 +527,12 @@ export function registerTrajectoryRecorder(
     current.turnIndex = undefined;
     current.attempt = 0;
     current.pendingRequest = undefined;
+    current.runStartedAt = now();
+    current.runModelMs = 0;
+    current.runToolMs = 0;
+    current.runModelCount = 0;
+    current.runToolCount = 0;
+    current.runTurnCount = 0;
     record("agent_start", {}, ctx);
   });
 
@@ -391,13 +541,27 @@ export function registerTrajectoryRecorder(
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    const current = ensureState(ctx);
     record("agent_settled", {}, ctx);
+    if (current.runStartedAt !== undefined) {
+      writeTiming(current, {
+        kind: "run",
+        durationMs: Math.max(0, now() - current.runStartedAt),
+        modelMs: current.runModelMs,
+        toolMs: current.runToolMs,
+        modelCount: current.runModelCount,
+        toolCount: current.runToolCount,
+        turnCount: current.runTurnCount,
+      }, ctx);
+      current.runStartedAt = undefined;
+    }
   });
 
   pi.on("turn_start", (event, ctx) => {
     const current = ensureState(ctx);
     current.turnIndex = event.turnIndex;
     current.attempt = 0;
+    current.runTurnCount += 1;
     record("turn_start", { timestamp: event.timestamp }, ctx);
   });
 
@@ -426,6 +590,8 @@ export function registerTrajectoryRecorder(
       startedAt,
       attempt: current.attempt,
       ...(current.turnIndex !== undefined ? { turnIndex: current.turnIndex } : {}),
+      thinkingMs: 0,
+      thinkingStartedAt: new Map(),
     };
     record("provider_request", {
       requestId,
@@ -441,12 +607,14 @@ export function registerTrajectoryRecorder(
   pi.on("after_provider_response", (event, ctx) => {
     const current = ensureState(ctx);
     const responseAt = now();
+    const latencyMs = current.pendingRequest ? Math.max(0, responseAt - current.pendingRequest.startedAt) : undefined;
+    if (current.pendingRequest && latencyMs !== undefined) current.pendingRequest.responseMs = latencyMs;
     record("provider_response", {
       requestId: current.pendingRequest?.requestId,
       status: event.status,
       headers: event.headers,
       responseAt,
-      ...(current.pendingRequest ? { latencyMs: Math.max(0, responseAt - current.pendingRequest.startedAt) } : {}),
+      ...(latencyMs === undefined ? {} : { latencyMs }),
     }, ctx);
   });
 
@@ -458,20 +626,26 @@ export function registerTrajectoryRecorder(
   pi.on("message_end", (event, ctx) => {
     const current = ensureState(ctx);
     const message = asRecord(event.message);
+    const endedAt = now();
     const link = message?.role === "assistant" && current.pendingRequest
       ? {
           requestId: current.pendingRequest.requestId,
-          requestLatencyMs: Math.max(0, now() - current.pendingRequest.startedAt),
+          requestLatencyMs: Math.max(0, endedAt - current.pendingRequest.startedAt),
         }
       : undefined;
     record("message_end", {
       message: event.message,
       ...(link ?? {}),
     }, ctx);
-    if (link) current.pendingRequest = undefined;
+    if (message?.role === "assistant" && current.pendingRequest) {
+      writeModelTiming(current, message, current.pendingRequest, endedAt, ctx);
+      current.pendingRequest = undefined;
+    }
   });
 
   pi.on("message_update", (event, ctx) => {
+    const current = ensureState(ctx);
+    trackThinkingTiming(current, event.assistantMessageEvent, now());
     if (!includeStreamingUpdates) return;
     record("message_update", {
       message: event.message,
@@ -536,13 +710,24 @@ export function registerTrajectoryRecorder(
     const pending = current.toolExecutions.get(event.toolCallId);
     const endedAt = now();
     if (pending) pending.endedAt = endedAt;
+    const durationMs = pending ? Math.max(0, endedAt - pending.startedAt) : undefined;
     record("tool_execution_end", {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       result: event.result,
       isError: event.isError,
-      ...(pending ? { durationMs: Math.max(0, endedAt - pending.startedAt) } : {}),
+      ...(durationMs === undefined ? {} : { durationMs }),
     }, ctx);
+    if (durationMs !== undefined) {
+      current.runToolMs += durationMs;
+      current.runToolCount += 1;
+      writeTiming(current, {
+        kind: "tool",
+        toolName: event.toolName,
+        durationMs,
+        isError: event.isError === true,
+      }, ctx);
+    }
     if (pending?.resultRecorded) current.toolExecutions.delete(event.toolCallId);
   });
 
