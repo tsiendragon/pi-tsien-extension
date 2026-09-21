@@ -19,6 +19,18 @@ import {
 const PROCESS_IDENTITY_SYMBOL = Symbol.for("pi.live-session.process-identity.v1");
 const LIVE_FEATURE_PUBLISH_INTERVAL_MS = 250;
 
+/**
+ * Live Session is only meaningful for the interactive TUI and the rpc bridge.
+ * In print/json/dashboard runs there is no broker, and Pi marks the CLI prompt's
+ * `input` event as `source: "interactive"` — so without this guard the input
+ * handler would swallow the prompt and the headless run would produce no reply.
+ */
+function isLiveSessionActive(
+  ctx: ExtensionContext,
+): ctx is ExtensionContext & { mode: LiveSessionMode } {
+  return process.env.PI_RUNTIME !== "dashboard" && (ctx.mode === "tui" || ctx.mode === "rpc");
+}
+
 type PendingFeatureSnapshot = {
   snapshot: unknown;
   ctx: ExtensionContext;
@@ -320,7 +332,14 @@ export function registerLiveSessionExtension(
         return { ok: true, result: { name } };
       }
       if (command.type === "get_models") {
-        const models = ctx.modelRegistry.getAvailable().map(model => ({
+        // Mirror the built-in picker: `ctx.scopedModels` is resolved from the
+        // `--models` flag and the `enabledModels` setting, so it is exactly the
+        // "models we actually use" set (see docs/extensions.md). Enumerating
+        // `getAvailable()` instead would list every catalog model of every
+        // credentialed provider. Empty scope = no scoping configured → keep the
+        // old full-catalog behaviour.
+        const scoped = ctx.scopedModels ?? [];
+        const models = (scoped.length ? scoped.map(entry => entry.model) : ctx.modelRegistry.getAvailable()).map(model => ({
           provider: model.provider,
           id: model.id,
           name: model.name,
@@ -483,8 +502,7 @@ export function registerLiveSessionExtension(
     running = !ctx.isIdle();
     reconnecting = false;
     lastActivityAt = Date.now();
-    if (process.env.PI_RUNTIME === "dashboard" || ctx.mode === "print" || ctx.mode === "json") return;
-    if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+    if (!isLiveSessionActive(ctx)) return;
     const mode: LiveSessionMode = ctx.mode;
 
     client?.stop("session_switch");
@@ -628,6 +646,7 @@ export function registerLiveSessionExtension(
   );
 
   pi.on("input", (event, ctx) => {
+    if (!isLiveSessionActive(ctx)) return { action: "continue" };
     currentContext = ctx;
     if (event.source !== "interactive") return { action: "continue" };
     enqueueInput({
