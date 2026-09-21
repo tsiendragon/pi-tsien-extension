@@ -33,7 +33,7 @@ function extensionHarness() {
   return { pi, handlers, commands, sent, pendingSends };
 }
 
-function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[] }): ExtensionContext {
+function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[]; scopedModels?: unknown }): ExtensionContext {
   return {
     mode: "tui",
     cwd: "/mnt/workspace/lilong/repos/worktree/task-a",
@@ -47,6 +47,7 @@ function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; 
       getBranch: () => [{ type: "message", id: "m1", message: { role: "user", content: "hello" } }],
     },
     getContextUsage: () => ({ tokens: 20, contextWindow: 100, percent: 20 }),
+    scopedModels: state.scopedModels,
     modelRegistry: {
       getAvailable: () => [{ provider: "test", id: "next", name: "Next", reasoning: true, contextWindow: 100, thinkingLevelMap: {} }],
       find: () => ({ provider: "test", id: "next", name: "Next", reasoning: true, contextWindow: 100, thinkingLevelMap: {} }),
@@ -140,6 +141,39 @@ test("Live Session extension shares prompt input while keeping strong controls l
   assert.deepEqual(await input?.({ source: "interactive", text: "still shared" }, ctx), { action: "handled" });
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
   assert.equal(stopped, true);
+});
+
+test("get_models mirrors the scoped model set, falling back to the whole catalogue", async () => {
+  const run = async (scopedModels: unknown) => {
+    const harness = extensionHarness();
+    const state = { idle: true, aborted: false, notifications: [] as string[], scopedModels };
+    let options: LiveSessionClientOptions | undefined;
+    registerLiveSessionExtension(harness.pi, {
+      identity: { processInstanceId: "process-a", startedAt: 1 },
+      createClient: value => {
+        options = value;
+        return { start() {}, publish() {}, sendSnapshot() {}, stop() {} };
+      },
+    });
+    const ctx = context(state);
+    await harness.handlers.get("session_start")?.[0]({}, ctx);
+    const result = await options!.executeCommand(envelope({ type: "get_models" }, "request-models"));
+    return ((result as any).result.models as Array<{ provider: string; id: string }>).map(model => ({ provider: model.provider, id: model.id }));
+  };
+
+  // No scope configured (empty array, like pi's "every available model is usable").
+  assert.deepEqual(await run([]), [{ provider: "test", id: "next" }]);
+  assert.deepEqual(await run(undefined), [{ provider: "test", id: "next" }]);
+
+  // A configured scope wins, so the picker shows only the models we actually use.
+  const scoped = await run([
+    { model: { provider: "dashscope", id: "deepseek-v4.1-flash", name: "DS", reasoning: true, contextWindow: 100, thinkingLevelMap: {} } },
+    { model: { provider: "openai-codex", id: "gpt-5.6-sol", name: "Sol", reasoning: true, contextWindow: 100, thinkingLevelMap: {} } },
+  ]);
+  assert.deepEqual(scoped, [
+    { provider: "dashscope", id: "deepseek-v4.1-flash" },
+    { provider: "openai-codex", id: "gpt-5.6-sol" },
+  ]);
 });
 
 test("Live Session extension executes model and context controls", async () => {
@@ -458,6 +492,30 @@ test("Live Session broker protocol parses the answer_ui command", () => {
   assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui" } }), undefined);
   assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui", id: "ui", bogus: 1 } }), undefined);
   assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "answer_ui", id: "ui", value: 3 } }), undefined);
+});
+
+test("Live Session does not swallow the CLI prompt in print/json mode", () => {
+  for (const mode of ["print", "json"]) {
+    const harness = extensionHarness();
+    registerLiveSessionExtension(harness.pi, {
+      identity: { processInstanceId: `process-${mode}`, startedAt: 1 },
+    });
+    const ctx = { ...context({ idle: true, aborted: false, notifications: [] }), mode } as unknown as ExtensionContext;
+    const result = harness.handlers.get("input")?.[0]({ type: "input", text: "hello", source: "interactive" }, ctx);
+    assert.deepEqual(result, { action: "continue" });
+    assert.equal(harness.sent.length, 0);
+  }
+});
+
+test("Live Session still routes interactive input in tui mode", () => {
+  const harness = extensionHarness();
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-tui", startedAt: 1 },
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  const result = harness.handlers.get("input")?.[0]({ type: "input", text: "hello", source: "interactive" }, ctx);
+  assert.deepEqual(result, { action: "handled" });
+  assert.equal(harness.sent.length, 1);
 });
 
 /**
