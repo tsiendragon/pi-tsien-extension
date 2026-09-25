@@ -1,4 +1,4 @@
-export type LiveFeatureName = "btw" | "schedule" | "subagent-workflow";
+export type LiveFeatureName = "btw" | "schedule" | "subagent-workflow" | "background-commands";
 
 type Listener = (feature: LiveFeatureName, snapshot: unknown) => void;
 type CommandHandler = (command: unknown) => Promise<unknown>;
