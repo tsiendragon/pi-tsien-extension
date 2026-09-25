@@ -1,0 +1,26 @@
+{
+  "_comment": "Pi 扩展装载清单模板（同步器输入）。用法：复制到 <agent dir>/extensions.config.json，或用 install-standalone.sh --ext-config <这个文件>。字段含义见同目录 README.md；完整可用的 25 项清单见 ../extensions.standalone.json。",
+  "version": 1,
+  "packages": [
+    {
+      "id": "web-tools",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/vendor/pi-web-tools"
+    },
+    {
+      "id": "tsien",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}"
+    }
+  ],
+  "loadOrder": [
+    { "package": "web-tools", "path": "src/index.ts" },
+    { "package": "tsien", "path": "extensions/tool-result-pipeline.ts" },
+    { "package": "tsien", "path": "extensions/00-zero.ts" },
+    { "package": "tsien", "path": "extensions/sidebar.ts" }
+  ],
+  "prune": {
+    "packages": true,
+    "extensions": true,
+    "autoDiscoveredExtensions": "quarantine"
+  },
+  "_marketplace_example": "接入内部 marketplace 时，额外声明一个包，并把它的扩展加进 loadOrder：{ \"id\": \"eagleeye\", \"source\": \"${EAGLEEYE_AI_DEV_ROOT}/marketplace/packages/pi-eagleeye\" }；此时同步器要求 EAGLEEYE_AI_DEV_ROOT 可解析，缺失会明确报错。"
+}
