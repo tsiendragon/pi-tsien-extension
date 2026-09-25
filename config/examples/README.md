@@ -7,7 +7,7 @@
 | `bash-digest.example.json` | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/bash-digest.json` | 大段 `bash` 输出交给便宜模型摘要（默认关闭） |
 | `extensions.config.example.json` | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/extensions.config.json`，或用 `install-standalone.sh --ext-config <文件>` | Pi 扩展**装载清单**（声明 package 来源、加载顺序、严格模式收敛策略） |
 
-改完执行 `/reload` 生效。扩展会直接读 `extensions/*.ts`，不需要编译。
+改完执行 `/reload` 生效。扩展按 `packages/pi-tsien-*` 各包的 TS 入口直接加载（见 `docs/packages-migration.md`），不需要编译。
 
 ## bash-digest：模型与凭证怎么配
 
