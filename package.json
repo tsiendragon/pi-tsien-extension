@@ -23,9 +23,9 @@
     "check": "npm run typecheck && npm test"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.84.2",
-    "@earendil-works/pi-coding-agent": ">=0.84.2",
-    "@earendil-works/pi-tui": ">=0.84.2"
+    "@earendil-works/pi-ai": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1",
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1",
+    "@earendil-works/pi-tui": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
@@ -37,9 +37,10 @@
     "typebox": "^1.3.13"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "file:/home/tsien/pi-lical-dist/earendil-works-pi-ai-0.85.1.tgz",
-    "@earendil-works/pi-coding-agent": "file:/home/tsien/pi-lical-dist/earendil-works-pi-coding-agent-0.85.1.tgz",
-    "@earendil-works/pi-tui": "file:/home/tsien/pi-lical-dist/earendil-works-pi-tui-0.85.1.tgz",
+    "@earendil-works/pi-ai": "https://github.com/tsiendragon/pi/releases/download/v0.85.1-tsien.1/earendil-works-pi-ai-0.85.1-tsien.1.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/tsiendragon/pi/releases/download/v0.85.1-tsien.1/earendil-works-pi-coding-agent-0.85.1-tsien.1.tgz",
+    "@earendil-works/pi-tui": "https://github.com/tsiendragon/pi/releases/download/v0.85.1-tsien.1/earendil-works-pi-tui-0.85.1-tsien.1.tgz",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.0.0",
     "@types/turndown": "^5.0.5",
     "tsx": "^4.23.12",
