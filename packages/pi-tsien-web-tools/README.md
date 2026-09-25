@@ -60,5 +60,6 @@ node --import tsx --test --test-timeout=60000 test/*.test.ts   # 26 tests
 - 目前通过 monorepo 内的本地路径加载（`packages/pi-tsien-web-tools`），`package.json` 的
   `pi.extensions` 指向 `./src/index.ts`。
 - **尚未发布**：npm 发布前需要先定许可证（当前仓库与包都没有 LICENSE 字段）。
-- `peerDependencies` 指向 `@earendil-works/pi-coding-agent` / `typebox`；`jsdom` 与
-  `turndown-plugin-gfm` 的类型来自 `src/types/runtime-shims.d.ts`（安装 `@types/jsdom` 后可删）。
+- `peerDependencies` 指向 `@earendil-works/pi-coding-agent` / `typebox`，版本范围同时接受上游版本与补丁版
+  （`>=0.84.2 <1.0.0 || ^0.85.1-tsien.1`，因为 semver 默认不匹配预发布版本）。
+- `turndown-plugin-gfm` 无类型，声明在 `src/types/runtime-shims.d.ts`；`jsdom` 用 `@types/jsdom`。
