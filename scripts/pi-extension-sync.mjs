@@ -95,24 +95,31 @@ function createContext({ repoRoot, agentDir, env }) {
 		[env.PI_TSIEN_EXTENSION_ROOT, repoRoot],
 		"${PI_TSIEN_EXTENSION_ROOT}; set PI_TSIEN_EXTENSION_ROOT",
 	);
-	const eagleeyeRoot = firstExisting(
-		[env.sample_AI_TOOLS_ROOT, resolve(piTsienRoot, "..", "sample-ai-dev")],
-		"${sample_AI_TOOLS_ROOT}; set sample_AI_TOOLS_ROOT or clone sample-ai-dev beside pi-tsien-extension",
-	);
+	// Resolved lazily: configs that never reference the marketplace checkout
+	// (for example the standalone profile) must sync on machines that do not
+	// have sample-ai-dev installed.
+	let eagleeyeRoot;
 	return {
 		piTsienRoot,
-		eagleeyeRoot,
+		get eagleeyeRoot() {
+			eagleeyeRoot ??= firstExisting(
+				[env.sample_AI_TOOLS_ROOT, resolve(piTsienRoot, "..", "sample-ai-dev")],
+				"${sample_AI_TOOLS_ROOT}; set sample_AI_TOOLS_ROOT or clone sample-ai-dev beside pi-tsien-extension",
+			);
+			return eagleeyeRoot;
+		},
 		agentDir,
 		home: env.HOME ? resolve(env.HOME) : homedir(),
 	};
 }
 
 function expandString(value, context) {
-	return value
+	const expanded = value
 		.replaceAll("${PI_TSIEN_EXTENSION_ROOT}", context.piTsienRoot)
-		.replaceAll("${sample_AI_TOOLS_ROOT}", context.eagleeyeRoot)
 		.replaceAll("${PI_AGENT_DIR}", context.agentDir)
 		.replaceAll("${HOME}", context.home);
+	if (!expanded.includes("${sample_AI_TOOLS_ROOT}")) return expanded;
+	return expanded.replaceAll("${sample_AI_TOOLS_ROOT}", context.eagleeyeRoot);
 }
 
 function normalizePackages(entries, context, agentDir) {
