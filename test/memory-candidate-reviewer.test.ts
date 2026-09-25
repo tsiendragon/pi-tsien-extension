@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ModelCandidateReviewer } from "../extensions/memory/src/application/candidate-reviewer.ts";
-import type { SettledTurn } from "../extensions/memory/src/ports/memory.ts";
+import { ModelCandidateReviewer } from "pi-tsien-memory/src/application/candidate-reviewer.ts";
+import type { SettledTurn } from "pi-tsien-memory/src/ports/memory.ts";
 
 const turn: SettledTurn = {
 	turnKey: "turn",

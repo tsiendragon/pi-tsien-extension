@@ -20,8 +20,8 @@ import {
 	loadLargeReadPackConfig,
 	renderReadPack,
 	tailAtLineBoundary,
-} from "../extensions/tool-result-pipeline/large-read-pack/core.ts";
-import { createLargeReadPackStage } from "../extensions/tool-result-pipeline/stages/large-read-pack.ts";
+} from "pi-tsien-rtk-fork/src/large-read-pack/core.ts";
+import { createLargeReadPackStage } from "pi-tsien-rtk-fork/src/stages/large-read-pack.ts";
 
 const CONFIG = { ...DEFAULT_LARGE_READ_PACK_CONFIG, enabled: true };
 /** Big enough that the default pack clears the `minSavedRatio` guard. */

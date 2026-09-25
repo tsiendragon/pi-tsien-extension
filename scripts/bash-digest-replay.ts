@@ -13,7 +13,7 @@ import {
 	estimateTokens,
 	loadBashDigestConfig,
 	type DigestDecision,
-} from "../extensions/tool-result-pipeline/bash-digest/core.ts";
+} from "pi-tsien-rtk-fork/src/bash-digest/core.ts";
 import { collectBashResults } from "./bash-digest-scan.ts";
 
 function percent(part: number, whole: number): string {

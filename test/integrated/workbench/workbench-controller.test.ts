@@ -4,12 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PiRpcProcessProvider,
   type PiRpcProcessProviderOptions,
-} from "../../../extensions/subagent-workbench/src/providers/pi-rpc-process-provider.ts";
-import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
+} from "pi-tsien-subagent-workbench/src/providers/pi-rpc-process-provider.ts";
+import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
 import {
   WorkbenchController,
   type WorkbenchRunWarning,
-} from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
+} from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
 
 const fixture = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

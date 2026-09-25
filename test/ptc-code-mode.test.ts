@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import ptcExtension from "../extensions/ptc.ts";
+import ptcExtension from "pi-tsien-code-mode/src/index.ts";
 
 function createContext() {
   return {

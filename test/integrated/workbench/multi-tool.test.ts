@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CHILD_MULTI_TOOL_NAME,
   registerChildMultiTool,
-} from "../../../extensions/subagent-workbench/src/multi-tool.ts";
+} from "pi-tsien-subagent-workbench/src/multi-tool.ts";
 
 function setup(
   options: { sequential?: boolean; terminateTools?: string[] } = {},

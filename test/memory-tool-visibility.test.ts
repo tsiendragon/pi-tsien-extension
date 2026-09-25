@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import registerMemory from "../extensions/memory/src/extension/index.ts";
+import registerMemory from "pi-tsien-memory/src/extension/index.ts";
 
 const ADVANCED = [
   "memory_review",

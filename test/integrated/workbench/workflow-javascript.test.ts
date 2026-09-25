@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compileWorkflowJavaScript,
   MAX_WORKFLOW_JAVASCRIPT_BYTES,
-} from "../../../extensions/subagent-workbench/src/workflow-javascript.ts";
+} from "pi-tsien-subagent-workbench/src/workflow-javascript.ts";
 
 describe("Workflow JavaScript compiler", () => {
   it("compiles a bounded synchronous builder into persisted stages", () => {

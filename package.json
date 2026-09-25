@@ -3,6 +3,9 @@
   "version": "0.3.0",
   "description": "A collection of practical Pi extensions maintained by Tsien.",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "keywords": [
     "pi-package",
     "pi-extension"

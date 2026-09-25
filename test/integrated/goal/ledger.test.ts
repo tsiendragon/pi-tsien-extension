@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { branchLedgerKey, openGoalLedger } from "../../../extensions/goal/src/ledger.ts";
+import { branchLedgerKey, openGoalLedger } from "pi-tsien-goal/src/ledger.ts";
 
-import type { GoalState } from "../../../extensions/goal/src/types.ts";
+import type { GoalState } from "pi-tsien-goal/src/types.ts";
 
 const goal: GoalState = {
 	version: 2,

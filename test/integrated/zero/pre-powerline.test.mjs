@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PrePowerlineHost } from "../../../extensions/pi-zero/powerline/pre-powerline.ts";
+import { PrePowerlineHost } from "pi-tsien-session-ui-fork/src/powerline/pre-powerline.ts";
 const fakeTui = {};
 const fakeTheme = {};
 

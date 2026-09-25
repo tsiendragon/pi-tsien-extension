@@ -6,16 +6,16 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import subagentWorkbench, {
   projectLiveFeatureSnapshot,
-} from "../../../extensions/subagent-workbench/src/index.ts";
-import { WorkbenchController } from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
+} from "pi-tsien-subagent-workbench/src/index.ts";
+import { WorkbenchController } from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
 import {
   loadWorkflowRun,
   saveWorkflowRun,
-} from "../../../extensions/subagent-workbench/src/workflow-run-store.ts";
+} from "pi-tsien-subagent-workbench/src/workflow-run-store.ts";
 import {
   WORKBENCH_RUNTIME_SYMBOL,
   uninstallWorkbenchRuntime,
-} from "../../../extensions/subagent-workbench/src/runtime.ts";
+} from "pi-tsien-subagent-workbench/src/runtime.ts";
 
 beforeAll(() => initTheme("dark"));
 

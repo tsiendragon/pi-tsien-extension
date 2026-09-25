@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PiKnowledgeBridge, retrievalRequest } from "../../../../extensions/memory/src/application/knowledge-bridge.ts";
-import { PromotionAdvisor } from "../../../../extensions/memory/src/application/promotion.ts";
-import { InMemoryMemoryRepository, InMemorySearchBackend } from "../../../../extensions/memory/src/adapters/memory/in-memory.ts";
-import { DefaultSecretFilter } from "../../../../extensions/memory/src/adapters/security/secret-filter.ts";
-import { DefaultScopeResolver } from "../../../../extensions/memory/src/adapters/pi/scope-resolver.ts";
-import { RuleCaptureStrategy } from "../../../../extensions/memory/src/application/capture-rules.ts";
-import { MemoryService } from "../../../../extensions/memory/src/application/memory-service.ts";
+import { PiKnowledgeBridge, retrievalRequest } from "pi-tsien-memory/src/application/knowledge-bridge.ts";
+import { PromotionAdvisor } from "pi-tsien-memory/src/application/promotion.ts";
+import { InMemoryMemoryRepository, InMemorySearchBackend } from "pi-tsien-memory/src/adapters/memory/in-memory.ts";
+import { DefaultSecretFilter } from "pi-tsien-memory/src/adapters/security/secret-filter.ts";
+import { DefaultScopeResolver } from "pi-tsien-memory/src/adapters/pi/scope-resolver.ts";
+import { RuleCaptureStrategy } from "pi-tsien-memory/src/application/capture-rules.ts";
+import { MemoryService } from "pi-tsien-memory/src/application/memory-service.ts";
 
 const dirs = [];
 

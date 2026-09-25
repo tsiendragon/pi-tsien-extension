@@ -5,7 +5,7 @@
  *
  * Usage: npx tsx scripts/observation-pack-placeholder-size.ts
  */
-import { placeholderFor, type Observation } from "../extensions/observation-pack/core.js";
+import { placeholderFor, type Observation } from "pi-tsien-observation-pack/src/core.ts";
 
 const tok = (value: string): number => Math.ceil(value.length / 4);
 

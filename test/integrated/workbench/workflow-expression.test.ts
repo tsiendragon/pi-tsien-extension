@@ -4,7 +4,7 @@ import {
   resolveWorkflowForeach,
   resolveWorkflowTemplate,
   type WorkflowExpressionContext,
-} from "../../../extensions/subagent-workbench/src/workflow-expression.ts";
+} from "pi-tsien-subagent-workbench/src/workflow-expression.ts";
 
 const context: WorkflowExpressionContext = {
   parameters: {
