@@ -236,15 +236,29 @@ export function buildSyncPlan({
 		if (!desiredByIdentity.has(identity)) packageRemovals.push(entry);
 	}
 
-	const normalizedCurrentExtensions = currentExtensions.map((entry) => resolve(absoluteAgentDir, entry));
-	const desiredSet = new Set(desiredExtensions);
+	// Pi supports `-path` (disabled), `+path` (force enabled) and `!path` (excluded) override entries.
+	// They are user intent written by Pi's own /config UI or the dashboard, so strict pruning must
+	// keep them verbatim instead of treating them as unknown paths and dropping them.
+	const isOverrideEntry = (entry) => typeof entry === "string" && /^[!+-]/.test(entry);
+	const preservedOverrides = currentExtensions.filter(isOverrideEntry);
+	const disabledByOverride = new Set(
+		preservedOverrides
+			.filter((entry) => entry.startsWith("-") || entry.startsWith("!"))
+			.map((entry) => resolve(absoluteAgentDir, entry.slice(1))),
+	);
+	const managedCurrentExtensions = currentExtensions.filter((entry) => !isOverrideEntry(entry));
+	const effectiveExtensions = desiredExtensions.filter((entry) => !disabledByOverride.has(entry));
+	const normalizedCurrentExtensions = managedCurrentExtensions.map((entry) => resolve(absoluteAgentDir, entry));
+	const desiredSet = new Set(effectiveExtensions);
 	const currentSet = new Set(normalizedCurrentExtensions);
-	const extensionAdds = orderedExtensions.filter((entry) => !currentSet.has(entry.absolute));
-	const extensionRemovals = currentExtensions.filter(
+	const extensionAdds = orderedExtensions.filter(
+		(entry) => !currentSet.has(entry.absolute) && !disabledByOverride.has(entry.absolute),
+	);
+	const extensionRemovals = managedCurrentExtensions.filter(
 		(_entry, index) => !desiredSet.has(normalizedCurrentExtensions[index]),
 	);
 	const packageOrderChanged = !sameEntry(currentPackages, desiredPackages);
-	const loadOrderChanged = !sameEntry(normalizedCurrentExtensions, desiredExtensions);
+	const loadOrderChanged = !sameEntry(normalizedCurrentExtensions, effectiveExtensions);
 
 	const autoExtensionsDir = join(absoluteAgentDir, "extensions");
 	const autoExtensionRemovals = existsSync(autoExtensionsDir)
@@ -261,7 +275,8 @@ export function buildSyncPlan({
 		settingsPath,
 		settings,
 		desiredPackages,
-		desiredExtensions,
+		desiredExtensions: effectiveExtensions,
+		preservedOverrides,
 		orderedExtensions,
 		packageAdds,
 		packageUpdates,
@@ -292,7 +307,7 @@ export function applySyncPlan(plan, { now = new Date() } = {}) {
 	atomicWriteJson(plan.settingsPath, {
 		...plan.settings,
 		packages: plan.desiredPackages,
-		extensions: plan.desiredExtensions,
+		extensions: [...plan.desiredExtensions, ...(plan.preservedOverrides ?? [])],
 	});
 	if (plan.autoExtensionRemovals.length > 0) {
 		mkdirSync(quarantineDir, { recursive: true });
@@ -316,6 +331,7 @@ export function formatSyncPlan(plan) {
 	}
 	for (const entry of plan.extensionAdds) lines.push(`  extension + ${entry.label}`);
 	for (const entry of plan.extensionRemovals) lines.push(`  extension - ${entry}`);
+	for (const entry of plan.preservedOverrides ?? []) lines.push(`  extension override kept: ${entry}`);
 	if (plan.loadOrderChanged) {
 		lines.push("  extension load order:");
 		plan.orderedExtensions.forEach((entry, index) => lines.push(`    ${index + 1}. ${entry.label}`));
