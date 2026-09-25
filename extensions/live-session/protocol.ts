@@ -108,6 +108,12 @@ export type LiveSessionCommand =
       readonly command: { readonly type: "open" | "close" };
     }
   | {
+      readonly type: "feature_command";
+      readonly leaseId: string;
+      readonly feature: "background-commands";
+      readonly command: { readonly type: "background"; readonly toolCallId: string };
+    }
+  | {
       readonly type: "answer_ui";
       readonly id: string;
       readonly value?: string;
@@ -272,10 +278,26 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
 
   if (value.type === "feature_command"
     && hasOnlyKeys(value, ["type", "leaseId", "feature", "command"])) {
-    if (!isBoundedString(value.leaseId, 256) || value.feature !== "btw" || !isRecord(value.command)
-      || !hasOnlyKeys(value.command, ["type"])
-      || (value.command.type !== "open" && value.command.type !== "close")) return undefined;
-    return { type: "feature_command", leaseId: value.leaseId, feature: "btw", command: { type: value.command.type } };
+    if (!isBoundedString(value.leaseId, 256) || !isRecord(value.command)) return undefined;
+    // The broker validates the same whitelist; both copies must accept a feature
+    // before the command can reach this process (a mismatch closes the connection).
+    if (value.feature === "btw") {
+      if (!hasOnlyKeys(value.command, ["type"])
+        || (value.command.type !== "open" && value.command.type !== "close")) return undefined;
+      return { type: "feature_command", leaseId: value.leaseId, feature: "btw", command: { type: value.command.type } };
+    }
+    if (value.feature === "background-commands") {
+      if (!hasOnlyKeys(value.command, ["type", "toolCallId"])
+        || value.command.type !== "background"
+        || !isBoundedString(value.command.toolCallId, 256)) return undefined;
+      return {
+        type: "feature_command",
+        leaseId: value.leaseId,
+        feature: "background-commands",
+        command: { type: "background", toolCallId: value.command.toolCallId },
+      };
+    }
+    return undefined;
   }
 
   if (value.type === "input"

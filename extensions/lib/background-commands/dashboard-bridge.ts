@@ -10,12 +10,20 @@ const MAX_SNAPSHOT_TAIL_CHARS = 512 * 1024;
 type Command =
   | { type: "refresh" }
   | { type: "output"; taskId: string; tailLines?: number }
-  | { type: "cancel"; taskId: string };
+  | { type: "cancel"; taskId: string }
+  | { type: "background"; toolCallId: string };
+
+const MAX_TOOL_CALL_ID_LENGTH = 256;
 
 function parseCommand(value: unknown): Command | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   if (candidate.type === "refresh") return { type: "refresh" };
+  if (candidate.type === "background") {
+    const toolCallId = candidate.toolCallId;
+    if (typeof toolCallId !== "string" || !toolCallId.trim() || toolCallId.length > MAX_TOOL_CALL_ID_LENGTH) return undefined;
+    return { type: "background", toolCallId };
+  }
   if ((candidate.type === "output" || candidate.type === "cancel") && typeof candidate.taskId === "string") {
     if (candidate.type === "cancel") return { type: "cancel", taskId: candidate.taskId };
     if (candidate.tailLines !== undefined && (!Number.isInteger(candidate.tailLines) || Number(candidate.tailLines) < 1 || Number(candidate.tailLines) > 2_000)) return undefined;
@@ -36,6 +44,7 @@ function publicTask(task: BackgroundTaskSnapshot) {
     taskId: task.id,
     owner: task.owner,
     mode: task.mode,
+    toolCallId: task.toolCallId,
     title: task.title,
     status: task.state,
     command: task.command,
@@ -73,8 +82,15 @@ export class BackgroundCommandsDashboardAdapter implements DashboardFeatureAdapt
       apiVersion: 1,
       revision: this.revision,
       generatedAt: Date.now(),
-      tasks: this.manager.list().map(publicTask),
+      tasks: this.listTasks(),
     };
+  }
+
+  /** Running foreground commands are listed too so the dashboard can move them to the background. */
+  private listTasks() {
+    return [...this.manager.list(), ...this.manager.listForeground()]
+      .sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id))
+      .map(publicTask);
   }
 
   subscribe(listener: (snapshot: unknown) => void): () => void {
@@ -91,6 +107,9 @@ export class BackgroundCommandsDashboardAdapter implements DashboardFeatureAdapt
     }
     if (command.type === "output") {
       return this.manager.output(command.taskId, command.tailLines ?? DEFAULT_BACKGROUND_TAIL_LINES);
+    }
+    if (command.type === "background") {
+      return publicTask(this.manager.backgroundForeground(command.toolCallId));
     }
     const result = await this.manager.cancel(command.taskId);
     return publicTask(result);
