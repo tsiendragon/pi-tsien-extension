@@ -8,6 +8,7 @@ import {
 import { BackgroundCommandsDashboardAdapter } from "./lib/background-commands/dashboard-bridge.ts";
 import { registerForegroundHandoffBashTool } from "./lib/background-commands/foreground-handoff.ts";
 import { registerDashboardFeatureBridge } from "./lib/dashboard-bridge.ts";
+import { publishLiveFeature, registerLiveFeatureCommandHandler } from "./lib/live-observer.ts";
 import {
   BACKGROUND_COMMAND_TOOL_NAMES,
   formatBackgroundCompletionSummary,
@@ -23,6 +24,20 @@ import {
 import { formatElapsedDuration, RunningCommandsWidget } from "./lib/command-ui/running-commands-widget.ts";
 
 const COMPONENT_KEY = "pi-tsien.running-commands";
+const LIVE_FEATURE = "background-commands" as const;
+// Live feature snapshots are appended to the session file, so keep the live tail small.
+const LIVE_FEATURE_TAIL_CHARS = 2_000;
+
+function liveCommandSnapshot(adapter: BackgroundCommandsDashboardAdapter) {
+  const snapshot = adapter.getSnapshot();
+  return {
+    ...snapshot,
+    tasks: snapshot.tasks.map(task => ({
+      ...task,
+      outputTail: task.outputTail.length > LIVE_FEATURE_TAIL_CHARS ? task.outputTail.slice(-LIVE_FEATURE_TAIL_CHARS) : task.outputTail,
+    })),
+  };
+}
 const EDITOR_FACTORY_MARKER = Symbol.for("pi.tsien.running-commands.editor.v1");
 const OUTPUT_RENDER_THROTTLE_MS = 100;
 
@@ -72,6 +87,9 @@ export default function runningCommands(pi: ExtensionAPI): void {
   const registry = manager.registry;
   const focus = new CommandFocusController();
   let backgroundCommandsEnabled = true;
+  // The handoff Bash Tool is registered once per extension instance: re-registering
+  // after a session replacement would touch a stale extension ctx.
+  let foregroundHandoffRegistered = false;
   registerBackgroundCommandTools(pi, manager, () => backgroundCommandsEnabled);
 
   let activeContext: ExtensionContext | undefined;
@@ -83,6 +101,10 @@ export default function runningCommands(pi: ExtensionAPI): void {
   let pendingRender: ReturnType<typeof setTimeout> | undefined;
   let dashboardAdapter: BackgroundCommandsDashboardAdapter | undefined;
   let dashboardBridgeCleanup: (() => void) | undefined;
+  // Live sessions (dashboard /live-sessions) carry no bridge socket, so the same
+  // adapter is published and driven through the live feature channel instead.
+  let liveSnapshotCleanup: (() => void) | undefined;
+  let liveCommandCleanup: (() => void) | undefined;
 
   const stopTimers = (): void => {
     if (elapsedTimer) clearInterval(elapsedTimer);
@@ -255,9 +277,27 @@ export default function runningCommands(pi: ExtensionAPI): void {
       dashboardAdapter?.dispose();
       dashboardAdapter = new BackgroundCommandsDashboardAdapter(manager);
       dashboardBridgeCleanup = registerDashboardFeatureBridge(ctx, dashboardAdapter);
+      // Dashboard slots have no TUI editor, but foreground handoff still applies:
+      // the manager owns foreground bash so the dashboard can move it to the background.
+      if (backgroundCommandsEnabled && !foregroundHandoffRegistered) {
+        registerForegroundHandoffBashTool(pi, manager, ctx.cwd);
+        foregroundHandoffRegistered = true;
+      }
+      return;
     }
 
-    if (isDashboard || !ctx.hasUI) return;
+    if (backgroundCommandsEnabled && (ctx.mode === "tui" || ctx.mode === "rpc")) {
+      liveSnapshotCleanup?.();
+      liveCommandCleanup?.();
+      dashboardAdapter?.dispose();
+      dashboardAdapter = new BackgroundCommandsDashboardAdapter(manager);
+      const adapter = dashboardAdapter;
+      publishLiveFeature(LIVE_FEATURE, liveCommandSnapshot(adapter));
+      liveSnapshotCleanup = adapter.subscribe(() => publishLiveFeature(LIVE_FEATURE, liveCommandSnapshot(adapter)));
+      liveCommandCleanup = registerLiveFeatureCommandHandler(LIVE_FEATURE, command => adapter.dispatch(command));
+    }
+
+    if (!ctx.hasUI) return;
     host = getPrePowerlineHost();
     if (!host) {
       ctx.ui.notify(
@@ -313,6 +353,10 @@ export default function runningCommands(pi: ExtensionAPI): void {
     dashboardBridgeCleanup = undefined;
     dashboardAdapter?.dispose();
     dashboardAdapter = undefined;
+    liveSnapshotCleanup?.();
+    liveCommandCleanup?.();
+    liveSnapshotCleanup = undefined;
+    liveCommandCleanup = undefined;
     if (event.reason === "reload" && backgroundCommandsEnabled) {
       manager.scheduleReloadCleanup();
       return;

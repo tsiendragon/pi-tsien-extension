@@ -1,3 +1,6 @@
+/** `foreground` tasks run inside a blocking `bash` tool call and can be moved to the background. */
+export type BackgroundTaskMode = "foreground" | "background";
+
 export type BackgroundTaskState =
   | "starting"
   | "running"
@@ -17,7 +20,9 @@ export type BackgroundTaskExitReason =
 export interface BackgroundTaskSnapshot {
   readonly id: string;
   readonly owner: "agent-bash";
-  readonly mode: "background";
+  readonly mode: BackgroundTaskMode;
+  /** Set when the task was started by a foreground `bash` tool call. */
+  readonly toolCallId?: string;
   /** Human-readable label; falls back to the sanitized Bash command. */
   readonly title: string;
   readonly sessionId: string;

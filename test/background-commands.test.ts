@@ -15,6 +15,8 @@ import {
 } from "../extensions/lib/background-commands/manager.ts";
 import { registerBackgroundCommandTools } from "../extensions/lib/background-commands/tools.ts";
 import { BackgroundCommandsDashboardAdapter } from "../extensions/lib/background-commands/dashboard-bridge.ts";
+import { getBackgroundCommandManager } from "../extensions/lib/background-commands/manager.ts";
+import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "../extensions/lib/live-observer.ts";
 import { registerForegroundHandoffBashTool } from "../extensions/lib/background-commands/foreground-handoff.ts";
 
 const cwd = "/mnt/workspace/lilong/repos/pi-tsien-extension";
@@ -858,5 +860,269 @@ test("dashboard adapter streams public snapshots and only allows refresh/output/
     unsubscribe();
     adapter.dispose();
     await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("dashboard adapter exposes foreground commands and moves them to the background", async () => {
+  const { manager, outputRoot } = await createManager();
+  const adapter = new BackgroundCommandsDashboardAdapter(manager);
+  const controller = new AbortController();
+  const chunks: string[] = [];
+  try {
+    const execution = manager.executeForeground({
+      toolCallId: "dashboard-handoff",
+      command: "printf 'dashboard-start\\n'; sleep 30",
+      cwd,
+      sessionId: "session-test",
+      signal: controller.signal,
+      onData: (data) => chunks.push(data.toString()),
+    });
+    await waitUntil(() => manager.foregroundCount === 1);
+
+    const running = adapter.getSnapshot().tasks;
+    assert.equal(running.length, 1);
+    assert.equal(running[0]?.mode, "foreground");
+    assert.equal(running[0]?.toolCallId, "dashboard-handoff");
+    assert.equal(manager.canHandoffForeground("session-test"), true);
+    assert.equal(manager.canHandoffForeground("session-other"), false);
+
+    const moved = await adapter.dispatch({ type: "background", toolCallId: "dashboard-handoff" }) as { taskId: string; mode: string };
+    assert.equal(moved.mode, "background");
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal((await execution).exitCode, 0);
+    assert.equal(chunks.join("").includes(`Command moved to background as task ${moved.taskId}`), true);
+
+    const handoffSnapshot = adapter.getSnapshot();
+    assert.equal(handoffSnapshot.tasks.length, 1);
+    assert.equal(handoffSnapshot.tasks[0]?.taskId, moved.taskId);
+    assert.equal(handoffSnapshot.tasks[0]?.mode, "background");
+
+    await manager.cancel(moved.taskId);
+    assert.equal((await manager.waitForTask(moved.taskId)).state, "cancelled");
+    await assert.rejects(
+      () => adapter.dispatch({ type: "background", toolCallId: "dashboard-handoff" }),
+      /no longer running/u,
+    );
+    await assert.rejects(() => adapter.dispatch({ type: "background" }), /invalid_background_command/u);
+    await assert.rejects(() => adapter.dispatch({ type: "background", toolCallId: "  " }), /invalid_background_command/u);
+  } finally {
+    controller.abort();
+    adapter.dispose();
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("foreground handoff Bash Tool falls back to plain Bash when the manager is unbound", async () => {
+  const { manager, outputRoot } = await createManager();
+  const tools = new Map<string, ExecutableTool>();
+  const api = {
+    registerTool(tool: ExecutableTool) {
+      tools.set(tool.name, tool);
+    },
+  } as unknown as ExtensionAPI;
+  try {
+    registerForegroundHandoffBashTool(api, manager, cwd);
+    const unboundContext = {
+      ...toolContext(),
+      sessionManager: {
+        getSessionId: () => "session-other",
+        getSessionFile: () => undefined,
+      },
+    };
+    const result = await tools.get("bash")!.execute(
+      "unbound-bash",
+      { command: "printf 'plain-bash\\n'" },
+      undefined,
+      undefined,
+      unboundContext,
+    );
+    assert.match(result.content.map((part) => part.text).join(""), /plain-bash/u);
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal(manager.taskCount, 0);
+  } finally {
+    await cleanupManager(manager, outputRoot);
+  }
+});
+
+test("dashboard sessions own foreground Bash, other headless sessions do not", async () => {
+  const previousRuntime = process.env.PI_RUNTIME;
+  const previousWorkbenchChild = process.env.PI_SUBAGENT_WORKBENCH_CHILD;
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const configRoot = await mkdtemp(join(tmpdir(), "pi-dashboard-handoff-"));
+  const agentDirectory = join(configRoot, "agent");
+  const projectDirectory = join(configRoot, "project");
+  await mkdir(agentDirectory, { recursive: true });
+  await mkdir(projectDirectory, { recursive: true });
+  process.env.PI_CODING_AGENT_DIR = agentDirectory;
+  type Handler = (event: Record<string, unknown>, ctx: unknown) => unknown;
+  const handlers = new Map<string, Handler>();
+  const dashboardTools = new Map<string, ExecutableTool>();
+  const headlessTools = new Map<string, ExecutableTool>();
+  const extensionApi = (tools: Map<string, ExecutableTool>) => ({
+    on(name: string, handler: Handler) {
+      handlers.set(name, handler);
+    },
+    registerTool(tool: ExecutableTool) {
+      tools.set(tool.name, tool);
+    },
+    sendMessage() {},
+    getActiveTools() {
+      return [];
+    },
+    setActiveTools() {},
+  }) as unknown as ExtensionAPI;
+  const ctx = { ...toolContext(), hasUI: false, cwd: projectDirectory };
+  try {
+    await writeFile(join(agentDirectory, "settings.json"), JSON.stringify({
+      backgroundCommands: { enabled: true },
+    }));
+    process.env.PI_RUNTIME = "dashboard";
+    delete process.env.PI_SUBAGENT_WORKBENCH_CHILD;
+    runningCommandsExtension(extensionApi(dashboardTools));
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    assert.equal(
+      dashboardTools.has("bash"),
+      true,
+      "dashboard sessions must route foreground bash through the manager for the handoff button",
+    );
+
+    delete process.env.PI_RUNTIME;
+    runningCommandsExtension(extensionApi(headlessTools));
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    assert.equal(headlessTools.has("bash"), false, "plain headless sessions keep the built-in bash tool");
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
+  } finally {
+    if (previousRuntime === undefined) delete process.env.PI_RUNTIME;
+    else process.env.PI_RUNTIME = previousRuntime;
+    if (previousWorkbenchChild === undefined) delete process.env.PI_SUBAGENT_WORKBENCH_CHILD;
+    else process.env.PI_SUBAGENT_WORKBENCH_CHILD = previousWorkbenchChild;
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(configRoot, { recursive: true, force: true });
+  }
+});
+
+// Live sessions (dashboard /live-sessions) have no bridge socket, so the command
+// bar reaches the process through the live feature channel instead.
+test("live sessions publish command state and accept the handoff command", async () => {
+  const previousRuntime = process.env.PI_RUNTIME;
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const configRoot = await mkdtemp(join(tmpdir(), "pi-live-handoff-"));
+  const agentDirectory = join(configRoot, "agent");
+  const projectDirectory = join(configRoot, "project");
+  await mkdir(agentDirectory, { recursive: true });
+  await mkdir(projectDirectory, { recursive: true });
+  process.env.PI_CODING_AGENT_DIR = agentDirectory;
+  type Handler = (event: Record<string, unknown>, ctx: unknown) => unknown;
+  const handlers = new Map<string, Handler>();
+  const tools = new Map<string, ExecutableTool>();
+  const extensionApi = {
+    on(name: string, handler: Handler) {
+      handlers.set(name, handler);
+    },
+    registerTool(tool: ExecutableTool) {
+      tools.set(tool.name, tool);
+    },
+    sendMessage() {},
+    getActiveTools() {
+      return [];
+    },
+    setActiveTools() {},
+  } as unknown as ExtensionAPI;
+  const ctx = { ...toolContext(), cwd: projectDirectory };
+  const manager = getBackgroundCommandManager();
+  const controller = new AbortController();
+  let unsubscribe: (() => void) | undefined;
+  try {
+    await writeFile(join(agentDirectory, "settings.json"), JSON.stringify({
+      backgroundCommands: { enabled: true },
+    }));
+    delete process.env.PI_RUNTIME;
+    runningCommandsExtension(extensionApi);
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const snapshots: Array<{ tasks?: Array<{ toolCallId?: string; mode?: string }> }> = [];
+    unsubscribe = subscribeLiveFeatures((feature, snapshot) => {
+      if (feature === "background-commands") snapshots.push(snapshot as { tasks?: Array<{ toolCallId?: string }> });
+    });
+    assert.ok(snapshots.length > 0, "live sessions must publish foreground/background command state");
+
+    const execution = manager.executeForeground({
+      toolCallId: "live-handoff",
+      command: "printf 'live-start\\n'; sleep 30",
+      cwd,
+      sessionId: "session-test",
+      signal: controller.signal,
+      onData: () => {},
+    });
+    await waitUntil(() => manager.foregroundCount === 1);
+
+    const moved = await dispatchLiveFeatureCommand("background-commands", {
+      type: "background",
+      toolCallId: "live-handoff",
+    }) as { taskId: string; mode: string };
+    assert.equal(moved.mode, "background");
+    assert.equal(manager.foregroundCount, 0);
+    assert.equal((await execution).exitCode, 0);
+    // Moving to the background emits a task event, so the live snapshot follows.
+    await waitUntil(() => snapshots.some((snapshot) => snapshot.tasks?.some((task) => task.mode === "background")));
+
+    await manager.cancel(moved.taskId);
+    assert.equal((await manager.waitForTask(moved.taskId)).state, "cancelled");
+    await assert.rejects(
+      () => dispatchLiveFeatureCommand("background-commands", { type: "start", command: "echo forbidden" }),
+      /invalid_background_command/u,
+    );
+  } finally {
+    unsubscribe?.();
+    controller.abort();
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
+    await manager.shutdown();
+    delete (globalThis as unknown as Record<symbol, unknown>)[Symbol.for(BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY)];
+    if (previousRuntime === undefined) delete process.env.PI_RUNTIME;
+    else process.env.PI_RUNTIME = previousRuntime;
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(configRoot, { recursive: true, force: true });
+  }
+});
+
+// Regression: /reload re-imports the extension while the global manager instance
+// survives. An instance built by an older class version keeps that prototype, so
+// a capability marker cannot prove the newer methods exist — that combination
+// broke foreground bash with "manager.canHandoffForeground is not a function".
+test("getBackgroundCommandManager upgrades a singleton left by an older class version", () => {
+  const symbol = Symbol.for(BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY);
+  const globals = globalThis as unknown as Record<symbol, unknown>;
+  const previous = globals[symbol];
+  const legacyPrototype = {
+    get supportsForegroundHandoff() {
+      return true;
+    },
+    bindSession: async () => {},
+    start: async () => {},
+    shutdown: async () => {},
+  };
+  const legacy = Object.create(legacyPrototype) as Record<string, unknown>;
+  legacy.sessionId = "session-test";
+  legacy.tasks = new Map();
+  legacy.listeners = new Set();
+  legacy.shuttingDown = false;
+  legacy.startingCount = 0;
+  legacy.registry = { snapshot: () => [], clearBackground() {}, end() {}, startBackground() {} };
+  try {
+    globals[symbol] = { version: 1, manager: legacy };
+    const upgraded = getBackgroundCommandManager() as unknown as BackgroundCommandManager;
+
+    assert.equal(upgraded as unknown, legacy, "the running instance must be reused, not replaced");
+    assert.equal(typeof upgraded.canHandoffForeground, "function");
+    assert.equal(typeof upgraded.listForeground, "function");
+    assert.equal(typeof upgraded.backgroundForeground, "function");
+    assert.equal(upgraded.canHandoffForeground("session-test"), true);
+    assert.deepEqual(upgraded.listForeground(), []);
+    assert.equal(Object.getPrototypeOf(legacy), BackgroundCommandManager.prototype);
+  } finally {
+    if (previous === undefined) delete globals[symbol];
+    else globals[symbol] = previous;
   }
 });
