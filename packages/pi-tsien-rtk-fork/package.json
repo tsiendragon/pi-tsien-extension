@@ -17,8 +17,19 @@
   },
   "files": [
     "src",
-    "ATTRIBUTION.md",
-    "PROVENANCE.md",
     "README.md"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsiendragon/pi-tsien-extension.git",
+    "directory": "packages/pi-tsien-rtk-fork"
+  },
+  "homepage": "https://github.com/tsiendragon/pi-tsien-extension/tree/main/packages/pi-tsien-rtk-fork#readme",
+  "author": "tsiendragon",
+  "keywords": [
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package"
   ]
 }

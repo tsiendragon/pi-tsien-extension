@@ -51,5 +51,15 @@
     "tsx": "^4.23.12",
     "typescript": "^5.9.0",
     "vitest": "^4.1.11"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsiendragon/pi-tsien-extension.git"
+  },
+  "homepage": "https://github.com/tsiendragon/pi-tsien-extension#readme",
+  "author": "tsiendragon",
+  "bugs": {
+    "url": "https://github.com/tsiendragon/pi-tsien-extension/issues"
   }
 }

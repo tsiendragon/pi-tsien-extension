@@ -14,5 +14,22 @@
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsiendragon/pi-tsien-extension.git",
+    "directory": "packages/pi-tsien-goal"
+  },
+  "homepage": "https://github.com/tsiendragon/pi-tsien-extension/tree/main/packages/pi-tsien-goal#readme",
+  "author": "tsiendragon",
+  "keywords": [
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ]
 }
