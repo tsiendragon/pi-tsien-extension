@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **WebSearch/WebFetch 改为自研实现**：新增 monorepo 包 `packages/pi-tsien-web-tools`（第三方副本 `vendor/pi-web-tools` 停用、保留作回滚）。
+  重写要点：不依赖「属性顺序 + 双引号」的正则，改为标签扫描（单/双引号、`href` 前后皆可）并解开 `//duckduckgo.com/l/?uddg=…` 重定向；
+  链接与摘要按文档顺序配对；实体解码支持数字形式，标签只把块级标签当空格（`sub-agents` 不再被拆开）；
+  markdown 清理只在空格/制表符上收拾标点前空白，不再把换行折平（旧实现会把代码块多行挤成一行）。
+  验证：包内 26 个单测；与旧副本 A/B —— 3 个真实查询 × 10 条结果 URL/标题/摘要归一化后逐条一致；`example.com` 提取完全一致；
+  `nodejs.org/en/about` 去除全部空白后逐字符相同（4339 字符）；真实 `pi -p` 会话内 WebSearch 返回 `Pi Coding Agent / https://pi.dev/`。
+- **同步器保留 Pi 的启停覆盖条目**：`settings.json` 里以 `+`/`-`/`!` 开头的覆盖条目（Pi `/config` 与 dashboard 写的那种）不再被 strict prune 当陌生路径删掉，
+  被 `-`/`!` 指向的扩展也不会被同步器补回；随附回归测试（5 pass）。
+- **修复 devDependencies 不可移植**：`@earendil-works/*` 原来指向已不存在的本机路径 `/home/tsien/pi-lical-dist/*.tgz`，
+  导致任何全新 clone 上 `npm install` 直接失败；改为指向已发布的补丁版 Release 资产 URL，并把 peer 范围放宽到同时接受上游版本与预发布补丁版
+  （`>=0.84.2 <1.0.0 || ^0.85.1-tsien.1`）。验证：`npm install` exit=0、`tsc --noEmit` 干净、`test:node` 245 pass。
+- **修复 dashboard「清空」点击无反应**：`/clear`（开新会话）本来是由 `session-aliases.ts` 注册的扩展命令，命令名是对的；真正的毛病在 UI 与命令的组合上——按钮 `disabled={busy || status !== 'idle'}` 且装填（第二次点击确认）窗口只有 5s、过期后横幅不撤，于是「跑着的时候点清空」这一下会落在已变灰的按钮上：什么都不发生，而屏幕上还留着「再点一次确认」。除 UI 侧修复外，本扩展把租约拒绝文案改成对任何入口都成立（「请先「获取控制」或刷新页面后重试」，不再只提图谱页）。验证：`test/live-session.test.ts` 25 pass。
+
+- **修复 dashboard 把已停止的会话显示成「工作中」**（同类根因）：`status` 原来取扩展里一个累积标志 `running`，只由 `agent_start` / `agent_settled` / `session_start` 改动，而 pi 的 `agent_settled` 只在 agent run 循环结束时发一次（`core/agent-session.js` 的 `_runAgentPrompt`）。独立压缩（含 `auto-compact-target` 调 `ctx.compact()`）不是一次 run：既没有 `agent_start`，也永远不会有 `agent_settled`，而压缩期间 `isIdle()` 为 false。于是「跑完 → 自动压缩开始 → 点重载全部 → `session_start` 把 `running` 写成 `!isIdle()` = true → 压缩结束、无人改回」就永久卡在「工作中」。现在 `status` 在渲染/发布时直接问 pi 的 `ctx.isIdle()`（覆盖 run 与压缩两种忙碌），并新增 20s 状态心跳：重算后**只在变化时**发一条 `summary_update` 补丁（空闲零流量、不动 `lastActivityAt`），任何漂移 ≤1 个心跳自愈。验证：`test/live-session.test.ts` 25 pass（新增「按 isIdle 推导 + 心跳只在变化时发布 + 会话结束即停」1 条）。
+
+- **修复 dashboard / TUI 的上下文与自动压缩阈值显示**（根因修复，非补丁）：`live-session` 原来只在 snapshot 里带 `contextUsage`，而 snapshot 只在 connect / resync / tree / fork 重建——事件序号从没断档、也没重连过的会话，页面就永远停在「会话刚打开那一刻」的值（新会话正是 `0/1.0m 0%`，实测本会话 pid 1357434 显示 0 而真实用量 ≈119k）。现在 `message_end` / `agent_settled` / `session_compact` / `model_select` 都发一条 `summary_update` 事件（约 200B），dashboard registry 用它就地修补 `entry.summary`、前端同步修补 `summary` 与页面 detail，不再需要全量 snapshot。同时把「压缩触发点」收敛成唯一 resolver `resolveCompactionTrigger`（`auto-compact-target` 目标 vs pi 的 `window − reserveTokens` 取最早者，含 per-model override），触发方、TUI 状态条、dashboard 状态行读同一个值：dashboard 那条写死在右端的 `│` 改为真实阈值刻度（1M 窗口 270K → 第 3 格），`context-powerline` 也顺带修掉 `getCompactionSettings()` 没传 model 导致 per-model `reserveTokens` 失效的问题。验证：`test/auto-compact-target.test.ts` 21 pass（新增 resolver 9 条）、`test/live-session.test.ts` 24 pass（新增遥测与顺序契约 1 条）。
+
 - **扩展数据目录改为可移植默认值**：`trajectory-recorder` 与 `observation-pack` 的默认落点原来硬编码为 `/mnt/workspace/lilong/...`（机器专属），现在统一为 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/…`：trace → `pi-traces`、计时账本 → `pi-timing`、大结果归档 → `archiv`。覆盖方式不变（`PI_TRACE_DIR` / `PI_TIMING_DIR` / `PI_OBSERVATION_DIR`），优先级为显式参数 > 环境变量 > 默认值；`observation-pack.json` 里的显式 `archiveDir` 仍然优先。验证：`npm run check` 与改动前完全一致（239 passed；唯一失败 `conversation-workbench` 已验证在 HEAD 上就存在，与本次改动无关）。
 
 - **新增配置示例 `config/examples/`**：`bash-digest.example.json` + README，说明摘要模型（`digestModel`）与凭证怎么配——凭证走宿主 pi 自己的 provider 配置（通常是环境变量，如 `DASHSCOPE_API_KEY`），dashboard 用法下写进 `<agent dir>/dashboard.env` 即可自动传给每个 pi 子进程；并说明「摘要失败会静默回落原文」时如何判断是否真的生效。

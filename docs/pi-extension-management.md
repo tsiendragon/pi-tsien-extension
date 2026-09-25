@@ -83,7 +83,7 @@ node /mnt/workspace/lilong/repos/pi-tsien-extension/scripts/pi-extension-sync.mj
 node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --apply
 ```
 
-它只声明本仓库与 `vendor/pi-web-tools` 两个 package，加载同样的 25 个 extension，
+它只声明本仓库与 `packages/pi-tsien-web-tools` 两个 package，加载同样的 25 个 extension，
 但不会要求 `eagleeye-ai-dev` 存在，也不会写入 marketplace 来源的 package。
 修改共享的 `~/.pi/agent/extensions.config.json` 后，若新增的是通用 extension，
 请同步补进这份 standalone 配置。

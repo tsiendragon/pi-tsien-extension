@@ -41,6 +41,8 @@
 
 在 Pi footer 中显示当前模型、推理等级、上下文使用量、自动压缩阈值，以及本机 CPU/内存占用。
 
+状态条上的竖线就是「本会话真正会在哪里压缩」，取自与触发方共用的 `resolveCompactionTrigger`（`auto-compact-target` 目标与 pi 的 `window − reserveTokens` 守卫中的最早者），所以它不会再指向压缩永远不会越过的位置；`getCompactionSettings(model)` 带 model，per-model `reserveTokens` override 才生效。
+
 ### `running-commands.ts`
 
 在现有 Powerline 正上方统一显示前台 Agent Bash 与显式后台任务，不改变普通 Bash 的前台执行语义。
@@ -162,7 +164,17 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 覆盖模型窗口差异：1M/1.05M → 270,000；272K → 204,000；262,144 → 196,608；128K → 96,000。
 - 触发由扩展调用 `ctx.compact()` 完成；**不改** `settings.json` 的 `compaction.reserveTokens`，因为 pi 用它推导摘要输出预算（`maxTokens = min(0.8 × reserveTokens, model.maxTokens)`），放大它会产生超大输出预算的请求。
 - 带 `ctx.isIdle()` 守卫，只在 run 边界（`agent_settled` / `session_start` / `model_select`）真正触发；长自治 run 可能越过目标，pi 内置阈值仍是最后防线。
+- 触发点由 `core.ts` 的 `resolveCompactionTrigger` 统一给出（本扩展目标与 pi 守卫取最早者），触发方与所有显示（TUI 状态条、dashboard 状态行）读同一个值；`live-session` 把该值随 `summary_update` 遥测推给 dashboard。
 - 可选配置 `~/.pi/agent/auto-compact-target.json`：`targetTokens`、`windowRatio`、`modelOverrides`。
+
+### `live-session.ts`
+
+把本会话桥接到 pi-dashboard 的 `/live-sessions`：订阅 pi 事件、投影快照、按事件流下发增量，并提供 `/ls-*` 命令（导航/分叉、模型与思考等级、abort/compact 等）。
+
+- **完整 summary 只走快照**（connect / resync / `/tree` / fork 才重建），因此**每轮都变的值走事件流**：`summary_update` 只带变化字段（`contextUsage`、`compact`、`status`），registry 就地修补自己的 summary，浏览器同步修补侧栏与页面，不会渲染成转写气泡。
+- **状态按真源推导**：`status` 在发布时问 pi 的 `ctx.isIdle()`（覆盖 agent run 与压缩两种忙碌），而不是累积一个由 `agent_start`/`agent_settled` 改写的标志——pi 只在 run 循环结束时发 `agent_settled`，独立压缩（`auto-compact-target` 调 `ctx.compact()`）永远不会有它。
+- **命令**：`/ls-navigate`、`/ls-fork`、`/live-session-reload`、`/dashboard-release` 都是**注册的扩展命令**——带 `/` 的文本只有注册过的命令会被 pi 执行（`_tryExecuteExtensionCommand`），pi 自己的内置命令（`/new`、`/compact`）由交互式 editor 分发、走不到 input 文本流，所以 web 侧的按钮必须对应到**注册名**。注意：`/clear`（开新会话）由 `session-aliases.ts` 注册，不是本扩展，但同样是注册命令，dashboard 的「清空」就是发它。
+- **状态心跳**：默认每 20s 重算一次，只有与上次发布不同才发补丁（空闲零流量、不动 `lastActivityAt`），任何「本地已停、面板还显示工作中」的漂移 ≤1 个心跳自愈；周期可用 `statusHeartbeatMs` 覆盖。
 
 ### `00-zero.ts`
 
@@ -226,7 +238,7 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json
 node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --apply
 ```
 
-`config/extensions.standalone.json` 只包含本 package 与 `vendor/pi-web-tools`，不含
+`config/extensions.standalone.json` 只包含本 package 与 `packages/pi-tsien-web-tools`，不含
 `task-pilot`、`security-guard`、`remote-notifications`、`pi-knowledge` 等外部来源。
 每个扩展的职责清单见 `pi-dashboard/docs/standalone-install.md` §6「扩展清单」。
 `pi-dashboard` 的一键安装脚本会自动应用这份配置，见
@@ -256,10 +268,12 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 
 - `pi-rtk` — 已**合并进本仓库**（原 `vendor/pi-rtk/` → `extensions/tool-result-pipeline/rtk/`），不再随上游同步；
   源码来源、合并时的改动与两处命令匹配补丁见 `extensions/tool-result-pipeline/rtk/PROVENANCE.md`。
-- `vendor/pi-web-tools/` — 修复 DuckDuckGo lite 抓取正则（WebSearch 全空返回），
-  见 `vendor/pi-web-tools/VENDORED.md`。WebFetch 依赖的 `jsdom` / `turndown` /
-  `@mozilla/readability` / `turndown-plugin-gfm` 由仓库根 `package.json` 声明，
-  根目录 `npm install` 即可。
+- WebSearch/WebFetch 已改为**自研实现** `packages/pi-tsien-web-tools`（不再加载第三方副本）：
+  我们的 DuckDuckGo lite 解析方式、markdown 清理与懒加载；行为与旧副本 A/B 等价（见该包 README）。
+  第三方副本 `vendor/pi-web-tools/` 保留作回滚路径，`vendor/pi-web-tools/VENDORED.md` 仍记录其来历；
+  `test/pi-web-tools-vendor.test.ts` 继续守护这份回滚副本。
+- WebFetch 依赖的 `jsdom` / `turndown` / `@mozilla/readability` / `turndown-plugin-gfm`
+  由仓库根 `package.json` 声明，根目录 `npm install` 即可。
 
 守卫测试：`test/pi-rtk-vendor.test.ts`（合并后的命令匹配补丁）、
 `test/pi-web-tools-vendor.test.ts`、`test/tool-result-pipeline.test.ts`（stage 顺序与“单入口”契约）。
