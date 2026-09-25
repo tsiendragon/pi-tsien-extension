@@ -114,6 +114,21 @@
       "id": "pi-tsien-schedule",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-schedule",
       "autoload": false
+    },
+    {
+      "id": "pi-tsien-auto-compact",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-auto-compact",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-context-powerline",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-context-powerline",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-live-session",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-live-session",
+      "autoload": false
     }
   ],
   "loadOrder": [
@@ -134,16 +149,16 @@
       "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/auto-compact-target.ts"
+      "package": "pi-tsien-auto-compact",
+      "path": "src/index.ts"
     },
     {
       "package": "pi-tsien-compact-continue",
       "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/context-powerline.ts"
+      "package": "pi-tsien-context-powerline",
+      "path": "src/index.ts"
     },
     {
       "package": "pi-tsien-default-system-prompt",
@@ -162,8 +177,8 @@
       "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/live-session.ts"
+      "package": "pi-tsien-live-session",
+      "path": "src/index.ts"
     },
     {
       "package": "pi-tsien-memory",

@@ -8,11 +8,11 @@ import {
   type ExtensionContext,
   type InputEvent,
 } from "@earendil-works/pi-coding-agent";
-import { autoCompactTargetConfig, resolveCompactionTrigger } from "./auto-compact-target/core.ts";
-import { LiveSessionClient, type LiveSessionClientOptions } from "./live-session/client.ts";
-import { LeaseError, LeaseManager, type LeaseSnapshot } from "./live-session/lease.ts";
-import { SnapshotProjector } from "./live-session/projector.ts";
-import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "./lib/live-observer.ts";
+import { autoCompactTargetConfig, resolveCompactionTrigger } from "pi-tsien-shared/src/auto-compact-target/core.ts";
+import { LiveSessionClient, type LiveSessionClientOptions } from "./client.ts";
+import { LeaseError, LeaseManager, type LeaseSnapshot } from "./lease.ts";
+import { SnapshotProjector } from "./projector.ts";
+import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "pi-tsien-shared/src/lib/live-observer.ts";
 import {
   LIVE_SESSION_PROTOCOL_VERSION,
   type CommandEnvelope,
@@ -23,7 +23,7 @@ import {
   type LiveSessionMode,
   type LiveSessionStatus,
   type LiveSessionSummaryBase,
-} from "./live-session/protocol.ts";
+} from "./protocol.ts";
 
 const PROCESS_IDENTITY_SYMBOL = Symbol.for("pi.live-session.process-identity.v1");
 /**
