@@ -51,6 +51,8 @@
 - 命令列表使用 `↑/↓` 选择、`Enter` 查看实时输出、`Esc` 返回输入框。
 - 输出视图使用 `↑/↓` 或 `PageUp/PageDown` 滚动、`←/→` 跨前后台任务切换、`End` 恢复跟随、`Esc` 返回列表。
 - 前台命令默认保持同步；运行中按 `Ctrl+B` 可将原进程转入后台，不会重启命令。只有一个前台命令时直接转换；并行前台命令会先进入命令列表，再对选中项按 `Ctrl+B`。
+- 同一能力在 `pi-dashboard` 上以面板按钮提供：运行中的前台命令会出现在 dashboard 的 Background commands 面板中，点 `Move to background` 即转入后台，语义与 `Ctrl+B` 完全一致（不重启进程，被阻塞的 `bash` 立即以 exit 0 返回）。
+- live session 页面（dashboard `/live-sessions`）在输入框上方的命令条里，对每条前台命令直接提供「转后台」按钮。这类进程没有 dashboard bridge（`PI_DASH_BRIDGE_SOCKET` 被清空），命令改走已有的 live feature 通道（`live-observer.ts`）：进程发布命令状态快照，并接收同一个适配器的 `background { toolCallId }` 命令。
 - 后台能力提供 `background_command_start`、`background_command_status`、`background_command_output` 和 `background_command_cancel` 四个 Tool；启动时可传可选 `title`，用于列表、输出视图和完成通知，未传时回退到清理后的 Bash 内容。
 - 每个 Session 最多同时运行 4 个后台任务；每条任务内存尾部最多 50KB，完整合并输出写入 Session 隔离日志，单文件上限 1GiB。
 - 后台任务与主 Agent 共享工作目录；首次启动时会提示并发修改风险。
@@ -213,6 +215,21 @@ pi -e /mnt/workspace/lilong/repos/pi-tsien-extension
 ```
 
 安装或修改后执行 `/reload`。
+
+### 独立（standalone）配置
+
+给不接入内部 marketplace（eagleeye-ai-dev）的机器用的最小配置：
+
+```bash
+node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json
+node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --apply
+```
+
+`config/extensions.standalone.json` 只包含本 package 与 `vendor/pi-web-tools`，不含
+`task-pilot`、`security-guard`、`remote-notifications`、`pi-knowledge` 等外部来源。
+每个扩展的职责清单见 `pi-dashboard/docs/standalone-install.md` §6「扩展清单」。
+`pi-dashboard` 的一键安装脚本会自动应用这份配置，见
+`pi-dashboard/scripts/install-standalone.sh`。
 
 ## 避免重复加载
 
