@@ -1,12 +1,23 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const TRACE_SCHEMA_VERSION = 1 as const;
-export const DEFAULT_TRACE_DIR = "/mnt/workspace/lilong/agent/pi-traces";
+/**
+ * Portable data root: `<PI_CODING_AGENT_DIR | ~/.pi/agent>`. Nothing here is machine specific;
+ * override per run with `PI_TRACE_DIR` / `PI_TIMING_DIR` or the `traceDir` / `timingDir` options.
+ */
+function defaultDataRoot(): string {
+	return process.env.PI_CODING_AGENT_DIR?.trim()
+		? resolve(process.env.PI_CODING_AGENT_DIR)
+		: join(homedir(), ".pi", "agent");
+}
+
+export const DEFAULT_TRACE_DIR = join(defaultDataRoot(), "pi-traces");
 export const TIMING_SCHEMA_VERSION = 1 as const;
-export const DEFAULT_TIMING_DIR = "/mnt/workspace/lilong/agent/pi/timing";
+export const DEFAULT_TIMING_DIR = join(defaultDataRoot(), "pi-timing");
 
 export interface TrajectoryTraceContext {
   readonly parentSessionId?: string;
@@ -74,9 +85,9 @@ type RecorderState = {
 };
 
 export interface TrajectoryRecorderOptions {
-  /** Defaults to PI_TRACE_DIR or /mnt/workspace/lilong/agent/pi-traces. */
+  /** Defaults to PI_TRACE_DIR or `<PI_CODING_AGENT_DIR | ~/.pi/agent>/pi-traces`. */
   traceDir?: string;
-  /** Compact timing ledger directory. Defaults to PI_TIMING_DIR or /mnt/workspace/lilong/agent/pi/timing. */
+  /** Compact timing ledger directory. Defaults to PI_TIMING_DIR or `<PI_CODING_AGENT_DIR | ~/.pi/agent>/pi-timing`. */
   timingDir?: string;
   /** Disable the compact timing ledger (trace recording is unaffected). */
   timingEnabled?: boolean;

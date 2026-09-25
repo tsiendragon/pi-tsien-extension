@@ -343,7 +343,11 @@ export async function appendLedger(
 // Config
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_ARCHIVE_DIR = "/mnt/workspace/lilong/agent/archiv";
+/**
+ * Portable data root: `<PI_CODING_AGENT_DIR | ~/.pi/agent>/archiv`.
+ * Override with the `PI_OBSERVATION_DIR` env var or `archiveDir` in the config file.
+ */
+export const DEFAULT_ARCHIVE_DIR = join(agentDir(), "archiv");
 export const CONFIG_FILE_NAME = "observation-pack.json";
 
 export interface ObservationPackConfig {
