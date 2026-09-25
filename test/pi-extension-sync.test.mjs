@@ -73,6 +73,48 @@ test("sync preserves configured package install order and extension load order",
 	assert.equal(existsSync(join(result.backupDir, "settings.json")), true);
 });
 
+test("sync keeps Pi override entries instead of pruning user disable flags", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-override-"));
+	const repoRoot = join(root, "pi-tsien-extension");
+	const agentDir = join(root, ".pi", "agent");
+	const configPath = join(agentDir, "extensions.config.json");
+	mkdirSync(join(repoRoot, "extensions"), { recursive: true });
+	writeFileSync(join(repoRoot, "extensions", "sidebar.ts"), "export default {};");
+	writeFileSync(join(repoRoot, "extensions", "goal.ts"), "export default {};");
+	const sidebarPath = join(repoRoot, "extensions", "sidebar.ts");
+	const goalPath = join(repoRoot, "extensions", "goal.ts");
+	writeJson(join(agentDir, "settings.json"), {
+		packages: [{ source: repoRoot, autoload: false }],
+		// A dashboard/Pi disable flag (`-`) plus a force-enable flag (`+`) on a plain path.
+		extensions: [goalPath, `-${sidebarPath}`, `+${goalPath}`],
+	});
+	writeJson(configPath, {
+		version: 1,
+		packages: [{ id: "tsien", source: "${PI_TSIEN_EXTENSION_ROOT}" }],
+		loadOrder: [
+			{ package: "tsien", path: "extensions/sidebar.ts" },
+			{ package: "tsien", path: "extensions/goal.ts" },
+		],
+		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
+	});
+
+	const plan = buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root } });
+	// The disabled extension must not come back as a plain entry.
+	assert.deepEqual(plan.desiredExtensions, [goalPath]);
+	assert.deepEqual(plan.preservedOverrides, [`-${sidebarPath}`, `+${goalPath}`]);
+	assert.deepEqual(plan.extensionAdds, []);
+	assert.deepEqual(plan.extensionRemovals, []);
+
+	applySyncPlan(plan, { now: new Date("2026-08-22T00:00:00.000Z") });
+	const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
+	assert.deepEqual(settings.extensions, [goalPath, `-${sidebarPath}`, `+${goalPath}`]);
+
+	// Second run: the result is stable, so nothing is reported as changed.
+	const second = buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root } });
+	assert.equal(second.loadOrderChanged, false);
+	assert.deepEqual(second.extensionAdds, []);
+});
+
 test("standalone config syncs without an eagleeye-ai-dev checkout", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-standalone-"));
 	const repoRoot = join(root, "pi-tsien-extension");
