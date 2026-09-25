@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "note": "Standalone profile: pi-tsien-extension plus the vendored web-tools package only. No marketplace/business packages. Managed by scripts/pi-extension-sync.mjs --config config/extensions.standalone.json.",
+  "packages": [
+    {
+      "id": "web-tools",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/vendor/pi-web-tools"
+    },
+    {
+      "id": "tsien",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}"
+    }
+  ],
+  "loadOrder": [
+    {
+      "package": "web-tools",
+      "path": "src/index.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/tool-result-pipeline.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/00-zero.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/btw.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/auto-compact-target.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/compact-continue.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/context-powerline.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/default-system-prompt.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/effort.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/git-graph.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/goal.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/live-session.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/memory.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/metrics-sidebar.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/ptc.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/running-commands.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/schedule.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/session-aliases.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/sidebar.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/subagent-workbench.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/usage-analytics.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/prompt-inspector.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/observation-pack.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/trajectory-recorder.ts"
+    },
+    {
+      "package": "tsien",
+      "path": "extensions/capability.ts"
+    }
+  ],
+  "prune": {
+    "packages": true,
+    "extensions": true,
+    "autoDiscoveredExtensions": "quarantine"
+  }
+}
