@@ -4,6 +4,11 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  autoCompactTargetConfig,
+  resolveCompactionTrigger,
+  type CompactionTrigger,
+} from "./auto-compact-target/core.ts";
 
 const STATUS_KEY = "context-threshold";
 const MODEL_STATUS_KEY = "model-info";
@@ -25,20 +30,34 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function compactionSettings(ctx: ExtensionContext): {
-  enabled: boolean;
-  reserveTokens: number;
-} {
+/**
+ * Where this session will actually compact.
+ *
+ * Delegates to the shared resolver instead of computing `window - reserveTokens`
+ * here: this bar used to draw the pi-settings threshold while
+ * `auto-compact-target` compacted at its own (much earlier) target, so the
+ * threshold tick could point at a line compaction never crossed. `model` is
+ * passed through so per-model `reserveTokens` overrides apply.
+ */
+function compactionTrigger(ctx: ExtensionContext, contextWindow: number): CompactionTrigger {
+  const config = autoCompactTargetConfig();
   try {
-    const settings = SettingsManager.create(ctx.cwd, undefined, {
+    const policy = SettingsManager.create(ctx.cwd, undefined, {
       projectTrusted: ctx.isProjectTrusted(),
-    }).getCompactionSettings();
-    return {
-      enabled: settings.enabled,
-      reserveTokens: settings.reserveTokens,
-    };
+    }).getCompactionSettings(ctx.model ?? undefined);
+    return resolveCompactionTrigger({
+      contextWindow,
+      model: ctx.model ?? undefined,
+      piPolicy: { enabled: policy.enabled, reserveTokens: policy.reserveTokens },
+      config,
+    });
   } catch {
-    return { enabled: true, reserveTokens: DEFAULT_RESERVE_TOKENS };
+    return resolveCompactionTrigger({
+      contextWindow,
+      model: ctx.model ?? undefined,
+      piPolicy: { enabled: true, reserveTokens: DEFAULT_RESERVE_TOKENS },
+      config,
+    });
   }
 }
 
@@ -117,18 +136,18 @@ function updateStatus(ctx: ExtensionContext): void {
     return;
   }
 
-  const settings = compactionSettings(ctx);
-  const threshold = clamp(total - settings.reserveTokens, 0, total);
+  const trigger = compactionTrigger(ctx, total);
+  const threshold = clamp(trigger.triggerTokens, 0, total);
   const used = usage?.tokens ?? 0;
-  const bar = renderBar(ctx, used, threshold, total, settings.enabled);
+  const bar = renderBar(ctx, used, threshold, total, trigger.enabled);
   const usedText = usage?.tokens === null || usage?.tokens === undefined
     ? "…"
     : formatTokens(used);
 
-  const detail = settings.enabled
+  const detail = trigger.enabled
     ? `${usedText}→${formatTokens(threshold)}/${formatTokens(total)}`
     : `${usedText}/${formatTokens(total)} auto-off`;
-  const color = settings.enabled && used >= threshold ? "error" : "muted";
+  const color = trigger.enabled && used >= threshold ? "error" : "muted";
 
   ctx.ui.setStatus(STATUS_KEY, `${bar} ${ctx.ui.theme.fg(color, detail)}`);
 }
