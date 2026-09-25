@@ -8,7 +8,7 @@ import {
   autoCompactTargetConfig,
   resolveCompactionTrigger,
   type CompactionTrigger,
-} from "./auto-compact-target/core.ts";
+} from "pi-tsien-shared/src/auto-compact-target/core.ts";
 
 const STATUS_KEY = "context-threshold";
 const MODEL_STATUS_KEY = "model-info";

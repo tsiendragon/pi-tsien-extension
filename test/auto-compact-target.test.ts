@@ -13,7 +13,7 @@ import {
 	resolveCompactionTrigger,
 	resolveTargetTokens,
 	shouldCompact,
-} from "../extensions/auto-compact-target/core.ts";
+} from "pi-tsien-shared/src/auto-compact-target/core.ts";
 
 test("resolveTargetTokens uses the absolute target for 1M-class windows", () => {
 	assert.equal(resolveTargetTokens(1_048_576), DEFAULT_TARGET_TOKENS);

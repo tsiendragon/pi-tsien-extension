@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { registerLiveSessionExtension, type LiveSessionClientHandle } from "../extensions/live-session.ts";
-import { LeaseManager } from "../extensions/live-session/lease.ts";
-import { SnapshotProjector, sanitizeJson } from "../extensions/live-session/projector.ts";
-import { parseBrokerMessage } from "../extensions/live-session/protocol.ts";
-import type { CommandEnvelope, EventMessage } from "../extensions/live-session/protocol.ts";
-import type { LiveSessionClientOptions } from "../extensions/live-session/client.ts";
-import { publishLiveFeature, registerLiveFeatureCommandHandler } from "../extensions/lib/live-observer.ts";
+import { registerLiveSessionExtension, type LiveSessionClientHandle } from "pi-tsien-live-session/src/index.ts";
+import { LeaseManager } from "pi-tsien-live-session/src/lease.ts";
+import { SnapshotProjector, sanitizeJson } from "pi-tsien-live-session/src/projector.ts";
+import { parseBrokerMessage } from "pi-tsien-live-session/src/protocol.ts";
+import type { CommandEnvelope, EventMessage } from "pi-tsien-live-session/src/protocol.ts";
+import type { LiveSessionClientOptions } from "pi-tsien-live-session/src/client.ts";
+import { publishLiveFeature, registerLiveFeatureCommandHandler } from "pi-tsien-shared/src/lib/live-observer.ts";
 
 function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
