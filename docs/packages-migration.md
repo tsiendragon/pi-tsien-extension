@@ -94,3 +94,17 @@ npm run parity:capture   # 抓当前布局的指纹基线
 npm run parity:check     # 与基线逐条比对（不一致 exit=1）
 ```
 基线已按新布局重抓（`test/fixtures/extension-parity-baseline.json`，25 条目全在 `packages/*`）。
+
+## 发布准备（批次 6）
+
+- **LICENSE**：根目录与每个包均为 MIT（`LICENSE` 随 tarball 一起发布）。
+- 元数据：每个包补 `license` / `repository`（带 `directory`）/ `homepage` / `author` / `keywords`（`pi-package`、`pi-extension`、`pi-coding-agent`）。
+- `files: ["src", "README.md"]`：只发布源码与说明（fork 包的 ATTRIBUTION / PROVENANCE 在 `src/` 内，随包发布）。
+- 每个包补 README（工具 / 命令 / 事件钩子来自迁移前抓的注册指纹，不是凭记忆写的）。
+- **不加 `exports` 字段**：跨包引用用的是子路径（如 `pi-tsien-shared/src/lib/live-observer.ts`），加 `exports` 白名单会把这些子路径挡掉。发布时保持开放子路径。
+- 复核：26 个包 `npm pack --dry-run` 全部通过，且都包含 LICENSE + README + 入口文件。
+
+### 发布阻塞
+
+本机**没有 npm 凭证**（`npm whoami` → `ENEEDAUTH`，`~/.npmrc` 无 token，sekret 的 `tsien/account` 等 vault 里也没有 npm token）。
+首次发布需要：`npm login`（或提供 `NPM_TOKEN`）后按依赖顺序发布（先 `pi-tsien-shared`，再其余包）。

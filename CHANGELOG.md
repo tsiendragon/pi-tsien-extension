@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **发布准备**：仓库与所有包补 MIT LICENSE；每个包补 `license`/`repository`/`homepage`/`author`/`keywords` 与 `files`；24 个包补 README
+  （工具/命令/事件清单取自迁移前抓的注册指纹）。26 个包 `npm pack --dry-run` 复核全部含 LICENSE + README + 入口。
+  首次发布仍待 npm 凭证（本机 `npm whoami` 未登录，vault 内无 npm token）。
 - **本机 live 配置已切到 packages 布局**：`~/.pi/agent/{settings.json,extensions.config.json}` 按「旧路径 → 新路径」映射更新
   （24 条扩展条目改写，保留 knowledge / remote-notifications / security-guard，顺序不变），备份保留双份。
   复核：同步器 dry-run 只剩迁移前就存在的 `security-guard.ts -> quarantine`；live 真机 `pi -p` 下 25 个扩展全部从 `packages/*` 加载，

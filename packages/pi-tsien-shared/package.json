@@ -5,9 +5,23 @@
   "type": "module",
   "description": "Shared library for the pi-tsien extensions (dashboard bridge, live observer, command UI, background commands).",
   "files": [
-    "src"
+    "src",
+    "README.md"
   ],
   "engines": {
     "node": ">=22"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsiendragon/pi-tsien-extension.git",
+    "directory": "packages/pi-tsien-shared"
+  },
+  "homepage": "https://github.com/tsiendragon/pi-tsien-extension/tree/main/packages/pi-tsien-shared#readme",
+  "author": "tsiendragon",
+  "keywords": [
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package"
+  ]
 }
