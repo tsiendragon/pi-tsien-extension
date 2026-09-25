@@ -6,8 +6,8 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { openConversationWorkbench } from "../../../extensions/subagent-workbench/src/conversation-workbench.ts";
-import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
+import { openConversationWorkbench } from "pi-tsien-subagent-workbench/src/conversation-workbench.ts";
+import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
 
 beforeAll(() => initTheme("dark"));
 

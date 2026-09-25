@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **P0 拆包（一功能一包）**：`extensions/**` 里的 19 个扩展 + 共享库拆成 `packages/pi-tsien-*`（npm workspaces，内部依赖用普通 semver）。
+  新增共享库 `pi-tsien-shared`（原 `extensions/lib/**`，按包名导入）；跨包依赖按包名解析（memory→subagent-workbench、rtk-fork→observation-pack、
+  session-ui-fork→default-system-prompt、subagent-workbench→trajectory-recorder 等 8 条边已写入各自 `dependencies`）。
+  验证：`parity:check` 25/25 条目与迁移前指纹逐条一致（工具/命令/事件/调用签名）、`tsc --noEmit` 干净、`test:node` **246 pass / 0 fail**。
+  仍有 3 个条目（auto-compact-target、context-powerline、live-session）因并行会话的未提交改动而延后，见 `docs/packages-migration.md`。
 - **新增扩展等价性验收工具（parity harness）**：`scripts/extension-parity.mjs` + `package.json` 的 `parity:capture` / `parity:check`，
   基线固化在 `test/fixtures/extension-parity-baseline.json`（25 个扩展，0 加载错误）。
   用途：重构/搬迁扩展前抓基线，改完 `parity:check` 必须逐条一致才允许删除旧实现。

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { shouldContinueAfterCompaction } from "../extensions/compact-continue.ts";
+import { shouldContinueAfterCompaction } from "pi-tsien-compact-continue/src/index.ts";
 
 function context({ idle = false, pending = false } = {}) {
 	return {

@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 const dataDir = await mkdtemp(join(tmpdir(), "pi-tsien-memory-extension-"));
 process.env.PI_TSIEN_MEMORY_DIR = dataDir;
-const { default: register } = await import("../../../../extensions/memory/src/extension/index.ts");
+const { default: register } = await import("pi-tsien-memory/src/extension/index.ts");
 
 function makeHarness({ hasUI = false, choices = [], candidateReviewer } = {}) {
   const handlers = new Map();

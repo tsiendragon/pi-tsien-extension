@@ -19,8 +19,8 @@ import {
 	recallChunkLimits,
 	resolveSessionRoot,
 	selectPruneCandidates,
-} from "../extensions/observation-pack/core.ts";
-import observationPack, { parsePruneArgs } from "../extensions/observation-pack.ts";
+} from "pi-tsien-observation-pack/src/core.ts";
+import observationPack, { parsePruneArgs } from "pi-tsien-observation-pack/src/index.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

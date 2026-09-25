@@ -4,12 +4,12 @@ import {
   PiRpcProcessProvider,
   PiRpcProviderError,
   type PiRpcProcessProviderOptions,
-} from "../../../extensions/subagent-workbench/src/providers/pi-rpc-process-provider.ts";
+} from "pi-tsien-subagent-workbench/src/providers/pi-rpc-process-provider.ts";
 import {
   SubagentExecutionError,
   SubagentService,
-} from "../../../extensions/subagent-workbench/src/subagent-service.ts";
-import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
+} from "pi-tsien-subagent-workbench/src/subagent-service.ts";
+import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
 
 const fakeRpcPath = fileURLToPath(
   new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url),

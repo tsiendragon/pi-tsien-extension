@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ResourceExhaustedError,
   ResourceGovernor,
-} from "../../../extensions/subagent-workbench/src/resource-governor.ts";
+} from "pi-tsien-subagent-workbench/src/resource-governor.ts";
 
 afterEach(() => {
   vi.useRealTimers();

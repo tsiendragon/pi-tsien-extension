@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { aggregateTestOutput, isTestCommand } from "../extensions/tool-result-pipeline/rtk/techniques/test-output.ts";
-import { filterBuildOutput, isBuildCommand } from "../extensions/tool-result-pipeline/rtk/techniques/build.ts";
-import { aggregateLinterOutput, isLinterCommand } from "../extensions/tool-result-pipeline/rtk/techniques/linter.ts";
+import { aggregateTestOutput, isTestCommand } from "pi-tsien-rtk-fork/src/rtk/techniques/test-output.ts";
+import { filterBuildOutput, isBuildCommand } from "pi-tsien-rtk-fork/src/rtk/techniques/build.ts";
+import { aggregateLinterOutput, isLinterCommand } from "pi-tsien-rtk-fork/src/rtk/techniques/linter.ts";
 
 test("vendored RTK does not treat ordinary commands as test runs", () => {
 	for (const command of [

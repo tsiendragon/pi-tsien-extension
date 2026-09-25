@@ -11,7 +11,7 @@ import {
   reserveOuterRunCode,
   resolvePtcPolicy,
   retargetBudgetState,
-} from "../extensions/ptc/policy.ts";
+} from "pi-tsien-code-mode/src/policy.ts";
 
 function expectPolicyError(action: () => unknown, code: string): void {
   try {

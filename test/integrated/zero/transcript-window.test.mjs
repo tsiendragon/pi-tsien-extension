@@ -3,10 +3,10 @@ import test from "node:test";
 import {
   DEFAULT_TRANSCRIPT_WINDOW,
   resolveTranscriptWindowConfig,
-} from "../../../extensions/pi-zero/transcript-window/config.ts";
-import { TranscriptWindowController } from "../../../extensions/pi-zero/transcript-window/controller.ts";
-import { installInteractiveTranscriptPatch } from "../../../extensions/pi-zero/transcript-window/interactive-patch.ts";
-import { selectTranscriptWindow } from "../../../extensions/pi-zero/transcript-window/turns.ts";
+} from "pi-tsien-session-ui-fork/src/transcript-window/config.ts";
+import { TranscriptWindowController } from "pi-tsien-session-ui-fork/src/transcript-window/controller.ts";
+import { installInteractiveTranscriptPatch } from "pi-tsien-session-ui-fork/src/transcript-window/interactive-patch.ts";
+import { selectTranscriptWindow } from "pi-tsien-session-ui-fork/src/transcript-window/turns.ts";
 
 function turn(id) {
   return [

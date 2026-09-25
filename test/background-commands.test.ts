@@ -7,17 +7,17 @@ import test from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import runningCommandsExtension from "../extensions/running-commands.ts";
-import { readBackgroundCommandsSettings } from "../extensions/lib/background-commands/config.ts";
+import runningCommandsExtension from "pi-tsien-running-commands/src/index.ts";
+import { readBackgroundCommandsSettings } from "pi-tsien-shared/src/lib/background-commands/config.ts";
 import {
   BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY,
   BackgroundCommandManager,
-} from "../extensions/lib/background-commands/manager.ts";
-import { registerBackgroundCommandTools } from "../extensions/lib/background-commands/tools.ts";
-import { BackgroundCommandsDashboardAdapter } from "../extensions/lib/background-commands/dashboard-bridge.ts";
-import { getBackgroundCommandManager } from "../extensions/lib/background-commands/manager.ts";
-import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "../extensions/lib/live-observer.ts";
-import { registerForegroundHandoffBashTool } from "../extensions/lib/background-commands/foreground-handoff.ts";
+} from "pi-tsien-shared/src/lib/background-commands/manager.ts";
+import { registerBackgroundCommandTools } from "pi-tsien-shared/src/lib/background-commands/tools.ts";
+import { BackgroundCommandsDashboardAdapter } from "pi-tsien-shared/src/lib/background-commands/dashboard-bridge.ts";
+import { getBackgroundCommandManager } from "pi-tsien-shared/src/lib/background-commands/manager.ts";
+import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "pi-tsien-shared/src/lib/live-observer.ts";
+import { registerForegroundHandoffBashTool } from "pi-tsien-shared/src/lib/background-commands/foreground-handoff.ts";
 
 const cwd = "/mnt/workspace/lilong/repos/pi-tsien-extension";
 

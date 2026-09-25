@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DefaultSecretFilter } from "../../../../extensions/memory/src/adapters/security/secret-filter.ts";
-import { canTransition } from "../../../../extensions/memory/src/domain/state.ts";
-import { extractSearchTerms, escapeFtsTerm, extractClaim } from "../../../../extensions/memory/src/domain/normalize.ts";
-import { combinedRecallAsMessage, recallAsMessage } from "../../../../extensions/memory/src/extension/serialize.ts";
-import { RuleCaptureStrategy } from "../../../../extensions/memory/src/application/capture-rules.ts";
+import { DefaultSecretFilter } from "pi-tsien-memory/src/adapters/security/secret-filter.ts";
+import { canTransition } from "pi-tsien-memory/src/domain/state.ts";
+import { extractSearchTerms, escapeFtsTerm, extractClaim } from "pi-tsien-memory/src/domain/normalize.ts";
+import { combinedRecallAsMessage, recallAsMessage } from "pi-tsien-memory/src/extension/serialize.ts";
+import { RuleCaptureStrategy } from "pi-tsien-memory/src/application/capture-rules.ts";
 
 test("state machine forbids forgotten -> active and allows candidate -> active", () => {
   assert.equal(canTransition("candidate", "active"), true);
