@@ -18,7 +18,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "npm run test:node && npm run test:vitest",
-    "test:node": "node --import tsx --test test/*.test.ts test/integrated/zero/*.test.mjs test/integrated/memory/**/*.test.mjs",
+    "test:node": "node --import tsx --test test/*.test.ts test/integrated/zero/*.test.mjs test/integrated/memory/**/*.test.mjs packages/*/test/*.test.ts",
     "test:vitest": "vitest run --config vitest.integrated.config.ts",
     "check": "npm run typecheck && npm test"
   },
