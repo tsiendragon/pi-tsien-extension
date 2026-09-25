@@ -22,7 +22,7 @@
     { "id": "tools", "source": "git:github.com/example/pi-tools" }
   ],
   "loadOrder": [
-    { "package": "tsien", "path": "extensions/goal.ts" },
+    { "package": "pi-tsien-goal", "path": "src/index.ts" },
     { "package": "tools", "path": "extensions/tool.ts" },
     { "path": "${HOME}/src/direct-extension.ts" }
   ],
