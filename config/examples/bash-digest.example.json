@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "thresholdBytes": 1200,
+  "targetTokens": 40,
+  "maxTokens": 128,
+  "timeoutMs": 6000,
+  "maxConcurrent": 2,
+  "digestModel": "dashscope/qwen3.8-flash",
+  "codeDumpRatio": 0.3,
+  "maxDigestRatio": 0.6,
+  "excludePatterns": [
+    "^(ls|find|tree|du|df|grep|rg|ag|ack|wc|head|tail|cat|sed|awk|cut|sort|uniq|jq)\\b",
+    "^git\\s+(log|show|status|diff|shortlog|blame)\\b",
+    "^pip\\s+(list|show)\\b"
+  ]
+}

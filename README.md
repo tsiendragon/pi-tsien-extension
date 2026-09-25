@@ -135,6 +135,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 摘要被当作**索引**而不是替代品：**observation-pack 未启用时本扩展完全惰性**，因为失去召回路径的有损改写不可接受。
 - 判定：纯文本、非错误、命令未命中 `excludePatterns`、预清洗后 > `thresholdBytes`（默认 1200 ≈ 300 token）、且代码特征行占比 ≤ `codeDumpRatio`（默认 0.3）。
 - 摘要模型由 `digestModel` 指定（默认 `dashscope/qwen3.8-flash`，non-thinking、`temperature=0`），预算按原文比例给（`clamp(0.6 × 原文, 128, 256)`），`timeoutMs` 默认 6000、`maxConcurrent` 默认 2。
+- 配置模板在 `config/examples/bash-digest.example.json`；「模型与凭证怎么配、怎么确认真的生效」见 `config/examples/README.md`。凭证走宿主 pi 自己的 provider 配置（通常是环境变量，如 `DASHSCOPE_API_KEY`），dashboard 用法下建议写进 dashboard 的环境文件。
 - 采纳还需摘要 < 原文 `maxDigestRatio`（默认 0.6），否则回落原文；任何失败（超时、报错、守卫不过、信号量饱和）一律返回原文，绝不抛错。
 - `excludePatterns` 默认排除“列出条目”类命令（`ls`/`find`/`git log`/`grep`/`cat`/`sed`/`head`/`wc` …），按子命令边界匹配，只测真正产出 stdout 的那一段。理由：这些命令的输出就是调用方要的条目集合，**摘要只能靠丢行压缩，而丢掉的行就是丢事实**。实测过一次丢行导致的错误回答。
 - 改写形如 `[digest 703 tok -> 60 tok | raw: obs_xxx]` + 摘要正文；同一 `toolCallId` 命中缓存不重复调用。
@@ -230,6 +231,9 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 每个扩展的职责清单见 `pi-dashboard/docs/standalone-install.md` §6「扩展清单」。
 `pi-dashboard` 的一键安装脚本会自动应用这份配置，见
 `pi-dashboard/scripts/install-standalone.sh`。
+
+扩展自己的配置模板（复制到 `~/.pi/agent/` 后改值）在 `config/examples/`，
+例如 bash-digest 摘要模型与凭证的写法见 `config/examples/README.md`。
 
 ## 避免重复加载
 
