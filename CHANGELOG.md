@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **本机 live 配置已切到 packages 布局**：`~/.pi/agent/{settings.json,extensions.config.json}` 按「旧路径 → 新路径」映射更新
+  （24 条扩展条目改写，保留 knowledge / remote-notifications / security-guard，顺序不变），备份保留双份。
+  复核：同步器 dry-run 只剩迁移前就存在的 `security-guard.ts -> quarantine`；live 真机 `pi -p` 下 25 个扩展全部从 `packages/*` 加载，
+  `capability_ls` / `WebSearch` 正常。顺带修掉试点阶段的一个回归（live 中 `session-aliases`/`capability` 两条仍指向旧文件），
+  并把 `web-tools`/`session-aliases`/`capability` 三个包 id 统一成目录名。基线已按新布局重抓。
 - **P0 拆包（一功能一包）**：`extensions/**` 里的 19 个扩展 + 共享库拆成 `packages/pi-tsien-*`（npm workspaces，内部依赖用普通 semver）。
   新增共享库 `pi-tsien-shared`（原 `extensions/lib/**`，按包名导入）；跨包依赖按包名解析（memory→subagent-workbench、rtk-fork→observation-pack、
   session-ui-fork→default-system-prompt、subagent-workbench→trajectory-recorder 等 8 条边已写入各自 `dependencies`）。
