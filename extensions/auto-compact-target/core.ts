@@ -72,6 +72,109 @@ export function resolveTargetTokens(
 	return Math.max(1, Math.min(absolute, cap));
 }
 
+/**
+ * One policy that can trigger compaction, with the token count at which it fires.
+ *
+ * `auto-compact-target` = this extension compacts at the absolute target;
+ * `pi-reserve-tokens` = pi core's own guard
+ * (`shouldCompact(tokens, window, { reserveTokens })`), which still runs as the
+ * last-resort trigger for long autonomous runs that never settle.
+ */
+export interface CompactionTriggerCandidate {
+	readonly source: "auto-compact-target" | "pi-reserve-tokens";
+	readonly tokens: number;
+}
+
+/** pi core compaction policy (`SettingsManager.getCompactionSettings(model)`). */
+export interface PiCompactionPolicy {
+	readonly enabled: boolean;
+	readonly reserveTokens: number;
+}
+
+export interface ResolveCompactionTriggerOptions {
+	/** Omitted/`null`/non-finite = window unknown; pi's candidate is then unknowable. */
+	readonly contextWindow?: number | undefined | null;
+	/** Omitted = the model key carries no `modelOverrides` entry. */
+	readonly model?: { readonly provider: string; readonly id: string } | undefined;
+	/** Undefined = pi settings unreadable, treat as "no pi policy". */
+	readonly piPolicy?: PiCompactionPolicy | undefined;
+	/** Undefined = use the shared process-wide policy snapshot ({@link autoCompactTargetConfig}). */
+	readonly config?: AutoCompactTargetConfig | undefined;
+}
+
+export interface CompactionTrigger {
+	readonly enabled: boolean;
+	/** Earliest token count at which compaction fires; `0` when disabled. */
+	readonly triggerTokens: number;
+	/** Every enabled candidate, so a UI can explain which policy binds. */
+	readonly candidates: readonly CompactionTriggerCandidate[];
+}
+
+/**
+ * Where compaction actually fires first.
+ *
+ * The single answer to "when does this session compact?", shared by the actor
+ * (`auto-compact-target`, which calls `ctx.compact()`) and by every display that
+ * draws that trigger (the TUI status bar, the dashboard's status line). Two
+ * policies can both be live, and pi's guard can be the earlier one on small
+ * windows, so the effective trigger is the earliest enabled candidate — not
+ * whichever policy happens to be asked first.
+ */
+export function resolveCompactionTrigger(
+	options: ResolveCompactionTriggerOptions,
+): CompactionTrigger {
+	const candidates: CompactionTriggerCandidate[] = [];
+	// Default to the shared snapshot rather than "no policy": a caller that forgets
+	// it would otherwise silently drop the extension's trigger and report a
+	// compaction point the actor never uses — the very divergence this fixes.
+	const config = options.config ?? autoCompactTargetConfig();
+	if (config?.enabled) {
+		const keys = options.model ? [`${options.model.provider}/${options.model.id}`] : [];
+		const override = keys
+			.map((key) => config.modelOverrides[key]?.targetTokens)
+			.find((value) => value !== undefined);
+		candidates.push({
+			source: "auto-compact-target",
+			tokens: resolveTargetTokens(options.contextWindow, {
+				targetTokens: config.targetTokens,
+				windowRatio: config.windowRatio,
+				overrideTargetTokens: override,
+			}),
+		});
+	}
+	const policy = options.piPolicy;
+	const window = options.contextWindow;
+	if (policy?.enabled && typeof window === "number" && Number.isFinite(window) && window > 0) {
+		// pi compacts when `contextTokens > contextWindow - reserveTokens`.
+		candidates.push({
+			source: "pi-reserve-tokens",
+			tokens: Math.max(0, Math.floor(window - policy.reserveTokens)),
+		});
+	}
+	if (candidates.length === 0) return { enabled: false, triggerTokens: 0, candidates: [] };
+	return {
+		enabled: true,
+		triggerTokens: candidates.reduce(
+			(earliest, candidate) => Math.min(earliest, candidate.tokens),
+			Number.POSITIVE_INFINITY,
+		),
+		candidates,
+	};
+}
+
+/**
+ * Process-wide policy snapshot.
+ *
+ * The actor and every display must read the SAME policy, so the config file is
+ * loaded once per process instead of once per reader (a reader that loaded its
+ * own copy could draw a trigger the actor does not use).
+ */
+export function autoCompactTargetConfig(): AutoCompactTargetConfig {
+	return sharedConfig ??= loadAutoCompactTargetConfig();
+}
+
+let sharedConfig: AutoCompactTargetConfig | undefined;
+
 /** Whether `tokens` has reached `target`. */
 export function shouldCompact(tokens: number | null | undefined, target: number): boolean {
 	if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens <= 0) return false;
