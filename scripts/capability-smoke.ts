@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
-import capabilityExtension from "../extensions/capability.ts";
+import capabilityExtension from "../packages/pi-tsien-capability/src/index.ts";
 
 interface RegisteredTool {
 	readonly name: string;

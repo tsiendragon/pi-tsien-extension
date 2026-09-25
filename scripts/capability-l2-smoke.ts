@@ -90,7 +90,7 @@ await writeFile(
 );
 await writeFile(join(fixtureDir, "impl", "run.mjs"), IMPL_SOURCE, "utf8");
 
-const { default: capabilityExtension } = await import("../extensions/capability.ts");
+const { default: capabilityExtension } = await import("../packages/pi-tsien-capability/src/index.ts");
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
 
