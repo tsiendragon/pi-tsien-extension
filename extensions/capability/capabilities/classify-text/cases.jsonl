@@ -1,0 +1,4 @@
+{"input":{"text":"2026-09-21 03:14:02 ERROR db.connect failed: timeout after 30s (host=db-primary-7)"},"expect":{"label":"error"}}
+{"input":{"text":"2026-09-21 03:14:05 WARN retry budget exhausted after 3 attempts"},"expect":{"label":"warning"}}
+{"input":{"text":"2026-09-21 03:14:07 INFO pipeline resumed from checkpoint 42"},"expect":{"label":"info"}}
+{"input":{"text":"2026-09-21 03:14:09 DEBUG flushing buffer size=8192"},"expect":{"label":"debug"}}
