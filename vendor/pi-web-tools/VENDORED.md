@@ -1,4 +1,8 @@
-# vendor/pi-web-tools (patched)
+# vendor/pi-web-tools (patched) — 已停用，保留作回滚
+
+> **状态（2026-09-25）**：WebSearch/WebFetch 已切换为自研实现 `packages/pi-tsien-web-tools`，
+> 本目录**不再被加载**。保留原因：回滚路径（把 `extensions.config.json` 的 web-tools 来源改回本目录即可）
+> 与本文件记录的第三方来历/合规信息。上游仓库无许可证，故本副本不得公开分发或发布到 npm。
 
 Vendored copy of `pi-web-tools` **0.1.0** (Brett Atoms — https://github.com/brettatoms/pi-web-tools).
 
