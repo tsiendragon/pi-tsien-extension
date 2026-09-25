@@ -7,10 +7,6 @@
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-web-tools"
     },
     {
-      "id": "tsien",
-      "source": "${PI_TSIEN_EXTENSION_ROOT}"
-    },
-    {
       "id": "pi-tsien-session-aliases",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-session-aliases",
       "autoload": false
