@@ -9,7 +9,7 @@ import scheduleExtension, {
 	SessionScheduleManager,
 	type ScheduleClock,
 	updateScheduleTriggerStatus,
-} from "../extensions/schedule.ts";
+} from "pi-tsien-schedule/src/index.ts";
 
 type Timer = {
 	at: number;

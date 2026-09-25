@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { serializeTraceContext } from "../extensions/subagent-workbench/src/providers/pi-rpc-process-provider.ts";
-import { parseTraceContext } from "../extensions/trajectory-recorder.ts";
+import { serializeTraceContext } from "pi-tsien-subagent-workbench/src/providers/pi-rpc-process-provider.ts";
+import { parseTraceContext } from "pi-tsien-trajectory-recorder/src/index.ts";
 
 test("serializes the parent/workflow trace context for child Pi processes", () => {
   const serialized = serializeTraceContext({

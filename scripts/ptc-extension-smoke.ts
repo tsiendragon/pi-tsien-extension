@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import ptcExtension from "../extensions/ptc.ts";
+import ptcExtension from "pi-tsien-code-mode/src/index.ts";
 
 let registeredTool: any;
 let commandRegistrations = 0;

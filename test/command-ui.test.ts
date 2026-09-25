@@ -11,23 +11,23 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 
-import runningCommandsExtension from "../extensions/running-commands.ts";
-import { BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY } from "../extensions/lib/background-commands/manager.ts";
-import { CommandAwareEditor } from "../extensions/lib/command-ui/command-aware-editor.ts";
+import runningCommandsExtension from "pi-tsien-running-commands/src/index.ts";
+import { BACKGROUND_COMMAND_MANAGER_SYMBOL_KEY } from "pi-tsien-shared/src/lib/background-commands/manager.ts";
+import { CommandAwareEditor } from "pi-tsien-shared/src/lib/command-ui/command-aware-editor.ts";
 import {
   MAX_FOREGROUND_OUTPUT_BYTES,
   RunningCommandRegistry,
   normalizeCommand,
   normalizeCommandTitle,
   truncateUtf8Tail,
-} from "../extensions/lib/command-ui/command-registry.ts";
-import { CommandFocusController } from "../extensions/lib/command-ui/focus-controller.ts";
-import { PRE_POWERLINE_HOST_SYMBOL_KEY } from "../extensions/lib/command-ui/pre-powerline-client.ts";
+} from "pi-tsien-shared/src/lib/command-ui/command-registry.ts";
+import { CommandFocusController } from "pi-tsien-shared/src/lib/command-ui/focus-controller.ts";
+import { PRE_POWERLINE_HOST_SYMBOL_KEY } from "pi-tsien-shared/src/lib/command-ui/pre-powerline-client.ts";
 import {
   RunningCommandsWidget,
   formatElapsedDuration,
   sanitizeOutputLines,
-} from "../extensions/lib/command-ui/running-commands-widget.ts";
+} from "pi-tsien-shared/src/lib/command-ui/running-commands-widget.ts";
 
 function startedRegistry(count = 2): RunningCommandRegistry {
   const registry = new RunningCommandRegistry();

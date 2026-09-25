@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const runner = fileURLToPath(new URL("../extensions/ptc/runtime-child.mjs", import.meta.url));
+const runner = fileURLToPath(new URL("pi-tsien-code-mode/src/runtime-child.mjs", import.meta.url));
 const child = spawn(process.execPath, [
   "--permission",
   "--no-warnings",

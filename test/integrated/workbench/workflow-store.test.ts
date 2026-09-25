@@ -9,7 +9,7 @@ import {
   validateWorkflowName,
   workflowDefinitionPath,
   type SavedWorkflowDefinition,
-} from "../../../extensions/subagent-workbench/src/workflow-store.ts";
+} from "pi-tsien-subagent-workbench/src/workflow-store.ts";
 
 const temporaryDirectories: string[] = [];
 

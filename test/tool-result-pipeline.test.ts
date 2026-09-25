@@ -11,7 +11,7 @@ import { test } from "node:test";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import toolResultPipeline, { STAGE_ORDER, buildStages } from "../extensions/tool-result-pipeline.ts";
+import toolResultPipeline, { STAGE_ORDER, buildStages } from "pi-tsien-rtk-fork/src/index.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => Promise<Record<string, unknown> | undefined>;
 

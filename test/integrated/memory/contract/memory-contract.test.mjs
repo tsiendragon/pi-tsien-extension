@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InMemoryMemoryRepository, InMemorySearchBackend } from "../../../../extensions/memory/src/adapters/memory/in-memory.ts";
-import { DefaultSecretFilter } from "../../../../extensions/memory/src/adapters/security/secret-filter.ts";
-import { DefaultScopeResolver } from "../../../../extensions/memory/src/adapters/pi/scope-resolver.ts";
-import { RuleCaptureStrategy } from "../../../../extensions/memory/src/application/capture-rules.ts";
-import { MemoryService } from "../../../../extensions/memory/src/application/memory-service.ts";
+import { InMemoryMemoryRepository, InMemorySearchBackend } from "pi-tsien-memory/src/adapters/memory/in-memory.ts";
+import { DefaultSecretFilter } from "pi-tsien-memory/src/adapters/security/secret-filter.ts";
+import { DefaultScopeResolver } from "pi-tsien-memory/src/adapters/pi/scope-resolver.ts";
+import { RuleCaptureStrategy } from "pi-tsien-memory/src/application/capture-rules.ts";
+import { MemoryService } from "pi-tsien-memory/src/application/memory-service.ts";
 
 async function setup() {
   const repository = new InMemoryMemoryRepository();

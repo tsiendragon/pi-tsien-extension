@@ -22,10 +22,10 @@ import {
 	registerGoalTools,
 	updateGoalGraphParams,
 	updateGoalProgressParams,
-} from "../../../extensions/goal/src/tools.ts";
-import { saveGoalState } from "../../../extensions/goal/src/state.ts";
+} from "pi-tsien-goal/src/tools.ts";
+import { saveGoalState } from "pi-tsien-goal/src/state.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { GoalStateEntry } from "../../../extensions/goal/src/types.ts";
+import type { GoalStateEntry } from "pi-tsien-goal/src/types.ts";
 
 function createHarness() {
 	const branch: Array<{ type: string; customType?: string; data?: unknown }> = [];

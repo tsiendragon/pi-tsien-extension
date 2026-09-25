@@ -5,7 +5,7 @@ import {
   WorkbenchRuntimeHost,
   installWorkbenchRuntime,
   uninstallWorkbenchRuntime,
-} from "../../../extensions/subagent-workbench/src/runtime.ts";
+} from "pi-tsien-subagent-workbench/src/runtime.ts";
 
 function globals(): Record<PropertyKey, unknown> {
   return globalThis as Record<PropertyKey, unknown>;

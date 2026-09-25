@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RuleCaptureStrategy } from "../extensions/memory/src/application/capture-rules.ts";
-import type { SettledTurn } from "../extensions/memory/src/ports/memory.ts";
+import { RuleCaptureStrategy } from "pi-tsien-memory/src/application/capture-rules.ts";
+import type { SettledTurn } from "pi-tsien-memory/src/ports/memory.ts";
 
 const scope = { type: "repository" as const, key: "repository:pi-tsien-extension", repositoryId: "pi-tsien-extension" };
 

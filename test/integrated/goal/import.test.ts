@@ -2,12 +2,12 @@ import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { handleGoalCommand, parseGoalCommand } from "../../../extensions/goal/src/commands.ts";
-import { extractGoalBrief, importGoalSources, parseEditableGoalDraft } from "../../../extensions/goal/src/import.ts";
-import { GOAL_CUSTOM_TYPE } from "../../../extensions/goal/src/state.ts";
+import { handleGoalCommand, parseGoalCommand } from "pi-tsien-goal/src/commands.ts";
+import { extractGoalBrief, importGoalSources, parseEditableGoalDraft } from "pi-tsien-goal/src/import.ts";
+import { GOAL_CUSTOM_TYPE } from "pi-tsien-goal/src/state.ts";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { GoalStateEntry } from "../../../extensions/goal/src/types.ts";
+import type { GoalStateEntry } from "pi-tsien-goal/src/types.ts";
 
 async function makeWorkspace(): Promise<string> {
 	return mkdtemp(path.join(tmpdir(), "pi-goal-import-"));

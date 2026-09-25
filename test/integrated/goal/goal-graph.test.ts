@@ -5,9 +5,9 @@ import {
 	goalWorkOverview,
 	readyWorkItems,
 	renderBlockerReport,
-} from "../../../extensions/goal/src/goal-graph.ts";
+} from "pi-tsien-goal/src/goal-graph.ts";
 
-import type { GoalState } from "../../../extensions/goal/src/types.ts";
+import type { GoalState } from "pi-tsien-goal/src/types.ts";
 
 function goal(overrides: Partial<GoalState> = {}): GoalState {
 	return {

@@ -6,7 +6,7 @@ import {
 	PTC_UNLIMITED,
 	reserveOuterRunCode,
 	resolvePtcPolicy,
-} from "../extensions/ptc/policy.ts";
+} from "pi-tsien-code-mode/src/policy.ts";
 
 test("removed run_code limits resolve to the unlimited sentinel", () => {
 	for (const model of [
