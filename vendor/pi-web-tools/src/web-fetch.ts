@@ -1,8 +1,3 @@
-import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
-import TurndownService from "turndown";
-import { gfm } from "turndown-plugin-gfm";
-
 const FETCH_TIMEOUT = 15000;
 const MAX_HTML_BYTES = 5 * 1024 * 1024; // 5MB max HTML to parse
 
@@ -39,6 +34,22 @@ export async function fetchAndExtract(url: string): Promise<{ title: string | nu
 	}
 
 	const finalUrl = res.url || url;
+
+	// Heavy HTML-extraction deps (jsdom alone is ~500 files) are loaded lazily,
+	// on the first actual WebFetch call. Importing them at module scope made
+	// every Pi start pay for them: measured as a 1.1-1.8s module import in
+	// `PI_TIMING=1`, i.e. ~2/3 of total extension-load time.
+	const [jsdomModule, readabilityModule, turndownModule, gfmModule] = await Promise.all([
+		import("jsdom"),
+		import("@mozilla/readability"),
+		import("turndown"),
+		import("turndown-plugin-gfm"),
+	]);
+	const { JSDOM } = jsdomModule;
+	const { Readability } = readabilityModule;
+	const TurndownService = turndownModule.default;
+	const { gfm } = gfmModule;
+
 	const doc = new JSDOM(html, { url: finalUrl });
 	const reader = new Readability(doc.window.document);
 	const article = reader.parse();
