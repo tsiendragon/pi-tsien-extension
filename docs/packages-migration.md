@@ -32,16 +32,23 @@
 | 0 | 试点：`session-aliases`、`capability`（含真实执行对比） | ✅ 完成（`1713cb0`） |
 | 1+2 | 共享库 `pi-tsien-shared`（lib）+ 15 个单文件/自目录包 | ✅ 完成 |
 | 3a | subagent-workbench、btw、running-commands、schedule（有跨包耦合但文件干净） | ✅ 完成 |
-| 3b | auto-compact-target、context-powerline、live-session（**被并行会话的未提交改动阻塞**） | ⏸ 等待 WIP 落定 |
-| 4 | 本机 live 配置切换（备份 + 外科手术式改 + dry-run 复核 + 保留回滚） | 待办 |
-| 5 | 删除 `extensions/lib/live-observer.ts` 兼容 shim、重新抓基线、更新文档与 CHANGELOG | 待办 |
+| 3b | auto-compact-target、context-powerline、live-session | ✅ 完成（WIP 先单独落成 `1bdd902`，再迁移） |
+| 4 | 本机 live 配置切换（备份 + 外科手术式改 + dry-run 复核 + 保留回滚） | 待办 → 见下 |
+| 5 | 删除兼容 shim、重新抓基线（新路径）、更新文档与 CHANGELOG | 部分完成（shim 已删） |
 
-### 批次 3b 的阻塞
+### 批次 3b 的处理（WIP 如何落地）
 
-`extensions/auto-compact-target/core.ts`（+103 行）、`auto-compact-target.ts`、`context-powerline.ts`、`live-session.ts`、
-`live-session/protocol.ts`、`test/auto-compact-target.test.ts`、`test/live-session.test.ts` 有**并行会话的未提交改动**
-（证据：改动时间 20:33–21:58，早于本会话的提交；`live-session.ts` 的改动量在两次检查间由 196 行变为 217 行，说明仍在编辑）。
-迁移与这些文件无关的部分已完成；涉及它们的部分等 WIP 提交后再做。
+那批未提交改动是「把压缩触发阈值抽成共享 resolver」（`core.ts` 新增 `resolveCompactionTrigger`，
+`auto-compact-target` / `context-powerline` / `live-session` 的状态行都画同一条线，live-session 协议上报各候选人）。
+处理方式：先把它**单独提交**为 `1bdd902`（当时门禁已全绿：typecheck + 246 测试 + parity 25/25），
+再做迁移，这样迁移 diff 干净、也能单独 review/改写。
+
+### 最终形态
+
+`extensions/` 目录已清空；25 个扩展 + 共享库全部在 `packages/pi-tsien-*`。
+包入口：多数是 `src/index.ts`，memory 是 `src/extension/index.ts`（其 `src/index.ts` 是库 barrel）。
+跨包依赖（写进各自 `dependencies`）：shared ← live-session / running-commands / schedule / side-chat / subagent-workbench / auto-compact / context-powerline；
+memory → subagent-workbench；rtk-fork → observation-pack；session-ui-fork → default-system-prompt；subagent-workbench → trajectory-recorder。
 
 ### 迁移中修正的 3 个真问题（都是门禁抓出来的）
 

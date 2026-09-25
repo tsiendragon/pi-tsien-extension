@@ -29,7 +29,7 @@ import {
 	autoCompactTargetConfig,
 	resolveCompactionTrigger,
 	shouldCompact,
-} from "./auto-compact-target/core.ts";
+} from "pi-tsien-shared/src/auto-compact-target/core.ts";
 
 function compactionEnabled(ctx: ExtensionContext): boolean {
 	try {
