@@ -5,10 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+	autoCompactTargetConfig,
 	CONFIG_FILE_NAME,
 	DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
 	DEFAULT_TARGET_TOKENS,
 	loadAutoCompactTargetConfig,
+	resolveCompactionTrigger,
 	resolveTargetTokens,
 	shouldCompact,
 } from "../extensions/auto-compact-target/core.ts";
@@ -63,6 +65,115 @@ test("shouldCompact compares usage against the target", () => {
 	assert.equal(shouldCompact(undefined, 270_000), false);
 	assert.equal(shouldCompact(0, 270_000), false);
 	assert.equal(shouldCompact(Number.NaN, 270_000), false);
+});
+
+test("resolveCompactionTrigger reports the extension policy alone", () => {
+	const trigger = resolveCompactionTrigger({
+		contextWindow: 1_048_576,
+		config: DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
+	});
+	assert.equal(trigger.enabled, true);
+	assert.equal(trigger.triggerTokens, DEFAULT_TARGET_TOKENS);
+	assert.deepEqual(trigger.candidates, [
+		{ source: "auto-compact-target", tokens: DEFAULT_TARGET_TOKENS },
+	]);
+});
+
+test("resolveCompactionTrigger defaults to the shared policy snapshot", () => {
+	// Callers that omit `config` must describe the policy the actor uses, not
+	// silently report "compaction disabled".
+	assert.deepEqual(
+		resolveCompactionTrigger({ contextWindow: 1_048_576 }),
+		resolveCompactionTrigger({ contextWindow: 1_048_576, config: autoCompactTargetConfig() }),
+	);
+});
+
+test("resolveCompactionTrigger reports pi's reserve-token guard alone", () => {
+	const trigger = resolveCompactionTrigger({
+		contextWindow: 1_048_576,
+		piPolicy: { enabled: true, reserveTokens: 22_000 },
+		config: { ...DEFAULT_AUTO_COMPACT_TARGET_CONFIG, enabled: false },
+	});
+	assert.equal(trigger.enabled, true);
+	assert.equal(trigger.triggerTokens, 1_026_576);
+	assert.deepEqual(trigger.candidates, [
+		{ source: "pi-reserve-tokens", tokens: 1_026_576 },
+	]);
+});
+
+test("resolveCompactionTrigger takes the earliest enabled policy", () => {
+	const trigger = resolveCompactionTrigger({
+		contextWindow: 1_048_576,
+		piPolicy: { enabled: true, reserveTokens: 22_000 },
+		config: DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
+	});
+	assert.equal(trigger.triggerTokens, DEFAULT_TARGET_TOKENS);
+	assert.deepEqual(trigger.candidates.map((candidate) => candidate.source), [
+		"auto-compact-target",
+		"pi-reserve-tokens",
+	]);
+});
+
+test("resolveCompactionTrigger lets a small window fall back to pi's guard", () => {
+	// 32K window: the extension target (24K) is above pi's guard (10,768), so
+	// compaction really fires at the guard and the display must say so.
+	const trigger = resolveCompactionTrigger({
+		contextWindow: 32_768,
+		piPolicy: { enabled: true, reserveTokens: 22_000 },
+		config: DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
+	});
+	assert.equal(trigger.triggerTokens, 10_768);
+});
+
+test("resolveCompactionTrigger is disabled when no policy is enabled", () => {
+	const trigger = resolveCompactionTrigger({
+		contextWindow: 1_048_576,
+		piPolicy: { enabled: false, reserveTokens: 22_000 },
+		config: { ...DEFAULT_AUTO_COMPACT_TARGET_CONFIG, enabled: false },
+	});
+	assert.deepEqual(trigger, { enabled: false, triggerTokens: 0, candidates: [] });
+});
+
+test("resolveCompactionTrigger drops pi's candidate when the window is unknown", () => {
+	const trigger = resolveCompactionTrigger({
+		piPolicy: { enabled: true, reserveTokens: 22_000 },
+		config: DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
+	});
+	assert.deepEqual(trigger.candidates.map((candidate) => candidate.source), [
+		"auto-compact-target",
+	]);
+});
+
+test("resolveCompactionTrigger honours per-model overrides", () => {
+	const config = {
+		...DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
+		modelOverrides: { "dashscope/deepseek-v4.1-flash": { targetTokens: 100_000 } },
+	};
+	assert.equal(
+		resolveCompactionTrigger({
+			contextWindow: 1_048_576,
+			model: { provider: "dashscope", id: "deepseek-v4.1-flash" },
+			config,
+		}).triggerTokens,
+		100_000,
+	);
+	assert.equal(
+		resolveCompactionTrigger({
+			contextWindow: 1_048_576,
+			model: { provider: "dashscope", id: "other" },
+			config,
+		}).triggerTokens,
+		DEFAULT_TARGET_TOKENS,
+	);
+});
+
+test("resolveCompactionTrigger clamps a reserve larger than the window to zero", () => {
+	const trigger = resolveCompactionTrigger({
+		contextWindow: 16_384,
+		piPolicy: { enabled: true, reserveTokens: 22_000 },
+		config: { ...DEFAULT_AUTO_COMPACT_TARGET_CONFIG, enabled: false },
+	});
+	assert.equal(trigger.triggerTokens, 0);
 });
 
 test("loadAutoCompactTargetConfig returns defaults when the file is missing", async () => {

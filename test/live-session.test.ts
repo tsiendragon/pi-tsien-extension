@@ -594,6 +594,30 @@ test("Live Session advertises the session_tree capability and re-snapshots on tr
   assert.equal(last?.event.data?.newLeafId, "m2");
 });
 
+test("Live Session advertises session_clear only while /clear is really registered", async () => {
+  const harness = extensionHarness();
+  (harness.pi as unknown as { getCommands: () => unknown[] }).getCommands = () => [
+    { name: "clear", description: "Start a fresh session", source: "extension" },
+  ];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-clear", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, publish() {}, sendSnapshot() {}, stop() {} }; },
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "session_clear"]);
+
+  // The dashboard's 「清空」rides the input channel as `/clear`, and `/clear` comes from
+  // the session-aliases EXTENSION, not from pi. pi skips an extension whose file is
+  // missing without a word, and then hands `/clear` to the model as plain text — a
+  // click that burns a turn and clears nothing. So the flag is checked, not assumed.
+  (harness.pi as unknown as { getCommands: () => unknown[] }).getCommands = () => [];
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree"]);
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
 test("ls-navigate / ls-fork call the command-context tree actions", async () => {
   const harness = extensionHarness();
   const state = { idle: true, aborted: false, notifications: [] as string[] };
@@ -760,5 +784,82 @@ test("Live Session extension binds a message's session entry id after pi persist
   const bound = published.find(entry => entry.event.type === "message_entry");
   assert.equal((bound?.event.data as any).entryId, "entry-42");
   assert.equal((bound?.event.data as any).message, undefined, "the carrier must stay tiny");
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("Live Session derives status from pi's idle state and re-asserts it on a heartbeat", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    statusHeartbeatMs: 5,
+    createClient: value => { options = value; return { start() {}, publish: message => published.push(message), sendSnapshot() {}, stop() {} }; },
+  });
+  // A standalone compaction (auto-compact-target calling ctx.compact()) makes pi
+  // non-idle without ever emitting agent_start/agent_settled, so a reload landing
+  // during it seeded "running" with nothing left to clear it. The dashboard showed
+  // 工作中 on a session sitting at its prompt.
+  const state = { idle: false, aborted: false, notifications: [] };
+  const ctx = context(state);
+  await harness.handlers.get("session_start")?.[0]({ reason: "reload" }, ctx);
+  assert.equal((options!.getSnapshot().summary as any).status, "running", "pi's own idle state is the source, not the agent event history");
+
+  // pi finishes the compaction on its own and no agent event fires: only the beat notices.
+  state.idle = true;
+  await new Promise(resolve => setTimeout(resolve, 25));
+  const patch = published.find(entry => entry.event.type === "summary_update");
+  assert.ok(patch, "the heartbeat must publish the drifted status");
+  assert.equal((patch!.event.data as any).status, "idle");
+  assert.equal((options!.getSnapshot().summary as any).status, "idle");
+
+  // An unchanged status stays silent: no per-beat chatter on an idle session.
+  published.length = 0;
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(published, []);
+
+  await harness.handlers.get("agent_start")?.[0]({}, ctx);
+  state.idle = false;
+  assert.equal((options!.getSnapshot().summary as any).status, "running");
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+  published.length = 0;
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(published, [], "the heartbeat must stop with the session");
+});
+
+test("Live Session publishes context telemetry on the event stream, not only in snapshots", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, publish: message => published.push(message), sendSnapshot() {}, stop() {} }; },
+  });
+  const ctx = context({ idle: true, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  // The snapshot carries the trigger so a freshly attached dashboard can draw it
+  // before the first turn.
+  const snapshotCompact = (options!.getSnapshot().summary as any).compact;
+  assert.equal(snapshotCompact?.enabled, true);
+  assert.equal(snapshotCompact?.candidates?.[0]?.source, "auto-compact-target");
+
+  await harness.handlers.get("agent_settled")?.[0]({}, ctx);
+  const telemetry = published.find(entry => entry.event.type === "summary_update");
+  assert.ok(telemetry, "agent_settled must publish summary_update");
+  assert.deepEqual((telemetry!.event.data as any).contextUsage, { tokens: 20, contextWindow: 100, percent: 20 });
+  assert.equal((telemetry!.event.data as any).compact.enabled, true);
+  assert.equal(
+    (telemetry!.event.data as any).compact.triggerTokens,
+    (telemetry!.event.data as any).compact.candidates[0].tokens,
+  );
+
+  // Ordering contract: the transcript binds a message's entry id to the nearest
+  // PRECEDING `message_end`, so telemetry must not land between `message_end` and
+  // its deferred `message_entry`.
+  published.length = 0;
+  await harness.handlers.get("message_end")?.[0]({ message: { role: "user", content: "hi" } }, ctx);
+  assert.equal(published.at(-1)?.event.type, "message_end");
+  assert.equal(published.at(-2)?.event.type, "summary_update");
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
