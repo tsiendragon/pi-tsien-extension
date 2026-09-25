@@ -12,7 +12,7 @@
     }
   ],
   "loadOrder": [
-    { "package": "web-tools", "path": "src/index.ts" },
+    { "package": "pi-tsien-web-tools", "path": "src/index.ts" },
     { "package": "tsien", "path": "extensions/tool-result-pipeline.ts" },
     { "package": "tsien", "path": "extensions/00-zero.ts" },
     { "package": "tsien", "path": "extensions/sidebar.ts" }

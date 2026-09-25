@@ -3,7 +3,7 @@
   "note": "Standalone profile: pi-tsien-extension plus the vendored web-tools package only. No marketplace/business packages. Managed by scripts/pi-extension-sync.mjs --config config/extensions.standalone.json.",
   "packages": [
     {
-      "id": "web-tools",
+      "id": "pi-tsien-web-tools",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-web-tools"
     },
     {
@@ -11,12 +11,12 @@
       "source": "${PI_TSIEN_EXTENSION_ROOT}"
     },
     {
-      "id": "session-aliases",
+      "id": "pi-tsien-session-aliases",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-session-aliases",
       "autoload": false
     },
     {
-      "id": "capability",
+      "id": "pi-tsien-capability",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-capability",
       "autoload": false
     },
@@ -133,7 +133,7 @@
   ],
   "loadOrder": [
     {
-      "package": "web-tools",
+      "package": "pi-tsien-web-tools",
       "path": "src/index.ts"
     },
     {
@@ -201,7 +201,7 @@
       "path": "src/index.ts"
     },
     {
-      "package": "session-aliases",
+      "package": "pi-tsien-session-aliases",
       "path": "src/index.ts"
     },
     {
@@ -229,7 +229,7 @@
       "path": "src/index.ts"
     },
     {
-      "package": "capability",
+      "package": "pi-tsien-capability",
       "path": "src/index.ts"
     }
   ],

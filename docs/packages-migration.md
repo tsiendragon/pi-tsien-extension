@@ -33,8 +33,8 @@
 | 1+2 | 共享库 `pi-tsien-shared`（lib）+ 15 个单文件/自目录包 | ✅ 完成 |
 | 3a | subagent-workbench、btw、running-commands、schedule（有跨包耦合但文件干净） | ✅ 完成 |
 | 3b | auto-compact-target、context-powerline、live-session | ✅ 完成（WIP 先单独落成 `1bdd902`，再迁移） |
-| 4 | 本机 live 配置切换（备份 + 外科手术式改 + dry-run 复核 + 保留回滚） | 待办 → 见下 |
-| 5 | 删除兼容 shim、重新抓基线（新路径）、更新文档与 CHANGELOG | 部分完成（shim 已删） |
+| 4 | 本机 live 配置切换 | ✅ 完成（见「live 切换记录」） |
+| 5 | 删除兼容 shim、重新抓基线（新路径）、更新文档与 CHANGELOG | ✅ 完成 |
 
 ### 批次 3b 的处理（WIP 如何落地）
 
@@ -72,3 +72,25 @@ memory → subagent-workbench；rtk-fork → observation-pack；session-ui-fork 
 | `extensions/usage-analytics.ts` | `pi-tsien-usage-analytics` |
 | `extensions/prompt-inspector.ts` | `pi-tsien-prompt-inspector` |
 | `extensions/trajectory-recorder.ts` | `pi-tsien-trajectory-recorder` |
+## live 切换记录（批次 4）
+
+- 备份：`~/.pi/agent/settings.json.pre-packages-migration-20260926-001541`、同后缀的 `extensions.config.json`
+  （第一次尝试的备份 `...-001446` 也保留）。
+- 改动：按「旧路径 → 新路径」映射替换 `settings.json` 的 `extensions`（24 条改写，4 条外部条目原样保留）、
+  重建 `packages[]`；`extensions.config.json` 的 loadOrder 改写 25 条、保留 knowledge / remote-notifications / security-guard；
+  **不改动顺序、不碰 marketplace 插件条目**（避免触发无关的 quarantine）。
+- 复核 1（同步器 dry-run）：只剩迁移前就存在的 `auto extension - security-guard.ts -> quarantine`，无其它漂移。
+- 复核 2（live 真机 `pi -p`）：25 个扩展全部从 `packages/*` 加载（TOTAL 1835ms），`capability_ls` 返回 `classify-text`、
+  `WebSearch` 返回 `Pi Coding Agent / https://pi.dev/`；`memory_doctor` 未出现在工具列表属**预期**（它是「高级工具」，由 `advancedToolsEnabled` 控制）。
+- 顺带修掉一个**试点阶段引入的回归**：live 里 `session-aliases.ts` / `capability.ts` 两条仍指向已搬走的旧文件
+  （试点只改了仓库配置、没同步 live），本次一并修正。同时把 3 个旧包 id（`web-tools`/`session-aliases`/`capability`）
+  统一成目录名，消除「id ≠ 目录」的隐患。
+- 回滚：把上述备份复制回 `~/.pi/agent/` 即可。
+
+## 校验入口
+
+```bash
+npm run parity:capture   # 抓当前布局的指纹基线
+npm run parity:check     # 与基线逐条比对（不一致 exit=1）
+```
+基线已按新布局重抓（`test/fixtures/extension-parity-baseline.json`，25 条目全在 `packages/*`）。
