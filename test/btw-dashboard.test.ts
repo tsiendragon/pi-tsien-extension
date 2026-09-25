@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { BtwDashboardAdapter } from "../extensions/btw/bridge.ts";
+import { BtwDashboardAdapter } from "pi-tsien-side-chat/src/bridge.ts";
 
 function context(): ExtensionContext {
   return {

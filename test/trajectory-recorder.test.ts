@@ -8,7 +8,7 @@ import {
   extractProviderThinking,
   registerTrajectoryRecorder,
   toJsonSafe,
-} from "../extensions/trajectory-recorder.ts";
+} from "pi-tsien-trajectory-recorder/src/index.ts";
 
 type Handler = (event: any, ctx: ExtensionContext) => unknown;
 

@@ -14,8 +14,8 @@
 
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
-import { digestText } from "../extensions/tool-result-pipeline/bash-digest/model.ts";
-import { decideDigest, loadBashDigestConfig } from "../extensions/tool-result-pipeline/bash-digest/core.ts";
+import { digestText } from "pi-tsien-rtk-fork/src/bash-digest/model.ts";
+import { decideDigest, loadBashDigestConfig } from "pi-tsien-rtk-fork/src/bash-digest/core.ts";
 import { collectBashResults, stratifiedSample } from "./bash-digest-scan.ts";
 
 interface Bucket {

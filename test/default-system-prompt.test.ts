@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ACTION_GUIDELINES, adjustGuidelinesSection, replaceSystemPromptIntro } from "../extensions/default-system-prompt.ts";
+import { ACTION_GUIDELINES, adjustGuidelinesSection, replaceSystemPromptIntro } from "pi-tsien-default-system-prompt/src/index.ts";
 
 test("replaces only the built-in introduction and retains tool guidance", () => {
   const original = [

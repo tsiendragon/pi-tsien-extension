@@ -22,7 +22,7 @@ import {
 	preclean,
 	renderDigest,
 	stripAnsi,
-} from "../extensions/tool-result-pipeline/bash-digest/core.ts";
+} from "pi-tsien-rtk-fork/src/bash-digest/core.ts";
 
 const config = { ...DEFAULT_BASH_DIGEST_CONFIG, enabled: true };
 

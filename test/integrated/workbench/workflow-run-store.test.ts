@@ -7,9 +7,9 @@ import {
   saveWorkflowRun,
   validateWorkflowRunWorkId,
   workflowRunPath,
-} from "../../../extensions/subagent-workbench/src/workflow-run-store.ts";
-import type { WorkbenchWorkflowResult } from "../../../extensions/subagent-workbench/src/workbench-controller.ts";
-import type { SavedWorkflowDefinition } from "../../../extensions/subagent-workbench/src/workflow-store.ts";
+} from "pi-tsien-subagent-workbench/src/workflow-run-store.ts";
+import type { WorkbenchWorkflowResult } from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
+import type { SavedWorkflowDefinition } from "pi-tsien-subagent-workbench/src/workflow-store.ts";
 
 const directories: string[] = [];
 

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleGoalCommand, parseGoalCommand, registerGoalCommand } from "../../../extensions/goal/src/commands.ts";
-import { GOAL_CUSTOM_TYPE } from "../../../extensions/goal/src/state.ts";
+import { handleGoalCommand, parseGoalCommand, registerGoalCommand } from "pi-tsien-goal/src/commands.ts";
+import { GOAL_CUSTOM_TYPE } from "pi-tsien-goal/src/state.ts";
 
-import type { GoalProposalGenerator } from "../../../extensions/goal/src/goal-prep.ts";
+import type { GoalProposalGenerator } from "pi-tsien-goal/src/goal-prep.ts";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { GoalStateEntry } from "../../../extensions/goal/src/types.ts";
+import type { GoalStateEntry } from "pi-tsien-goal/src/types.ts";
 
 function createHarness(
 	options: {

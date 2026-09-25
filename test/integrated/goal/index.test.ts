@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import goalExtension from "../../../extensions/goal/src/index.ts";
+import goalExtension from "pi-tsien-goal/src/index.ts";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

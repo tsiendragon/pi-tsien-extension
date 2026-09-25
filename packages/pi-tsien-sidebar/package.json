@@ -1,0 +1,18 @@
+{
+  "name": "pi-tsien-sidebar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Custom sidebar for the pi TUI.",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

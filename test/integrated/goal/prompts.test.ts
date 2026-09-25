@@ -6,10 +6,10 @@ import {
 	renderGoalContext,
 	renderGoalStartPrompt,
 	renderContinuationPrompt,
-} from "../../../extensions/goal/src/prompts.ts";
-import { createGoalContextMessage, filterGoalContextMessages } from "../../../extensions/goal/src/runtime.ts";
+} from "pi-tsien-goal/src/prompts.ts";
+import { createGoalContextMessage, filterGoalContextMessages } from "pi-tsien-goal/src/runtime.ts";
 
-import type { GoalState } from "../../../extensions/goal/src/types.ts";
+import type { GoalState } from "pi-tsien-goal/src/types.ts";
 
 function goal(overrides: Partial<GoalState> = {}): GoalState {
 	return {

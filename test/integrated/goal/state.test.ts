@@ -7,9 +7,9 @@ import {
 	MAX_OBJECTIVE_LENGTH,
 	reduceGoalState,
 	saveGoalState,
-} from "../../../extensions/goal/src/state.ts";
+} from "pi-tsien-goal/src/state.ts";
 
-import type { GoalSourceDoc, GoalState, GoalStateEvent, GoalStateEntry } from "../../../extensions/goal/src/types.ts";
+import type { GoalSourceDoc, GoalState, GoalStateEvent, GoalStateEntry } from "pi-tsien-goal/src/types.ts";
 
 const baseTime = 1_700_000_000_000;
 

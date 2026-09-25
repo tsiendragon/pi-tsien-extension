@@ -8,8 +8,8 @@ import {
   type ProviderRunRequest,
   type SubagentProvider,
   type SubagentServiceEvent,
-} from "../../../extensions/subagent-workbench/src/subagent-service.ts";
-import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
+} from "pi-tsien-subagent-workbench/src/subagent-service.ts";
+import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

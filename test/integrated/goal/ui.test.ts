@@ -13,12 +13,12 @@ import {
 	renderGoalWidget,
 	renderGoalWidgetPresentation,
 	showGoalBlockers,
-} from "../../../extensions/goal/src/ui.ts";
-import { registerGoalRuntime } from "../../../extensions/goal/src/runtime.ts";
-import { saveGoalState } from "../../../extensions/goal/src/state.ts";
+} from "pi-tsien-goal/src/ui.ts";
+import { registerGoalRuntime } from "pi-tsien-goal/src/runtime.ts";
+import { saveGoalState } from "pi-tsien-goal/src/state.ts";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { GoalState, GoalStateEntry, GoalStateEvent } from "../../../extensions/goal/src/types.ts";
+import type { GoalState, GoalStateEntry, GoalStateEvent } from "pi-tsien-goal/src/types.ts";
 
 function goal(overrides: Partial<GoalState> = {}): GoalState {
 	return {

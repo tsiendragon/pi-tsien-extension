@@ -22,12 +22,12 @@ import {
 import {
 	createBashDigestStage,
 	type ToolResultStage,
-} from "../extensions/tool-result-pipeline/stages/bash-digest.ts";
+} from "pi-tsien-rtk-fork/src/stages/bash-digest.ts";
 import {
 	estimateTokens,
 	loadBashDigestConfig,
-} from "../extensions/tool-result-pipeline/bash-digest/core.ts";
-import { loadObservationPackConfig, resolveSessionRoot } from "../extensions/observation-pack/core.ts";
+} from "pi-tsien-rtk-fork/src/bash-digest/core.ts";
+import { loadObservationPackConfig, resolveSessionRoot } from "pi-tsien-observation-pack/src/core.ts";
 
 const SESSION_ID = `smoke-bash-digest-${Date.now()}`;
 

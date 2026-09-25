@@ -8,8 +8,8 @@ import {
   emptyAgentResult,
   type ProviderRunRequest,
   type SubagentProvider,
-} from "../../../extensions/subagent-workbench/src/subagent-service.ts";
-import { WorkbenchRuntimeHost } from "../../../extensions/subagent-workbench/src/runtime.ts";
+} from "pi-tsien-subagent-workbench/src/subagent-service.ts";
+import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
 
 function provider(
   run: (request: ProviderRunRequest) => ReturnType<SubagentProvider["run"]>,

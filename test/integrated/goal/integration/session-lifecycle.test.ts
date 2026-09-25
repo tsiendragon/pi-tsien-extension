@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { handleGoalCommand } from "../../../../extensions/goal/src/commands.ts";
+import { handleGoalCommand } from "pi-tsien-goal/src/commands.ts";
 import {
 	createGoalCompaction,
 	createGoalContextMessage,
@@ -12,17 +12,17 @@ import {
 	maybeQueueGoalContinuation,
 	registerGoalRuntime,
 	startQueuedGoalContinuation,
-} from "../../../../extensions/goal/src/runtime.ts";
-import { createGoalStateSnapshot, GOAL_CUSTOM_TYPE, saveGoalState } from "../../../../extensions/goal/src/state.ts";
+} from "pi-tsien-goal/src/runtime.ts";
+import { createGoalStateSnapshot, GOAL_CUSTOM_TYPE, saveGoalState } from "pi-tsien-goal/src/state.ts";
 import {
 	executeCompleteGoal,
 	executeCreateGoal,
 	executeGetGoal,
 	executeUpdateGoalProgress,
-} from "../../../../extensions/goal/src/tools.ts";
+} from "pi-tsien-goal/src/tools.ts";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { GoalState, GoalStateEntry, GoalStateEvent } from "../../../../extensions/goal/src/types.ts";
+import type { GoalState, GoalStateEntry, GoalStateEvent } from "pi-tsien-goal/src/types.ts";
 
 interface BranchEntry {
 	type: string;

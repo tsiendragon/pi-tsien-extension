@@ -19,6 +19,101 @@
       "id": "capability",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-capability",
       "autoload": false
+    },
+    {
+      "id": "pi-tsien-compact-continue",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-compact-continue",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-default-system-prompt",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-default-system-prompt",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-thinking-level",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-thinking-level",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-git-graph",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-git-graph",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-metrics-sidebar",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-metrics-sidebar",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-sidebar",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-sidebar",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-usage-analytics",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-usage-analytics",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-prompt-inspector",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-prompt-inspector",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-trajectory-recorder",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-trajectory-recorder",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-rtk-fork",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-rtk-fork",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-session-ui-fork",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-session-ui-fork",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-goal",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-goal",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-memory",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-memory",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-code-mode",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-code-mode",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-observation-pack",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-observation-pack",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-subagent-workbench",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-subagent-workbench",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-side-chat",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-side-chat",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-running-commands",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-running-commands",
+      "autoload": false
+    },
+    {
+      "id": "pi-tsien-schedule",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-schedule",
+      "autoload": false
     }
   ],
   "loadOrder": [
@@ -27,96 +122,96 @@
       "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/tool-result-pipeline.ts"
+      "package": "pi-tsien-rtk-fork",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/00-zero.ts"
+      "package": "pi-tsien-session-ui-fork",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/btw.ts"
+      "package": "pi-tsien-side-chat",
+      "path": "src/index.ts"
     },
     {
       "package": "tsien",
       "path": "extensions/auto-compact-target.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/compact-continue.ts"
+      "package": "pi-tsien-compact-continue",
+      "path": "src/index.ts"
     },
     {
       "package": "tsien",
       "path": "extensions/context-powerline.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/default-system-prompt.ts"
+      "package": "pi-tsien-default-system-prompt",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/effort.ts"
+      "package": "pi-tsien-thinking-level",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/git-graph.ts"
+      "package": "pi-tsien-git-graph",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/goal.ts"
+      "package": "pi-tsien-goal",
+      "path": "src/index.ts"
     },
     {
       "package": "tsien",
       "path": "extensions/live-session.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/memory.ts"
+      "package": "pi-tsien-memory",
+      "path": "src/extension/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/metrics-sidebar.ts"
+      "package": "pi-tsien-metrics-sidebar",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/ptc.ts"
+      "package": "pi-tsien-code-mode",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/running-commands.ts"
+      "package": "pi-tsien-running-commands",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/schedule.ts"
+      "package": "pi-tsien-schedule",
+      "path": "src/index.ts"
     },
     {
       "package": "session-aliases",
       "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/sidebar.ts"
+      "package": "pi-tsien-sidebar",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/subagent-workbench.ts"
+      "package": "pi-tsien-subagent-workbench",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/usage-analytics.ts"
+      "package": "pi-tsien-usage-analytics",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/prompt-inspector.ts"
+      "package": "pi-tsien-prompt-inspector",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/observation-pack.ts"
+      "package": "pi-tsien-observation-pack",
+      "path": "src/index.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/trajectory-recorder.ts"
+      "package": "pi-tsien-trajectory-recorder",
+      "path": "src/index.ts"
     },
     {
       "package": "capability",

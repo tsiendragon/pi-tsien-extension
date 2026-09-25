@@ -1,0 +1,24 @@
+{
+  "name": "pi-tsien-rtk-fork",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tool-result pipeline incl. merged RTK fusion (third-party fork, see PROVENANCE.md).",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "src",
+    "ATTRIBUTION.md",
+    "PROVENANCE.md",
+    "README.md"
+  ]
+}
