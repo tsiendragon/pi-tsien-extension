@@ -1,0 +1,2168 @@
+{
+  "label": "before",
+  "config": "config/extensions.standalone.json",
+  "entryCount": 25,
+  "entries": [
+    {
+      "index": 1,
+      "package": "web-tools",
+      "path": "src/index.ts",
+      "status": "ok",
+      "tools": [
+        "WebFetch",
+        "WebSearch"
+      ],
+      "commands": [],
+      "handlers": {
+        "session_start": 1
+      },
+      "callCount": 3,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Search the web and return a list\u2026\",execute:fn,label:\"Web Search\",name:\"WebSearch\",parameters:{properties:{limit:{2},query:{2}},required:[\"query\"],type:\"object\"}}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Fetch a web page and extract its\u2026\",execute:fn,label:\"Web Fetch\",name:\"WebFetch\",parameters:{properties:{prompt:{2},url:{2}},required:[\"url\"],type:\"object\"}}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 2,
+      "package": "tsien",
+      "path": "extensions/tool-result-pipeline.ts",
+      "status": "ok",
+      "tools": [
+        "rtk_configure"
+      ],
+      "commands": [
+        "rtk-clear",
+        "rtk-off",
+        "rtk-on",
+        "rtk-stats",
+        "rtk-toggle-ansiStripping",
+        "rtk-toggle-buildOutputFiltering",
+        "rtk-toggle-gitCompaction",
+        "rtk-toggle-linterAggregation",
+        "rtk-toggle-searchResultGrouping",
+        "rtk-toggle-smartTruncation",
+        "rtk-toggle-sourceCodeFiltering",
+        "rtk-toggle-testOutputAggregation",
+        "rtk-toggle-truncation",
+        "rtk-what"
+      ],
+      "handlers": {
+        "before_agent_start": 1,
+        "session_start": 1,
+        "tool_result": 1
+      },
+      "callCount": 18,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-stats\"",
+            "{description:\"Show RTK token savings statistic\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-on\"",
+            "{description:\"Enable RTK token reduction\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-off\"",
+            "{description:\"Disable RTK token reduction\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-ansiStripping\"",
+            "{description:\"Toggle the ansiStripping techniq\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-testOutputAggregation\"",
+            "{description:\"Toggle the testOutputAggregation\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-buildOutputFiltering\"",
+            "{description:\"Toggle the buildOutputFiltering \u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-gitCompaction\"",
+            "{description:\"Toggle the gitCompaction techniq\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-searchResultGrouping\"",
+            "{description:\"Toggle the searchResultGrouping \u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-linterAggregation\"",
+            "{description:\"Toggle the linterAggregation tec\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-truncation\"",
+            "{description:\"Toggle output truncation on/off\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-sourceCodeFiltering\"",
+            "{description:\"Toggle source code filtering on/\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-toggle-smartTruncation\"",
+            "{description:\"Toggle smart truncation on/off\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-clear\"",
+            "{description:\"Clear RTK metrics history\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"rtk-what\"",
+            "{description:\"Show current RTK technique confi\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Configure RTK token-reduction te\u2026\",execute:fn,label:\"RTK Configure\",name:\"rtk_configure\",parameters:{properties:{ansiStripping:{2},buildOutputFiltering:{2},gitCompaction:{2},linterAggregation:{2},searchResultGrouping:{2},smartTruncationEnabled:{2},smartTruncationMaxLines:{2},sourceCodeFilteringEnabled:{2},sourceCodeFilteringLevel:{3},testOutputAggregation:{2},truncationEnabled:{2},truncationMaxChars:{2}},type:\"object\"}}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_result\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 3,
+      "package": "tsien",
+      "path": "extensions/00-zero.ts",
+      "status": "ok",
+      "tools": [
+        "write"
+      ],
+      "commands": [
+        "ccstyle",
+        "context",
+        "powerline",
+        "transcript",
+        "vibe"
+      ],
+      "handlers": {
+        "agent_end": 3,
+        "agent_settled": 1,
+        "agent_start": 2,
+        "before_agent_start": 2,
+        "message_end": 1,
+        "message_update": 3,
+        "session_compact": 1,
+        "session_shutdown": 6,
+        "session_start": 4,
+        "thinking_level_select": 1,
+        "tool_call": 1,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1,
+        "tool_execution_update": 1,
+        "tool_result": 1,
+        "turn_end": 2,
+        "turn_start": 2
+      },
+      "callCount": 41,
+      "calls": [
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"context\"",
+            "{description:\"Show the current context-window \u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "getAllTools",
+          []
+        ],
+        [
+          "getAllTools.find",
+          [
+            "fn"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{constrainedSampling:{strict:\"prefer\",type:\"json_schema\"},description:\"Write content to a file. Creates\u2026\",execute:fn,label:\"write\",name:\"write\",parameters:{properties:{content:{2},path:{2}},required:[\"path\",\"content\"],type:\"object\"},promptGuidelines:[\"Use write only for new files or \u2026\"],promptSnippet:\"Create or overwrite files\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"ccstyle\"",
+            "{description:\"Configure Claude Code style, fix\u2026\",getArgumentCompletions:fn,handler:fn}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"transcript\"",
+            "{description:\"Control transcript history windo\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"thinking_level_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_call\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_result\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"vibe\"",
+            "{description:\"Set working message theme. Usage\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"powerline\"",
+            "{description:\"Configure powerline status (on, \u2026\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 4,
+      "package": "tsien",
+      "path": "extensions/btw.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "btw"
+      ],
+      "handlers": {
+        "session_shutdown": 1,
+        "session_start": 1
+      },
+      "callCount": 3,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"btw\"",
+            "{description:\"\u6253\u5f00\u8bfb\u53d6\u4e3b\u4f1a\u8bdd\u5386\u53f2\u3001\u4ec5\u53ef\u8bfb\u6587\u4ef6\u7684\u4e34\u65f6\u4fa7\u804a\u7a97\u53e3\",handler:fn}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 5,
+      "package": "tsien",
+      "path": "extensions/auto-compact-target.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [],
+      "handlers": {
+        "agent_settled": 1,
+        "context": 1,
+        "model_select": 1,
+        "session_start": 1
+      },
+      "callCount": 4,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"model_select\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 6,
+      "package": "tsien",
+      "path": "extensions/compact-continue.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [],
+      "handlers": {
+        "session_compact": 1
+      },
+      "callCount": 1,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_compact\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 7,
+      "package": "tsien",
+      "path": "extensions/context-powerline.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [],
+      "handlers": {
+        "agent_settled": 1,
+        "context": 1,
+        "message_end": 1,
+        "model_select": 1,
+        "session_compact": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "thinking_level_select": 1
+      },
+      "callCount": 8,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"model_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"thinking_level_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 8,
+      "package": "tsien",
+      "path": "extensions/default-system-prompt.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [],
+      "handlers": {
+        "before_agent_start": 1
+      },
+      "callCount": 1,
+      "calls": [
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 9,
+      "package": "tsien",
+      "path": "extensions/effort.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "effort"
+      ],
+      "handlers": {},
+      "callCount": 1,
+      "calls": [
+        [
+          "registerCommand",
+          [
+            "\"effort\"",
+            "{description:\"\u76f4\u63a5\u8c03\u6574 thinking level\uff1aoff|minimal|\u2026\",getArgumentCompletions:fn,handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 10,
+      "package": "tsien",
+      "path": "extensions/git-graph.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "git-graph"
+      ],
+      "handlers": {},
+      "callCount": 1,
+      "calls": [
+        [
+          "registerCommand",
+          [
+            "\"git-graph\"",
+            "{description:\"\u6253\u5f00\u5f53\u524d\u4ed3\u5e93\u7684 Git \u6982\u89c8\u56fe\uff08\u672c\u5730\u4e0e\u8fdc\u7aef\u5f15\u7528\uff0c\u666e\u901a\u63d0\u4ea4\u81ea\u52a8\u6298\u53e0\u2026\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 11,
+      "package": "tsien",
+      "path": "extensions/goal.ts",
+      "status": "ok",
+      "tools": [
+        "complete_goal",
+        "create_goal",
+        "get_goal",
+        "pause_goal",
+        "propose_goal_draft",
+        "update_goal_graph",
+        "update_goal_progress"
+      ],
+      "commands": [
+        "goal"
+      ],
+      "handlers": {
+        "agent_settled": 1,
+        "before_agent_start": 1,
+        "context": 1,
+        "input": 1,
+        "session_before_compact": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "session_tree": 1
+      },
+      "callCount": 18,
+      "calls": [
+        [
+          "registerCommand",
+          [
+            "\"goal\"",
+            "{description:\"Set or view the goal for a long-\u2026\",getArgumentCompletions:fn,handler:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Get the current long-running goa\u2026\",execute:fn,label:\"Get Goal\",name:\"get_goal\",parameters:{additionalProperties:false,properties:{},type:\"object\"},promptSnippet:\"Use get_goal to read the current\u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Create a goal only when explicit\u2026\",execute:fn,label:\"Create Goal\",name:\"create_goal\",parameters:{additionalProperties:false,properties:{acceptance_criteria:{3},explicit_request:{2},objective:{2},source_paths:{3}},required:[\"objective\",\"explicit_request\"],type:\"object\"},promptSnippet:\"Use create_goal to persist a use\u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Open a structured /goal draft fo\u2026\",execute:fn,label:\"Propose Goal Draft\",name:\"propose_goal_draft\",parameters:{additionalProperties:false,properties:{acceptanceCriteria:{4},commandId:{2},description:{2},draftId:{2},objective:{2},sourcePaths:{3},startImmediately:{2}},required:[\"objective\",\"acceptanceCriteria\"],type:\"object\"},promptSnippet:\"Use propose_goal_draft to draft \u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Mark the active goal complete on\u2026\",execute:fn,label:\"Complete Goal\",name:\"complete_goal\",parameters:{additionalProperties:false,properties:{evidence:{2}},type:\"object\"},promptSnippet:\"Use complete_goal to mark the cu\u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Pause the active goal only when \u2026\",execute:fn,label:\"Pause Goal\",name:\"pause_goal\",parameters:{additionalProperties:false,properties:{reason:{2}},required:[\"reason\"],type:\"object\"},promptSnippet:\"Use pause_goal with a concrete r\u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Update work items and structured\u2026\",execute:fn,label:\"Update Goal Work Graph\",name:\"update_goal_graph\",parameters:{additionalProperties:false,properties:{attempt:{4},blockers:{3},workItems:{3}},type:\"object\"},promptSnippet:\"Use update_goal_graph to record \u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Update execution progress for th\u2026\",execute:fn,label:\"Update Goal Progress\",name:\"update_goal_progress\",parameters:{additionalProperties:false,minProperties:1,properties:{blocked:{3},current:{2},done:{3},summary:{2}},type:\"object\"},promptSnippet:\"Use update_goal_progress to upda\u2026\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerFlag",
+          [
+            "\"goal-continuation\"",
+            "{default:true,description:\"Enable or disable automatic 20-m\u2026\",type:\"boolean\"}"
+          ]
+        ],
+        [
+          "registerFlag",
+          [
+            "\"goal-continuation-interval-minut\u2026\"",
+            "{default:\"20\",description:\"Minutes between automatic active\u2026\",type:\"string\"}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_before_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"input\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_tree\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 12,
+      "package": "tsien",
+      "path": "extensions/live-session.ts",
+      "status": "ok",
+      "tools": [
+        "set_session_title"
+      ],
+      "commands": [
+        "dashboard-release",
+        "live-session-reload",
+        "ls-fork",
+        "ls-navigate"
+      ],
+      "handlers": {
+        "agent_end": 1,
+        "agent_settled": 1,
+        "agent_start": 1,
+        "extension_ui": 1,
+        "extension_ui_notify": 1,
+        "input": 1,
+        "message_end": 1,
+        "message_start": 1,
+        "message_update": 1,
+        "model_select": 1,
+        "session_compact": 1,
+        "session_info_changed": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "session_tree": 1,
+        "thinking_level_select": 1,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1,
+        "tool_execution_update": 1,
+        "turn_end": 1,
+        "turn_start": 1
+      },
+      "callCount": 26,
+      "calls": [
+        [
+          "registerTool",
+          [
+            "{description:\"Set a short natural-language tit\u2026\",execute:fn,label:\"Set session title\",name:\"set_session_title\",parameters:{properties:{title:{4}},required:[\"title\"],type:\"object\"},promptSnippet:\"Set the current session's short \u2026\"}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"dashboard-release\"",
+            "{description:\"\u7acb\u5373\u91ca\u653e Dashboard \u5bf9\u5f53\u524d session \u7684\u5f3a\u63a7\u5236\u6743\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"live-session-reload\"",
+            "{description:\"\u901a\u8fc7 live-session \u89e6\u53d1 reload\uff08\u91cd\u8f7d ext\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"ls-navigate\"",
+            "{description:\"\u5207\u6362\u5230\u4f1a\u8bdd\u6811\u7684\u6307\u5b9a\u8282\u70b9\uff08pi-dashboard \u56fe\u8c31\u9875\u8c03\u7528\uff09\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"ls-fork\"",
+            "{description:\"\u4ece\u4f1a\u8bdd\u6811\u7684\u6307\u5b9a\u8282\u70b9\u5206\u53c9\u51fa\u65b0\u4f1a\u8bdd\uff08pi-dashboard \u56fe\u8c31\u9875\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_info_changed\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_tree\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"model_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"thinking_level_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"extension_ui\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"extension_ui_notify\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"input\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 13,
+      "package": "tsien",
+      "path": "extensions/memory.ts",
+      "status": "ok",
+      "tools": [
+        "memory_doctor",
+        "memory_forget",
+        "memory_promote_dismiss",
+        "memory_promote_preview",
+        "memory_remember",
+        "memory_review",
+        "memory_search",
+        "memory_undo",
+        "memory_update",
+        "memory_verify_application"
+      ],
+      "commands": [
+        "memory"
+      ],
+      "handlers": {
+        "agent_end": 1,
+        "agent_settled": 1,
+        "before_agent_start": 1,
+        "context": 1,
+        "input": 1,
+        "session_before_compact": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "tool_result": 1
+      },
+      "callCount": 20,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"input\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_result\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_before_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"read\",description:\"Search historical user preferenc\u2026\",execute:fn,label:\"Memory Search\",name:\"memory_search\",parameters:{additionalProperties:false,properties:{limit:{3},query:{2},scope:{1},statuses:{2}},required:[\"query\"],type:\"object\"},promptSnippet:\"Search long-term memory without \u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Persist an explicit user prefere\u2026\",execute:fn,label:\"Remember\",name:\"memory_remember\",parameters:{additionalProperties:false,properties:{content:{2},scope:{1}},required:[\"content\"],type:\"object\"},promptSnippet:\"Save an explicit memory with sco\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Replace a uniquely identified me\u2026\",execute:fn,label:\"Update Memory\",name:\"memory_update\",parameters:{additionalProperties:false,properties:{replacement:{2},target:{2}},required:[\"target\",\"replacement\"],type:\"object\"},promptSnippet:\"Correct one existing memory with\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Forget memory content and all ma\u2026\",execute:fn,label:\"Forget Memory\",name:\"memory_forget\",parameters:{additionalProperties:false,properties:{confirmationToken:{2},target:{2}},required:[\"target\"],type:\"object\"},promptSnippet:\"Preview and then irreversibly fo\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"List, accept, or reject candidat\u2026\",execute:fn,label:\"Review Memory Candidates\",name:\"memory_review\",parameters:{additionalProperties:false,properties:{action:{1},target:{1}},required:[\"action\"],type:\"object\"},promptSnippet:\"Review candidate memories\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Undo a recent create, update, ac\u2026\",execute:fn,label:\"Undo Memory Mutation\",name:\"memory_undo\",parameters:{additionalProperties:false,properties:{receiptId:{2}},required:[\"receiptId\"],type:\"object\"},promptSnippet:\"Undo the latest reversible Memor\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Record a user-confirmed successf\u2026\",execute:fn,label:\"Verify Memory Application\",name:\"memory_verify_application\",parameters:{additionalProperties:false,properties:{target:{2},taskKey:{2}},required:[\"target\",\"taskKey\"],type:\"object\"}}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Generate a local JSON/Markdown p\u2026\",execute:fn,label:\"Promotion Preview\",name:\"memory_promote_preview\",parameters:{additionalProperties:false,properties:{target:{2}},required:[\"target\"],type:\"object\"},promptSnippet:\"Preview a privacy-reviewed knowl\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"write\",description:\"Dismiss or snooze a local promot\u2026\",execute:fn,label:\"Dismiss Promotion\",name:\"memory_promote_dismiss\",parameters:{additionalProperties:false,properties:{proposalId:{2},snoozeUntil:{2}},required:[\"proposalId\"],type:\"object\"}}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{approval:\"read\",description:\"Check local Memory SQLite, FTS5,\u2026\",execute:fn,label:\"Memory Doctor\",name:\"memory_doctor\",parameters:{additionalProperties:false,properties:{repairIndex:{2}},required:[],type:\"object\"},promptSnippet:\"Diagnose local memory storage\"}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"memory\"",
+            "{description:\"Inspect local memory; /memory ad\u2026\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 14,
+      "package": "tsien",
+      "path": "extensions/metrics-sidebar.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "metrics-sidebar"
+      ],
+      "handlers": {
+        "message_end": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "session_tree": 1
+      },
+      "callCount": 6,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_tree\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerShortcut",
+          [
+            "\"ctrl+alt+m\"",
+            "{description:\"\u6253\u5f00\u6216\u5173\u95ed\u4e3b\u4f1a\u8bdd\u7f13\u5b58\u6307\u6807\u5f39\u7a97\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"metrics-sidebar\"",
+            "{description:\"\u663e\u793a\u4e3b\u4f1a\u8bdd Prompt \u7f13\u5b58\u6307\u6807\u5f39\u7a97\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 15,
+      "package": "tsien",
+      "path": "extensions/ptc.ts",
+      "status": "ok",
+      "tools": [
+        "run_code"
+      ],
+      "commands": [],
+      "handlers": {
+        "agent_settled": 1,
+        "before_agent_start": 1,
+        "message_end": 1,
+        "model_select": 1,
+        "session_shutdown": 1,
+        "session_start": 1
+      },
+      "callCount": 7,
+      "calls": [
+        [
+          "registerTool",
+          [
+            "{description:\"Run one TypeScript program that \u2026\",execute:fn,executionMode:\"sequential\",label:\"Code Mode\",name:\"run_code\",parameters:{additionalProperties:false,properties:{code:{2},description:{2},resultContract:{3}},required:[\"code\",\"description\"],type:\"object\"},promptSnippet:\"\u9ed8\u8ba4\u9996\u9009\uff1a\u53ea\u8981\u4efb\u52a1\u9700\u8981\u591a\u6b21\u5de5\u5177\u8c03\u7528\u3001\u5faa\u73af\u3001\u5206\u652f\u3001\u5e76\u884c\u3001\u6279\u91cf\u8bfb\u53d6\u3001\u2026\"}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"model_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 16,
+      "package": "tsien",
+      "path": "extensions/running-commands.ts",
+      "status": "ok",
+      "tools": [
+        "background_command_cancel",
+        "background_command_output",
+        "background_command_start",
+        "background_command_status"
+      ],
+      "commands": [],
+      "handlers": {
+        "session_shutdown": 1,
+        "session_start": 1,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1,
+        "tool_execution_update": 1
+      },
+      "callCount": 9,
+      "calls": [
+        [
+          "registerTool",
+          [
+            "{description:\"Start a user-requested Bash comm\u2026\",execute:fn,executionMode:\"parallel\",label:\"Start background command\",name:\"background_command_start\",parameters:{additionalProperties:false,properties:{command:{3},timeout:{3},title:{3}},required:[\"command\"],type:\"object\"},promptSnippet:\"Start a requested Bash command i\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Return the current state and met\u2026\",execute:fn,executionMode:\"parallel\",label:\"Background command status\",name:\"background_command_status\",parameters:{additionalProperties:false,properties:{taskId:{3}},required:[\"taskId\"],type:\"object\"},promptSnippet:\"Inspect one current-Session back\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Read a bounded in-memory output \u2026\",execute:fn,executionMode:\"parallel\",label:\"Background command output\",name:\"background_command_output\",parameters:{additionalProperties:false,properties:{tailLines:{4},taskId:{3}},required:[\"taskId\"],type:\"object\"},promptSnippet:\"Read a bounded output tail from \u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Cancel one current-Session backg\u2026\",execute:fn,executionMode:\"parallel\",label:\"Cancel background command\",name:\"background_command_cancel\",parameters:{additionalProperties:false,properties:{taskId:{3}},required:[\"taskId\"],type:\"object\"},promptSnippet:\"Cancel one current-Session backg\u2026\"}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 17,
+      "package": "tsien",
+      "path": "extensions/schedule.ts",
+      "status": "ok",
+      "tools": [
+        "schedule"
+      ],
+      "commands": [
+        "schedule"
+      ],
+      "handlers": {
+        "session_shutdown": 1,
+        "session_start": 1
+      },
+      "callCount": 4,
+      "calls": [
+        [
+          "registerTool",
+          [
+            "{description:\"Create, list, or cancel current-\u2026\",execute:fn,label:\"Schedule\",name:\"schedule\",parameters:{properties:{action:{2},delayMinutes:{2},id:{2},instruction:{2},intervalMinutes:{2},title:{2}},required:[\"action\"],type:\"object\"},promptSnippet:\"Proactively schedule current-ses\u2026\"}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"schedule\"",
+            "{description:\"\u7ba1\u7406\u5f53\u524d\u4f1a\u8bdd\u5b9a\u65f6\u4efb\u52a1\uff1ain 30m <\u6307\u4ee4> | every 3\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 18,
+      "package": "tsien",
+      "path": "extensions/session-aliases.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "clear",
+        "exit"
+      ],
+      "handlers": {},
+      "callCount": 2,
+      "calls": [
+        [
+          "registerCommand",
+          [
+            "\"clear\"",
+            "{description:\"Start a fresh session\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"exit\"",
+            "{description:\"Quit pi\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 19,
+      "package": "tsien",
+      "path": "extensions/sidebar.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "sidebar"
+      ],
+      "handlers": {
+        "before_agent_start": 1,
+        "context": 1,
+        "message_end": 1,
+        "session_shutdown": 1,
+        "session_start": 1
+      },
+      "callCount": 7,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerShortcut",
+          [
+            "\"ctrl+alt+s\"",
+            "{description:\"\u663e\u793a\u6216\u9690\u85cf\u5f53\u524d\u4f1a\u8bdd\u4fe1\u606f\u4fa7\u680f\",handler:fn}"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"sidebar\"",
+            "{description:\"\u663e\u793a\u3001\u9690\u85cf\u3001\u5173\u95ed\u6216\u5207\u6362\u5f53\u524d\u4f1a\u8bdd\u4fe1\u606f\u4fa7\u680f\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 20,
+      "package": "tsien",
+      "path": "extensions/subagent-workbench.ts",
+      "status": "ok",
+      "tools": [
+        "subagent_cancel",
+        "subagent_results",
+        "subagent_start",
+        "subagent_workflow",
+        "subagent_workflow_control"
+      ],
+      "commands": [
+        "subagent-workbench"
+      ],
+      "handlers": {
+        "session_shutdown": 1,
+        "session_start": 1
+      },
+      "callCount": 8,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Run a bounded process-isolated s\u2026\",execute:fn,executionMode:\"parallel\",label:\"Subagent Workbench\",name:\"subagent_start\",parameters:{properties:{background:{2},context:{2},cwd:{2},label:{2},model:{3},task:{3},thinking:{1}},required:[\"task\"],type:\"object\"},promptSnippet:\"Delegate bounded independent wor\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Run a recoverable single task, s\u2026\",execute:fn,executionMode:\"parallel\",label:\"Subagent Workflow\",name:\"subagent_workflow\",parameters:{properties:{background:{2},dryRun:{2},javascript:{4},label:{1},name:{3},parameters:{3},record:{2},saveAs:{3},stages:{4},task:{3}},type:\"object\"},promptSnippet:\"Run recoverable single-task or s\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Pause or resume a running workfl\u2026\",execute:fn,executionMode:\"sequential\",label:\"Control Subagent Workflow\",name:\"subagent_workflow_control\",parameters:{properties:{action:{1},taskKey:{3},workId:{2}},required:[\"workId\",\"action\"],type:\"object\"},promptSnippet:\"Pause, resume, retry a workflow,\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Get status or results for subage\u2026\",execute:fn,executionMode:\"sequential\",label:\"Subagent Workbench Results\",name:\"subagent_results\",parameters:{properties:{includeOutput:{1},mode:{1},timeoutMs:{3},waitFor:{1},workIds:{4}},type:\"object\"},promptSnippet:\"Inspect or collect background su\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Best-effort cancel queued, runni\u2026\",execute:fn,executionMode:\"sequential\",label:\"Cancel Subagent Workbench Jobs\",name:\"subagent_cancel\",parameters:{properties:{reason:{1},workIds:{4}},required:[\"workIds\"],type:\"object\"},promptSnippet:\"Cancel background subagent jobs \u2026\"}"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"subagent-workbench\"",
+            "{description:\"Open or control the Subagent Con\u2026\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 21,
+      "package": "tsien",
+      "path": "extensions/usage-analytics.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "usage"
+      ],
+      "handlers": {
+        "agent_start": 1,
+        "before_agent_start": 1,
+        "input": 1,
+        "resources_discover": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1
+      },
+      "callCount": 9,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"resources_discover\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"input\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"usage\"",
+            "{description:\"\u67e5\u770b\u672c\u5730 Tool / Skill \u4f7f\u7528\u7edf\u8ba1\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 22,
+      "package": "tsien",
+      "path": "extensions/prompt-inspector.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "prompt"
+      ],
+      "handlers": {
+        "before_provider_request": 1
+      },
+      "callCount": 2,
+      "calls": [
+        [
+          "on",
+          [
+            "\"before_provider_request\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"prompt\"",
+            "{description:\"\u67e5\u770b\u5f53\u524d\u8f93\u5165\u7ed9\u5927\u6a21\u578b\u7684\u5b8c\u6574 prompt\uff08\u7cfb\u7edf\u63d0\u793a/skills\u2026\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 23,
+      "package": "tsien",
+      "path": "extensions/observation-pack.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [
+        "obs-prune"
+      ],
+      "handlers": {
+        "context": 1,
+        "session_start": 1
+      },
+      "callCount": 3,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"obs-prune\"",
+            "{description:\"\u5217\u51fa\u6216\u6e05\u7406\u8fc7\u671f\u7684 ObservationPack \u5f52\u6863\uff08\u9ed8\u8ba4 d\u2026\",handler:fn}"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 24,
+      "package": "tsien",
+      "path": "extensions/trajectory-recorder.ts",
+      "status": "ok",
+      "tools": [],
+      "commands": [],
+      "handlers": {
+        "after_provider_response": 1,
+        "agent_end": 1,
+        "agent_settled": 1,
+        "agent_start": 1,
+        "before_agent_start": 1,
+        "before_provider_headers": 1,
+        "before_provider_request": 1,
+        "context": 1,
+        "input": 1,
+        "message_end": 1,
+        "message_start": 1,
+        "message_update": 1,
+        "model_select": 1,
+        "session_before_compact": 1,
+        "session_compact": 1,
+        "session_info_changed": 1,
+        "session_shutdown": 1,
+        "session_start": 1,
+        "session_tree": 1,
+        "thinking_level_select": 1,
+        "tool_call": 1,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1,
+        "tool_execution_update": 1,
+        "tool_result": 1,
+        "turn_end": 1,
+        "turn_start": 1,
+        "user_bash": 1
+      },
+      "callCount": 28,
+      "calls": [
+        [
+          "on",
+          [
+            "\"session_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_info_changed\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"input\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"agent_settled\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"turn_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"context\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_provider_headers\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"before_provider_request\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"after_provider_response\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"message_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_start\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_call\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_update\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_result\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"tool_execution_end\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"model_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"thinking_level_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"user_bash\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_before_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_compact\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_tree\"",
+            "fn"
+          ]
+        ]
+      ]
+    },
+    {
+      "index": 25,
+      "package": "tsien",
+      "path": "extensions/capability.ts",
+      "status": "ok",
+      "tools": [
+        "capability_ls",
+        "capability_run"
+      ],
+      "commands": [
+        "capability"
+      ],
+      "handlers": {
+        "resources_discover": 1
+      },
+      "callCount": 4,
+      "calls": [
+        [
+          "on",
+          [
+            "\"resources_discover\"",
+            "fn"
+          ]
+        ],
+        [
+          "registerCommand",
+          [
+            "\"capability\"",
+            "{description:\"\u7ba1\u7406\u80fd\u529b\uff1a/capability [ls | promote <\u2026\",handler:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"List the reusable capabilities a\u2026\",execute:fn,label:\"List Capabilities\",name:\"capability_ls\",parameters:{properties:{},type:\"object\"},promptSnippet:\"Use capability_ls to see which r\u2026\"}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Run a capability's code implemen\u2026\",execute:fn,label:\"Run Capability\",name:\"capability_run\",parameters:{properties:{input:{1},name:{2}},required:[\"name\",\"input\"],type:\"object\"},promptSnippet:\"Use capability_run to execute a \u2026\"}"
+          ]
+        ]
+      ]
+    }
+  ]
+}
