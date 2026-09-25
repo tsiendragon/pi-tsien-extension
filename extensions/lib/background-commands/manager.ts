@@ -181,15 +181,6 @@ export class BackgroundCommandManager {
   readonly version = 1 as const;
   readonly registry: RunningCommandRegistry;
 
-  /** Prototype capability markers used to upgrade the singleton during /reload. */
-  get supportsTitles(): true {
-    return true;
-  }
-
-  get supportsForegroundHandoff(): true {
-    return true;
-  }
-
   private readonly maxConcurrent: number;
   private readonly maxOutputBytes: number;
   private readonly maxTailBytes: number;
@@ -307,6 +298,19 @@ export class BackgroundCommandManager {
       .filter((task) => runtimeMode(task) === "background")
       .sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id))
       .map((task) => this.snapshot(task));
+  }
+
+  /** Foreground tool executions that are still running in this Session. */
+  listForeground(): BackgroundTaskSnapshot[] {
+    return [...this.tasks.values()]
+      .filter((task) => runtimeMode(task) === "foreground" && !task.finalized)
+      .sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id))
+      .map((task) => this.snapshot(task));
+  }
+
+  /** True when foreground bash execution can be routed through this manager. */
+  canHandoffForeground(sessionId: string): boolean {
+    return !this.shuttingDown && this.sessionId === sessionId;
   }
 
   get(taskId: string): BackgroundTaskSnapshot {
@@ -901,7 +905,8 @@ export class BackgroundCommandManager {
     return {
       id: task.id,
       owner: "agent-bash",
-      mode: "background",
+      mode: runtimeMode(task),
+      ...(task.toolCallId ? { toolCallId: task.toolCallId } : {}),
       sessionId: task.sessionId,
       command: task.command,
       title,
@@ -980,13 +985,16 @@ export function getBackgroundCommandManager(): BackgroundCommandManager {
     && typeof candidate.manager.start === "function"
     && typeof candidate.manager.shutdown === "function"
   ) {
-    if (candidate.manager.supportsForegroundHandoff !== true) {
-      // /reload keeps the global manager instance; upgrade its prototype and
-      // lazy state without losing already running background tasks.
-      Object.setPrototypeOf(candidate.manager.registry, RunningCommandRegistry.prototype);
-      Object.setPrototypeOf(candidate.manager, BackgroundCommandManager.prototype);
-      candidate.manager.upgradeForForegroundHandoff();
-    }
+    // /reload keeps the global manager instance while extension modules are
+    // re-imported, so the instance still carries the prototype of whatever class
+    // version created it. A capability marker cannot detect that: an older class
+    // whose `supportsForegroundHandoff` is already true makes the marker hide
+    // methods added later (`canHandoffForeground`, `listForeground`), which broke
+    // foreground bash with "is not a function". Always re-point the instance and
+    // its registry at the current class, then re-run the idempotent lazy upgrade.
+    Object.setPrototypeOf(candidate.manager.registry, RunningCommandRegistry.prototype);
+    Object.setPrototypeOf(candidate.manager, BackgroundCommandManager.prototype);
+    candidate.manager.upgradeForForegroundHandoff();
     return candidate.manager;
   }
   const manager = new BackgroundCommandManager();

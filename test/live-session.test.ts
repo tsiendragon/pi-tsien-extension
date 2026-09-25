@@ -396,6 +396,44 @@ test("Live Session extension projects extension_ui requests and their close sign
   assert.equal((closedEvent!.event.data as any).id, "ui-1");
 });
 
+test("Live Session extension replays unanswered dialogs on resync", async () => {
+  const harness = extensionHarness();
+  const state = { idle: true, aborted: false, notifications: [] as string[] };
+  const ctx = context(state);
+  let options: LiveSessionClientOptions | undefined;
+  const published: EventMessage[] = [];
+  const handle: LiveSessionClientHandle = {
+    start: () => {}, publish: message => published.push(message), sendSnapshot: () => {}, stop: () => {},
+  };
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: value => { options = value; return handle; },
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  const onUi = harness.handlers.get("extension_ui")?.[0];
+  await onUi?.({ type: "extension_ui", id: "ui-7", method: "select", title: "Pick", options: ["a"] }, ctx);
+  published.length = 0;
+
+  // A (re)connecting client asks for a resync and must learn about the dialog pi
+  // is still blocked on; otherwise the agent waits forever with no way to answer.
+  const result = await options!.executeCommand(envelope({ type: "resync" }, "request-resync"));
+  assert.equal(result.ok, true);
+  const replay = result as { ok: true; result: { pendingUi: number } };
+  assert.equal(replay.result.pendingUi, 1);
+  const replayed = published.filter(message => message.event.type === "extension_ui");
+  assert.equal(replayed.length, 1);
+  assert.equal((replayed[0].event.data as any).id, "ui-7");
+
+  // Once the dialog is answered/closed it is no longer replayed.
+  await onUi?.({ type: "extension_ui", id: "ui-7", method: "select", title: "Pick", closed: true }, ctx);
+  published.length = 0;
+  const afterClose = await options!.executeCommand(envelope({ type: "resync" }, "request-resync-2"));
+  const afterReplay = afterClose as { ok: true; result: { pendingUi: number } };
+  assert.equal(afterReplay.result.pendingUi, 0);
+  assert.equal(published.filter(message => message.event.type === "extension_ui").length, 0);
+});
+
 test("Live Session extension answers UI requests through respondExtensionUi", async () => {
   const harness = extensionHarness();
   const state = { idle: true, aborted: false, notifications: [] as string[] };
@@ -691,4 +729,36 @@ test("a refused ls-navigate is published, not just notified", async () => {
   assert.equal(cancelled?.event.data?.action, "fork");
   assert.equal(cancelled?.event.data?.ok, false);
   assert.ok(String(cancelled?.event.data?.message).includes("已取消"));
+});
+
+test("Live Session extension binds a message's session entry id after pi persists it", async () => {
+  const harness = extensionHarness();
+  const published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "process-a", startedAt: 1 },
+    createClient: () => ({ start() {}, publish: message => published.push(message), sendSnapshot() {}, stop() {} }),
+  });
+
+  // `message_end` is emitted BEFORE `SessionManager.appendMessage` runs, so the
+  // entry only exists once the handler has returned. The id therefore arrives on
+  // a later macrotask, published as its own `message_entry` event.
+  const message = { role: "user", content: "fork me here" };
+  const entries: unknown[] = [];
+  const base = context({ idle: true, aborted: false, notifications: [] });
+  const ctx = {
+    ...base,
+    sessionManager: { ...(base as any).sessionManager, getEntries: () => entries },
+  } as unknown as ExtensionContext;
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  await harness.handlers.get("message_end")?.[0]({ message }, ctx);
+  assert.equal(published.some(entry => entry.event.type === "message_entry"), false);
+
+  entries.push({ type: "message", id: "entry-42", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const bound = published.find(entry => entry.event.type === "message_entry");
+  assert.equal((bound?.event.data as any).entryId, "entry-42");
+  assert.equal((bound?.event.data as any).message, undefined, "the carrier must stay tiny");
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });

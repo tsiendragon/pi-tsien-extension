@@ -163,6 +163,14 @@ export function registerLiveSessionExtension(
   let featureCleanup: (() => void) | undefined;
   let featurePublishTimer: ReturnType<typeof setTimeout> | undefined;
   const pendingFeatureSnapshots = new Map<string, PendingFeatureSnapshot>();
+  /**
+   * Unanswered extension UI dialogs, keyed by request id.
+   *
+   * `extension_ui` is a one-shot event, so a client that reconnects while pi is
+   * still blocked on a dialog (page switch, network blip) would never learn the
+   * request exists. Keeping the last payload lets `resync` replay it.
+   */
+  const pendingUi = new Map<string, JsonObject>();
   const inputQueue: QueuedInput[] = [];
   /**
    * A tree action outcome waiting for a connected client.
@@ -411,6 +419,12 @@ export function registerLiveSessionExtension(
           ...(command.cancelled ? { cancelled: true } : { value: command.value }),
         });
         return { ok: true, result: { accepted } };
+      }
+      if (command.type === "resync") {
+        // Replay unanswered dialogs so a client that just (re)connected can answer
+        // a request pi is still waiting on instead of leaving the agent stuck.
+        for (const payload of pendingUi.values()) publish("extension_ui", payload, ctx);
+        return { ok: true, result: { resynced: true, pendingUi: pendingUi.size } };
       }
       return { ok: true, result: { resynced: true } };
     } catch (error) {
@@ -751,6 +765,42 @@ export function registerLiveSessionExtension(
       assistantMessageEvent: event.assistantMessageEvent,
     }, ctx);
   });
+  /**
+   * Resolve the session-entry id of a message pi has just persisted.
+   *
+   * `message_end` is emitted BEFORE `SessionManager.appendMessage`, so the entry
+   * does not exist yet when the handler runs and the id has to be read on a later
+   * macrotask. `appendMessage` stores the very same message object, so an identity
+   * lookup is exact rather than a guess.
+   *
+   * It is published as a follow-up `message_entry` (never folded into
+   * `message_end`, which would reorder the transcript past tool events) and the
+   * dashboard binds it back by proximity. Without it, live transcript bubbles
+   * carry no entry id, so per-step actions like 「从此分叉」 cannot target one.
+   */
+  const publishMessageEntry = (ctx: ExtensionContext, message: unknown): void => {
+    const timer = setTimeout(() => {
+      try {
+        const manager = ctx.sessionManager as unknown as { getEntries?: () => unknown[] };
+        const entries = typeof manager.getEntries === "function" ? manager.getEntries() : [];
+        const entry = [...entries].reverse().find((candidate) => {
+          const record = candidate as Record<string, unknown> | undefined;
+          return !!record
+            && record.type === "message"
+            && record.message === message
+            && typeof record.id === "string";
+        }) as Record<string, unknown> | undefined;
+        if (typeof entry?.id !== "string") return;
+        // No ctx: the session may have been replaced in the meantime and a stale
+        // context must not overwrite the live one.
+        publish("message_entry", { entryId: entry.id });
+      } catch {
+        // Session replaced or torn down; there is nothing to bind.
+      }
+    }, 0);
+    timer.unref?.();
+  };
+
   pi.on("message_end", (event, ctx) => {
     if (!isVisibleMessage(event.message)) return;
     const record = event.message as unknown as Record<string, unknown>;
@@ -765,6 +815,7 @@ export function registerLiveSessionExtension(
       ...(completedInput ? { channel: completedInput.channel } : {}),
       ...(entryId?.id ? { entryId: entryId.id } : {}),
     }, ctx);
+    publishMessageEntry(ctx, event.message);
   });
   pi.on("tool_execution_start", (event, ctx) => publish("tool_execution_start", event, ctx));
   pi.on("tool_execution_update", (event, ctx) => publish("tool_execution_update", event, ctx));
@@ -783,22 +834,21 @@ export function registerLiveSessionExtension(
 
   pi.on("extension_ui", (event, ctx) => {
     if (event.closed) {
+      pendingUi.delete(event.id);
       publish("extension_ui_closed", { id: event.id }, ctx);
       return;
     }
-    publish(
-      "extension_ui",
-      {
-        id: event.id,
-        method: event.method,
-        title: event.title,
-        ...(event.message !== undefined ? { message: event.message } : {}),
-        ...(event.options !== undefined ? { options: event.options } : {}),
-        ...(event.placeholder !== undefined ? { placeholder: event.placeholder } : {}),
-        ...(event.prefill !== undefined ? { prefill: event.prefill } : {}),
-      },
-      ctx,
-    );
+    const payload: JsonObject = {
+      id: event.id,
+      method: event.method,
+      title: event.title,
+      ...(event.message !== undefined ? { message: event.message } : {}),
+      ...(event.options !== undefined ? { options: event.options } : {}),
+      ...(event.placeholder !== undefined ? { placeholder: event.placeholder } : {}),
+      ...(event.prefill !== undefined ? { prefill: event.prefill } : {}),
+    };
+    pendingUi.set(event.id, payload);
+    publish("extension_ui", payload, ctx);
   });
 
   // One-way notifications: /goal prints its command options via ctx.ui.notify,
