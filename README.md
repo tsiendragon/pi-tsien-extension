@@ -286,3 +286,22 @@ npm run check
 ```
 
 Pi 会直接加载 `extensions/*.ts`，无需预编译。
+
+### 重构扩展时的等价性验收（parity）
+
+移动/重写扩展前**先抓旧实现的基线**，改完必须逐条一致，通过后才删除旧实现：
+
+```bash
+# 1. 抓基线（现在这份文件在 test/fixtures/extension-parity-baseline.json，已完成）
+npm run parity:capture
+
+# 2. 重构后核对；不一致会列出条目与差异字段并以 exit=1 失败
+npm run parity:check
+```
+
+`scripts/extension-parity.mjs` 用记录式桩加载 `config/extensions.standalone.json` 里的每个扩展，
+比对**注册的工具 / 命令 / 事件处理器 / 调用签名**（不会 dump 载荷内容）。
+它已实测能抓到「少注册一个工具」「少一个命令」「少一个事件」「调用数变化」这类回归。
+
+对无法用清单表达的确定性逻辑（解析器、纯函数、prompt 文本），另加**同输入同输出**的字节级对比；
+交互式 TUI 面板只能到清单级，再加一次真实会话冒烟。

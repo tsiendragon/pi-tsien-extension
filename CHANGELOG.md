@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **新增扩展等价性验收工具（parity harness）**：`scripts/extension-parity.mjs` + `package.json` 的 `parity:capture` / `parity:check`，
+  基线固化在 `test/fixtures/extension-parity-baseline.json`（25 个扩展，0 加载错误）。
+  用途：重构/搬迁扩展前抓基线，改完 `parity:check` 必须逐条一致才允许删除旧实现。
+  验证：自比 `parity OK 25/25`；人为注入 4 处差异（少工具/少命令/少事件/调用数变化）全部被报出且 exit=1。
 - **WebSearch/WebFetch 改为自研实现**：新增 monorepo 包 `packages/pi-tsien-web-tools`（第三方副本 `vendor/pi-web-tools` 停用、保留作回滚）。
   重写要点：不依赖「属性顺序 + 双引号」的正则，改为标签扫描（单/双引号、`href` 前后皆可）并解开 `//duckduckgo.com/l/?uddg=…` 重定向；
   链接与摘要按文档顺序配对；实体解码支持数字形式，标签只把块级标签当空格（`sub-agents` 不再被拆开）；
