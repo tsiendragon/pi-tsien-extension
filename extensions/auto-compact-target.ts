@@ -10,6 +10,10 @@
  * from `reserveTokens` (`maxTokens = min(0.8 * reserveTokens, model.maxTokens)`);
  * inflating it to move the trigger would request a huge summary budget.
  *
+ * The token count itself comes from `resolveCompactionTrigger` in core.ts — the
+ * same resolver every status line (TUI bar, dashboard) uses to draw the trigger,
+ * so a display can never show a line the actor does not use.
+ *
  * Known limit: `ctx.isIdle()` guards the trigger, so compaction fires at agent
  * run boundaries (`agent_settled` / `session_start` / `model_select`). Pi's
  * built-in threshold stays in place as the last-resort guard for long
@@ -22,17 +26,16 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-	loadAutoCompactTargetConfig,
-	resolveTargetTokens,
+	autoCompactTargetConfig,
+	resolveCompactionTrigger,
 	shouldCompact,
-	type AutoCompactTargetConfig,
 } from "./auto-compact-target/core.ts";
 
 function compactionEnabled(ctx: ExtensionContext): boolean {
 	try {
 		const settings = SettingsManager.create(ctx.cwd, undefined, {
 			projectTrusted: ctx.isProjectTrusted(),
-		}).getCompactionSettings();
+		}).getCompactionSettings(ctx.model ?? undefined);
 		return settings.enabled;
 	} catch {
 		return true;
@@ -40,7 +43,7 @@ function compactionEnabled(ctx: ExtensionContext): boolean {
 }
 
 export default function autoCompactTarget(pi: ExtensionAPI): void {
-	const config: AutoCompactTargetConfig = loadAutoCompactTargetConfig();
+	const config = autoCompactTargetConfig();
 	if (!config.enabled) return;
 
 	// Re-armed once usage drops back below the target (e.g. after compaction),
@@ -51,17 +54,17 @@ export default function autoCompactTarget(pi: ExtensionAPI): void {
 		const usage = ctx.getContextUsage();
 		if (!usage) return;
 
-		const modelKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-		const override =
-			modelKey !== undefined ? config.modelOverrides[modelKey]?.targetTokens : undefined;
 		const contextWindow = ctx.model?.contextWindow ?? usage.contextWindow;
-		const target = resolveTargetTokens(contextWindow, {
-			targetTokens: config.targetTokens,
-			windowRatio: config.windowRatio,
-			overrideTargetTokens: override,
+		// This extension's own candidate only: pi's `reserveTokens` guard stays pi's
+		// job (it fires at the same point or earlier and needs no help here). The
+		// shared resolver is what keeps this trigger and every display in sync.
+		const { triggerTokens } = resolveCompactionTrigger({
+			contextWindow,
+			model: ctx.model ?? undefined,
+			config,
 		});
 
-		if (!shouldCompact(usage.tokens, target)) {
+		if (!shouldCompact(usage.tokens, triggerTokens)) {
 			armed = true;
 			return;
 		}
@@ -71,7 +74,7 @@ export default function autoCompactTarget(pi: ExtensionAPI): void {
 
 		armed = false;
 		ctx.ui.notify(
-			`上下文 ${usage.tokens?.toLocaleString()} token 已达目标 ${target.toLocaleString()}，提前压缩`,
+			`上下文 ${usage.tokens?.toLocaleString()} token 已达目标 ${triggerTokens.toLocaleString()}，提前压缩`,
 			"info",
 		);
 		ctx.compact();

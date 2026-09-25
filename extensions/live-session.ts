@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { Type } from "typebox";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
+import {
+  SettingsManager,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  type InputEvent,
+} from "@earendil-works/pi-coding-agent";
+import { autoCompactTargetConfig, resolveCompactionTrigger } from "./auto-compact-target/core.ts";
 import { LiveSessionClient, type LiveSessionClientOptions } from "./live-session/client.ts";
 import { LeaseError, LeaseManager, type LeaseSnapshot } from "./live-session/lease.ts";
 import { SnapshotProjector } from "./live-session/projector.ts";
@@ -14,10 +21,17 @@ import {
   type JsonObject,
   type LiveSessionInputChannel,
   type LiveSessionMode,
+  type LiveSessionStatus,
   type LiveSessionSummaryBase,
 } from "./live-session/protocol.ts";
 
 const PROCESS_IDENTITY_SYMBOL = Symbol.for("pi.live-session.process-identity.v1");
+/**
+ * Default status re-assert period. The dashboard only knows what this bridge last
+ * told it, so a slow beat is what keeps “工作中 / 等待输入” honest when pi changes
+ * state without an agent event (compaction, retry, reload landing mid-work).
+ */
+export const DEFAULT_STATUS_HEARTBEAT_MS = 20_000;
 const LIVE_FEATURE_PUBLISH_INTERVAL_MS = 250;
 
 /**
@@ -81,6 +95,24 @@ interface SessionLineage {
   readonly subagentWorkId?: string;
 }
 
+/**
+ * pi core's compaction policy for the current model, or undefined when settings
+ * are unreadable. `model` is passed through so per-model `reserveTokens`
+ * overrides are honoured (they are part of where compaction actually fires).
+ */
+function piCompactionPolicy(
+  ctx: ExtensionContext,
+): { enabled: boolean; reserveTokens: number } | undefined {
+  try {
+    const settings = SettingsManager.create(ctx.cwd, undefined, {
+      projectTrusted: ctx.isProjectTrusted(),
+    }).getCompactionSettings(ctx.model ?? undefined);
+    return { enabled: settings.enabled, reserveTokens: settings.reserveTokens };
+  } catch {
+    return undefined;
+  }
+}
+
 function sessionLineage(): SessionLineage {
   if (process.env.PI_SUBAGENT_WORKBENCH_CHILD !== "1") return { role: "main" };
   try {
@@ -110,6 +142,8 @@ export interface LiveSessionExtensionOptions {
   readonly identity?: ProcessIdentity;
   readonly snapshotEntryLimit?: number;
   readonly createClient?: (options: LiveSessionClientOptions) => LiveSessionClientHandle;
+  /** How often the bridge re-asserts the session status (default {@link DEFAULT_STATUS_HEARTBEAT_MS}). */
+  readonly statusHeartbeatMs?: number;
 }
 
 function processIdentity(): ProcessIdentity {
@@ -190,6 +224,73 @@ export function registerLiveSessionExtension(
     return Boolean(current) && (current?.isReady?.() ?? true);
   };
 
+  /**
+   * Whether this session is busy right now, according to pi itself.
+   *
+   * This asks `ctx.isIdle()` instead of trusting the `running` flag, because that
+   * flag is only moved by `agent_start` / `agent_settled` / `session_start`, and
+   * pi emits `agent_settled` solely when the agent-run loop finishes
+   * (`_runAgentPrompt` in `core/agent-session.js`). A standalone compaction is not
+   * an agent run — it never emits `agent_start`, and never an `agent_settled`
+   * either — while `isIdle()` is false for the whole compaction (`!isAgentRunActive
+   * && !isCompacting`). So a reload landing while a compaction was in flight used
+   * to seed `running = !ctx.isIdle()` with no later event able to clear it, and the
+   * dashboard showed “工作中” on a session that was sitting at its prompt.
+   * `isIdle()` covers run and compaction alike and returns to true by itself.
+   */
+  const statusNow = (): LiveSessionStatus => {
+    if (reconnecting) return "reconnecting";
+    if (currentContext) return currentContext.isIdle() ? "idle" : "running";
+    // Before the first `session_start` there is no context to ask.
+    return running ? "running" : "idle";
+  };
+
+  /** Last status this bridge put on the wire (snapshot or patch). */
+  let publishedStatus: LiveSessionStatus | undefined;
+
+  /**
+   * Push the current status when it drifted from what the dashboard already has.
+   *
+   * A patch must not touch `lastActivityAt`: status is a property of the session,
+   * not an agent event, and an idle session that the heartbeat corrected would
+   * otherwise look “active just now”.
+   */
+  const publishStatusPatch = (): void => {
+    const status = statusNow();
+    if (status === publishedStatus) return;
+    publishedStatus = status;
+    const currentClient = client;
+    if (!projector || !currentClient || (currentClient.isReady && !currentClient.isReady())) return;
+    currentClient.publish(projector.createEvent("summary_update", { status }));
+  };
+
+  /**
+   * Re-assert the status on a slow beat.
+   *
+   * The dashboard is a mirror: it can only be as fresh as the last thing this
+   * bridge said. Status used to be pushed only on agent/turn events, so any state
+   * change pi performs without those events (compaction, retry, a reload that
+   * landed mid-work) left the mirror claiming “工作中” forever. With a cheap
+   * re-check the drift heals within one beat, and because nothing is sent while
+   * the status is unchanged an idle dashboard stays silent.
+   */
+  const STATUS_HEARTBEAT_MS = options.statusHeartbeatMs ?? DEFAULT_STATUS_HEARTBEAT_MS;
+  let statusHeartbeat: ReturnType<typeof setInterval> | undefined;
+
+  const stopStatusHeartbeat = (): void => {
+    if (statusHeartbeat) clearInterval(statusHeartbeat);
+    statusHeartbeat = undefined;
+  };
+
+  const startStatusHeartbeat = (): void => {
+    stopStatusHeartbeat();
+    statusHeartbeat = setInterval(() => {
+      if (!clientIsReady()) return;
+      publishStatusPatch();
+    }, STATUS_HEARTBEAT_MS);
+    (statusHeartbeat as { unref?: () => void }).unref?.();
+  };
+
   const publish = (type: string, data: unknown, ctx?: ExtensionContext): void => {
     if (ctx) currentContext = ctx;
     lastActivityAt = Date.now();
@@ -197,6 +298,54 @@ export function registerLiveSessionExtension(
     if (!projector || !currentClient || (currentClient.isReady && !currentClient.isReady())) return;
     const event = projector.createEvent(type, data);
     currentClient.publish(event);
+  };
+
+  /**
+   * The session's live telemetry: where the context stands and where compaction
+   * will fire. Both change on every turn, and both are read by the dashboard's
+   * status line.
+   */
+  const contextTelemetry = (ctx: ExtensionContext): JsonObject | undefined => {
+    const usage = ctx.getContextUsage();
+    if (!usage) return undefined;
+    const trigger = resolveCompactionTrigger({
+      contextWindow: usage.contextWindow ?? ctx.model?.contextWindow,
+      model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+      piPolicy: piCompactionPolicy(ctx),
+      config: autoCompactTargetConfig(),
+    });
+    return {
+      contextUsage: {
+        tokens: usage.tokens,
+        contextWindow: usage.contextWindow,
+        percent: usage.percent,
+      },
+      compact: {
+        enabled: trigger.enabled,
+        triggerTokens: trigger.triggerTokens,
+        candidates: trigger.candidates.map((candidate) => ({
+          source: candidate.source,
+          tokens: candidate.tokens,
+        })),
+      },
+    };
+  };
+
+  /**
+   * Push the telemetry as a `summary_update` event.
+   *
+   * It travels on the event stream — not inside the snapshot — because the value
+   * changes every turn while a snapshot is only rebuilt at connect / resync /
+   * tree / fork. That mismatch is why the dashboard showed a context count frozen
+   * at whatever the session happened to have when it last reconnected (0 for a
+   * fresh session). The registry patches its copy of the summary from this event,
+   * so the number the browser renders is always the current one.
+   */
+  const publishContextTelemetry = (ctx: ExtensionContext): void => {
+    const status = statusNow();
+    publishedStatus = status;
+    const telemetry = contextTelemetry(ctx);
+    publish("summary_update", { ...(telemetry ?? {}), status }, ctx);
   };
 
   const drainInputQueue = (): void => {
@@ -275,11 +424,27 @@ export function registerLiveSessionExtension(
 
   /**
    * Capabilities this bridge advertises to the dashboard (see
-   * `LiveSessionSummary.capabilities`). `session_tree` means the `/ls-navigate`
-   * and `/ls-fork` extension commands below are registered, so the dashboard may
-   * send them. Additive: no protocol version bump.
+   * `LiveSessionSummary.capabilities`). Additive: no protocol version bump.
+   *
+   * - `session_tree`: the `/ls-navigate` and `/ls-fork` commands below are registered.
+   * - `session_clear`: this session really has a working “start a new session”
+   *   command. The dashboard's 「清空」 rides the plain input channel as `/clear`,
+   *   which is registered by the **`session-aliases` extension, not by pi**, so it
+   *   can vanish without a trace (a stale extension list pointing at deleted files
+   *   was enough: pi skips the missing path silently). pi then hands `/clear` to the
+   *   model as ordinary text — a click that burns a turn and clears nothing, which
+   *   is exactly the kind of silent lie this flag exists to prevent. `getCommands()`
+   *   reads the live command registry, so the claim is checked, not assumed.
    */
-  const LIVE_SESSION_CAPABILITIES: readonly string[] = ["session_tree"];
+  const liveSessionCapabilities = (): readonly string[] => {
+    const capabilities: string[] = ["session_tree"];
+    try {
+      if (pi.getCommands().some((command) => command.name === "clear")) capabilities.push("session_clear");
+    } catch {
+      // Older pi without `getCommands()`: advertise nothing extra rather than lie.
+    }
+    return capabilities;
+  };
 
   const summary = (): LiveSessionSummaryBase => {
     const ctx = currentContext;
@@ -287,6 +452,8 @@ export function registerLiveSessionExtension(
     const usage = ctx.getContextUsage();
     const claim = lease.snapshot();
     const mode: LiveSessionMode = ctx.mode === "rpc" ? "rpc" : "tui";
+    const status = statusNow();
+    publishedStatus = status;
     return {
       processInstanceId: identity.processInstanceId,
       sessionId: ctx.sessionManager.getSessionId(),
@@ -299,13 +466,13 @@ export function registerLiveSessionExtension(
       mode,
       ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
       ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : {}),
-      status: reconnecting ? "reconnecting" : running ? "running" : "idle",
+      status,
       claim: claim.state === "claimed"
         ? { state: "claimed", leaseId: claim.leaseId, expiresAt: claim.expiresAt }
         : { state: "unclaimed" },
       startedAt: identity.startedAt,
       lastActivityAt,
-      capabilities: LIVE_SESSION_CAPABILITIES,
+      capabilities: liveSessionCapabilities(),
       ...(usage
         ? {
             contextUsage: {
@@ -315,6 +482,11 @@ export function registerLiveSessionExtension(
             },
           }
         : {}),
+      ...((): { compact?: LiveSessionSummaryBase["compact"] } => {
+        const telemetry = contextTelemetry(ctx);
+        const compact = telemetry?.compact as LiveSessionSummaryBase["compact"] | undefined;
+        return compact ? { compact } : {};
+      })(),
     };
   };
 
@@ -471,7 +643,7 @@ export function registerLiveSessionExtension(
   const treeActionDenial = (leaseId: string | undefined): string | null => {
     const claim = lease.snapshot();
     if (claim.state !== "claimed") return null;
-    if (!leaseId) return "该会话已被浏览器接管，请在 Dashboard 图谱页重新发起操作。";
+    if (!leaseId) return "该会话已被某个浏览器接管：请先在 Dashboard「获取控制」（或刷新页面）后重试。";
     try {
       lease.assertLease(leaseId);
       return null;
@@ -728,6 +900,7 @@ export function registerLiveSessionExtension(
     featureCleanup = subscribeLiveFeatures((feature, snapshot) => {
       queueFeatureSnapshot(feature, snapshot, ctx);
     });
+    startStatusHeartbeat();
   });
 
   pi.on("session_info_changed", (event, ctx) => publish("session_info_changed", { name: event.name ?? null }, ctx));
@@ -752,8 +925,12 @@ export function registerLiveSessionExtension(
   pi.on("agent_end", (event, ctx) => publish("agent_end", { messages: event.messages }, ctx));
   pi.on("agent_settled", (_event, ctx) => {
     running = false;
+    publishContextTelemetry(ctx);
     publish("agent_settled", {}, ctx);
   });
+  // Compaction rewrites the context: publish immediately so the dashboard does
+  // not keep showing the pre-compaction size until the next turn.
+  pi.on("session_compact", (_event, ctx) => publishContextTelemetry(ctx));
   pi.on("turn_start", (event, ctx) => publish("turn_start", event, ctx));
   pi.on("turn_end", (event, ctx) => publish("turn_end", event, ctx));
   pi.on("message_start", (event, ctx) => {
@@ -810,6 +987,10 @@ export function registerLiveSessionExtension(
       const candidate = entry as unknown as Record<string, unknown>;
       return candidate.type === "message" && candidate.message === event.message && typeof candidate.id === "string";
     }) as unknown as Record<string, unknown> | undefined;
+    // Published BEFORE `message_end` on purpose: the transcript binds a
+    // message's session-entry id to the nearest PRECEDING `message_end`, so
+    // `message_end` must stay adjacent to the deferred `message_entry`.
+    publishContextTelemetry(ctx);
     publish("message_end", {
       message: event.message,
       ...(completedInput ? { channel: completedInput.channel } : {}),
@@ -820,13 +1001,18 @@ export function registerLiveSessionExtension(
   pi.on("tool_execution_start", (event, ctx) => publish("tool_execution_start", event, ctx));
   pi.on("tool_execution_update", (event, ctx) => publish("tool_execution_update", event, ctx));
   pi.on("tool_execution_end", (event, ctx) => publish("tool_execution_end", event, ctx));
-  pi.on("model_select", (event, ctx) => publish("model_select", {
-    model: { provider: event.model.provider, id: event.model.id },
-    previousModel: event.previousModel
-      ? { provider: event.previousModel.provider, id: event.previousModel.id }
-      : null,
-    source: event.source,
-  }, ctx));
+  pi.on("model_select", (event, ctx) => {
+    publish("model_select", {
+      model: { provider: event.model.provider, id: event.model.id },
+      previousModel: event.previousModel
+        ? { provider: event.previousModel.provider, id: event.previousModel.id }
+        : null,
+      source: event.source,
+    }, ctx);
+    // After the event: the window (and therefore the compaction trigger) changed
+    // with the model, and `ctx.model` is only the new one once pi emitted this.
+    publishContextTelemetry(ctx);
+  });
   pi.on("thinking_level_select", (event, ctx) => publish("thinking_level_select", {
     level: event.level,
     previousLevel: event.previousLevel,
@@ -877,6 +1063,7 @@ export function registerLiveSessionExtension(
     featureCleanup = undefined;
     clearFeaturePublishQueue();
     clearInputQueue();
+    stopStatusHeartbeat();
     client?.stop(event.reason === "quit" ? "session_shutdown" : "session_switch");
     client = undefined;
     projector = undefined;

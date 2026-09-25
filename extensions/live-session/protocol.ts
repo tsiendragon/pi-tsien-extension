@@ -49,6 +49,22 @@ export interface LiveSessionSummary {
     readonly percent: number | null;
   };
   /**
+   * Where auto-compaction will actually fire, from the same resolver the trigger
+   * uses (`auto-compact-target/core.ts`). Additive: absent = older bridge, and a
+   * consumer that ignores it simply draws no threshold line.
+   *
+   * `candidates` names every enabled policy with its own token count, so a UI can
+   * say which one binds (`auto-compact-target` vs pi's `reserveTokens` guard).
+   */
+  readonly compact?: {
+    readonly enabled: boolean;
+    readonly triggerTokens: number;
+    readonly candidates: readonly {
+      readonly source: string;
+      readonly tokens: number;
+    }[];
+  };
+  /**
    * Additive, optional capability list. Absent = older bridge. Adding values is
    * backward compatible in both directions and does NOT change
    * `LIVE_SESSION_PROTOCOL_VERSION` (an old dashboard ignores unknown fields).
@@ -74,6 +90,30 @@ export type LiveSessionEvent = JsonObject & {
   readonly data: JsonObject;
   readonly truncated?: boolean;
 };
+
+/**
+ * Data of a `summary_update` event: a patch over the current summary.
+ *
+ * The whole summary rides in the snapshot, but snapshots are only rebuilt at
+ * connect / resync / tree / fork. Fields that change more often than that — or
+ * change without any agent event at all — are patched from the event stream:
+ *
+ * - `contextUsage`: every turn;
+ * - `compact`: when the window or the compaction policy changes;
+ * - `status`: `idle` / `running` re-derived from pi's own `isIdle()`, and
+ *   `reconnecting` when the broker link drops. A patch is sent on `agent_start` /
+ *   `agent_settled` and re-checked on a slow heartbeat, because pi ends some
+ *   states (a standalone compaction, a retry) without an agent event, which used
+ *   to leave the dashboard showing “工作中” on a session that was done.
+ *
+ * Additive and optional: a missing field means “unchanged”, never “reset”.
+ * Consumers must drop unknown or invalid values instead of writing them through.
+ */
+export interface LiveSessionSummaryPatch {
+  readonly status?: LiveSessionStatus;
+  readonly contextUsage?: LiveSessionSummary["contextUsage"];
+  readonly compact?: LiveSessionSummary["compact"];
+}
 
 export type LiveSessionInputChannel = "web" | "terminal" | "chatapp" | "mobile";
 
