@@ -1,0 +1,32 @@
+name: classify-text
+version: 0.1.0
+sensitivity: public
+status: draft
+description: 把一条日志/文本行分类到固定标签集合。
+
+contract:
+  input:
+    type: object
+    required: [text]
+    properties:
+      text: { type: string }
+  output:
+    type: object
+    required: [label]
+    properties:
+      label: { enum: [error, warning, info, debug, unknown] }
+
+steps:
+  - id: classify
+    kind: llm
+    prompt: prompts/classify.md
+    model: dashscope/deepseek-v4.1-flash
+    max_tokens: 64
+
+evidence:
+  cases: cases.jsonl
+
+limits:
+  max_llm_calls: 1
+  timeout_ms: 30000
+  max_output_bytes: 1048576
