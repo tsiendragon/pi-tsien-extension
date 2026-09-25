@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { aggregateTestOutput, isTestCommand } from "../extensions/tool-result-pipeline/rtk/techniques/test-output.ts";
 import { filterBuildOutput, isBuildCommand } from "../extensions/tool-result-pipeline/rtk/techniques/build.ts";
+import { aggregateLinterOutput, isLinterCommand } from "../extensions/tool-result-pipeline/rtk/techniques/linter.ts";
 
 test("vendored RTK does not treat ordinary commands as test runs", () => {
 	for (const command of [
@@ -54,6 +55,43 @@ test("vendored RTK does not treat substrings as builds", () => {
 		assert.equal(isBuildCommand(command), false, command);
 		assert.equal(filterBuildOutput("hello\ntsc\n", command), null, command);
 	}
+});
+
+test("vendored RTK does not treat substrings as linter runs", () => {
+	for (const command of [
+		// a real one: the python heredoc below mined signals whose reason code
+		// contains "Global Blacklist" and its whole table was replaced by
+		// "✓ Linter: No issues found"
+		`python3 - <<'PY'\nKW = ["New True IP Org in Global Blacklist"]\nPY`,
+		"grep -rn ruff .",
+		"rg black src/",
+		"echo eslint",
+		`python -c 'print("mypy")'`,
+		"cat prettier.config.js",
+		"git log --grep=clippy",
+		"ls test/black",
+	]) {
+		assert.equal(isLinterCommand(command), false, command);
+		assert.equal(aggregateLinterOutput("table row 1\ntable row 2\n", command), null, command);
+	}
+});
+
+test("vendored RTK still recognizes real linter runs", () => {
+	for (const command of [
+		"ruff check .",
+		"/mnt/workspace/lilong/envs/tsien/conda/bin/ruff check .",
+		"python3 -m ruff check .",
+		"npx eslint src",
+		"bunx prettier --check .",
+		"poetry run ruff check",
+		"cd repo && ruff check .",
+		"cargo clippy",
+		"black --check .",
+		"ruff check . 2>&1 | tail -5",
+	]) {
+		assert.equal(isLinterCommand(command), true, command);
+	}
+	assert.equal(aggregateLinterOutput("All checks passed!\n", "ruff check ."), "✓ Ruff: No issues found");
 });
 
 test("vendored RTK still recognizes real build commands", () => {

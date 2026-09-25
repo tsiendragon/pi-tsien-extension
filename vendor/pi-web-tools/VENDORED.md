@@ -21,7 +21,9 @@ loads it through the user-level `/home/tsien/.pi/agent/extensions.config.json`
 (package source `${PI_TSIEN_EXTENSION_ROOT}/vendor/pi-web-tools`) instead of
 `git:github.com/brettatoms/pi-web-tools`.
 
-## Patch scope (only `src/providers/duckduckgo.ts`)
+## Patch scope
+
+### 1. `src/providers/duckduckgo.ts` (DDG lite scraping)
 
 - Parse the whole `<a …>…</a>` / `<td …>…</td>` block and read attributes
   order-independently, accepting single **or** double quotes, instead of a
@@ -31,9 +33,20 @@ loads it through the user-level `/home/tsien/.pi/agent/extensions.config.json`
   absolute URL rather than an unusable `//…` link.
 - `parseDDGLite` is exported so the vendor regression test can call it directly.
 
-Nothing else is changed: provider selection (`resolveProvider`), Brave/Kagi/
-Google/SearXNG providers, WebFetch extraction, and tool registration keep
-upstream behavior.
+### 2. `src/web-fetch.ts` (lazy heavy deps)
+
+- `jsdom`, `@mozilla/readability`, `turndown` and `turndown-plugin-gfm` were
+  imported at module scope, so **every Pi start** paid to load them. Measured
+  with Pi's `PI_TIMING=1`: the `pi-web-tools` module import was ~1.1s (cold
+  ~1.8s), ~2/3 of all extension-load time — and jsdom alone is ~500 files,
+  read from NFS.
+- They are now loaded with `await import(…)` inside `fetchAndExtract()`, on the
+  first actual WebFetch call. Steady-state `pi-web-tools` module import dropped
+  to ~30ms; total Pi startup went from ~1.7s to ~0.6–0.8s on this machine.
+- Extraction behavior is unchanged.
+
+Everything else keeps upstream behavior: provider selection (`resolveProvider`),
+Brave/Kagi/Google/SearXNG providers, and tool registration are untouched.
 
 ## Runtime dependencies
 
@@ -46,6 +59,6 @@ directory (Node walks up to `node_modules/`). Pi aliases `@mariozechner/*` and
 ## Update procedure
 
 1. Re-copy upstream `pi-web-tools` `src/`, `README.md`, `package.json` over this directory.
-2. Re-apply the `duckduckgo.ts` patch above.
+2. Re-apply both patches above (`duckduckgo.ts` parser + `web-fetch.ts` lazy imports).
 3. Run `npm run test:node` — `test/pi-web-tools-vendor.test.ts` guards the parser
    against both the current single-quote markup and the older double-quote markup.
