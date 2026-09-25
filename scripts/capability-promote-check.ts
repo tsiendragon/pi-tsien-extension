@@ -12,7 +12,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { setCapabilityStatus } from "../extensions/capability/promote.ts";
+import { setCapabilityStatus } from "../packages/pi-tsien-capability/src/capability/promote.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "capability-promote-"));
 const file = join(dir, "CAPABILITY.yaml");

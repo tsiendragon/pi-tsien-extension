@@ -10,7 +10,7 @@
 
 | 层 | 位置 | 说明 |
 |---|---|---|
-| L1 | `extensions/capability/capabilities/` | 随本扩展内置的通用能力 |
+| L1 | `src/capability/capabilities/` | 随本扩展内置的通用能力 |
 | L2 | `<项目目录>/.pi/capabilities/` | **任何仓库带上这个目录就能用，无需配置** |
 | L2 | `~/.pi/agent/capability/capabilities/` | 用户全局 |
 | L2 | `~/.pi/agent/capability.json` 的 `roots` | 指向任意仓库或目录 |
