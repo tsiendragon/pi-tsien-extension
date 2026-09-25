@@ -5,11 +5,12 @@
   "description": "WebSearch and WebFetch tools for pi: key-less DuckDuckGo lite search plus readable-content extraction",
   "type": "module",
   "keywords": [
-    "pi-package",
     "pi",
     "pi-coding-agent",
-    "web-search",
-    "web-fetch"
+    "pi-extension",
+    "pi-package",
+    "web-fetch",
+    "web-search"
   ],
   "pi": {
     "extensions": [
@@ -32,5 +33,13 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1",
     "typebox": ">=1.3.13"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsiendragon/pi-tsien-extension.git",
+    "directory": "packages/pi-tsien-web-tools"
+  },
+  "homepage": "https://github.com/tsiendragon/pi-tsien-extension/tree/main/packages/pi-tsien-web-tools#readme",
+  "author": "tsiendragon"
 }
