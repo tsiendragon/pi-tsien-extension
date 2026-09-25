@@ -127,7 +127,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 
 - stage 契约：`(event, ctx) => Promise<{ content } | undefined>`；返回 `undefined` 表示不改写，**每个 stage 必须 fail-open**（内部出错即返回 `undefined`），坏掉的 stage 只会退化成“输出不变”，不会丢工具输出。
 - 前一个 stage 的输出喂给下一个，所以 bash-digest 摘要的就是 RTK 过滤后的文本。这个顺序由代码声明、由 `test/tool-result-pipeline.test.ts` 断言，不再依赖 `~/.pi/agent/extensions.config.json` 里 `loadOrder` 的先后（以前只是注释里的一句“排在 RTK 之后”）。
-- RTK 的其余界面（8 个 `rtk-*` 命令、`rtk_configure` 工具、系统提示注入、配置、统计）原样保留，由 `registerRtkSurface(pi)` 注册。源码来源与两处命令匹配补丁见 `extensions/tool-result-pipeline/rtk/PROVENANCE.md`。
+- RTK 的其余界面（8 个 `rtk-*` 命令、`rtk_configure` 工具、系统提示注入、配置、统计）原样保留，由 `registerRtkSurface(pi)` 注册。源码来源与两处命令匹配补丁见 `packages/pi-tsien-rtk-fork/src/rtk/PROVENANCE.md`。
 - 新增机制 = 新增一个 stage，而不是再多一个扩展。
 
 ### `bash-digest`（pipeline stage 2）
@@ -257,7 +257,7 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 ~/.pi/agent/extensions/context-powerline.ts
 ```
 
-否则 Pi 可能同时加载两份 extension，重名命令可能显示为 `/git-graph:1`、`/git-graph:2`。当前会话信息侧栏由本 package 的 `extensions/sidebar.ts` 提供。
+否则 Pi 可能同时加载两份 extension，重名命令可能显示为 `/git-graph:1`、`/git-graph:2`。当前会话信息侧栏由 `pi-tsien-sidebar` 提供。
 
 本仓库不会自动修改或删除其他全局 extension。
 
@@ -266,7 +266,7 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 个别第三方 package 上游存在影响正常使用的缺陷，本仓库保留一份打补丁的副本
 放在 `vendor/`，并通过 `extensions.config.json` 的本地路径 source 加载：
 
-- `pi-rtk` — 已**合并进本仓库**（原 `vendor/pi-rtk/` → `extensions/tool-result-pipeline/rtk/`），不再随上游同步；
+- `pi-rtk` — 已**合并进本仓库**（原 `vendor/pi-rtk/` → `packages/pi-tsien-rtk-fork/src/rtk/`），不再随上游同步；
   源码来源、合并时的改动与两处命令匹配补丁见 `extensions/tool-result-pipeline/rtk/PROVENANCE.md`。
 - WebSearch/WebFetch 已改为**自研实现** `packages/pi-tsien-web-tools`（不再加载第三方副本）：
   我们的 DuckDuckGo lite 解析方式、markdown 清理与懒加载；行为与旧副本 A/B 等价（见该包 README）。
@@ -285,7 +285,10 @@ npm install
 npm run check
 ```
 
-Pi 会直接加载 `extensions/*.ts`，无需预编译。
+每个扩展现在是一个独立包 `packages/pi-tsien-*`（一功能一包），共享代码在 `packages/pi-tsien-shared`；
+Pi 直接加载各包的 TS 入口（`package.json` 的 `pi.extensions`，多数是 `src/index.ts`），无需预编译。
+包之间被链接进根 `node_modules`（npm workspaces），因此跨包引用写包名而不是相对路径。
+搬迁过程与校验方式见 `docs/packages-migration.md`。
 
 ### 重构扩展时的等价性验收（parity）
 
