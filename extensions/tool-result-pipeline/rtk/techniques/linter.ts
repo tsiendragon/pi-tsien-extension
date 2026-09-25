@@ -10,6 +10,22 @@ const LINTER_COMMANDS = [
 	"golangci-lint",
 ];
 
+/**
+ * A linter only counts when it is the program a shell segment actually runs.
+ *
+ * Upstream matched any substring of the whole command, so a heredoc body or a
+ * quoted argument that merely mentions a linter ate the real output: a reason
+ * code containing "Global Blacklist" matched the `black` formatter and the whole
+ * result became `✓ Linter: No issues found`. Same class of bug as the two
+ * matcher patches described in `PROVENANCE.md`, so it is fixed the same way: the
+ * runner must start a shell segment (optionally behind a wrapper or a path).
+ */
+const LINTER_INVOCATIONS = [
+	/^(?:sudo\s+|npx\s+|bunx\s+|uvx\s+|uv\s+run\s+|poetry\s+run\s+|pnpm\s+(?:exec\s+|dlx\s+)?|yarn\s+)?(?:[\w.@/-]*\/)?(?:eslint|prettier|ruff|pylint|mypy|flake8|black|golangci-lint)\b/,
+	/^(?:sudo\s+)?(?:[\w.@/-]*\/)?python[\d.]*\s+-m\s+(?:eslint|ruff|pylint|mypy|flake8|black)\b/,
+	/^(?:sudo\s+)?(?:[\w.@/-]*\/)?cargo\s+clippy\b/,
+];
+
 interface Issue {
 	severity: "ERROR" | "WARNING";
 	rule: string;
@@ -18,13 +34,27 @@ interface Issue {
 	message: string;
 }
 
-export function isLinterCommand(command: string | undefined | null): boolean {
+/** The shell segment that runs a linter, or null when none does. */
+function linterSegment(command: string | undefined | null): string | null {
 	if (typeof command !== "string" || command.length === 0) {
-		return false;
+		return null;
 	}
 
-	const cmdLower = command.toLowerCase();
-	return LINTER_COMMANDS.some((lc) => cmdLower.includes(lc));
+	for (const segment of command.toLowerCase().split(/(?:&&|\|\||;|\|)/)) {
+		const trimmed = segment.trim();
+		if (trimmed.length === 0) {
+			continue;
+		}
+		if (LINTER_INVOCATIONS.some((pattern) => pattern.test(trimmed))) {
+			return trimmed;
+		}
+	}
+
+	return null;
+}
+
+export function isLinterCommand(command: string | undefined | null): boolean {
+	return linterSegment(command) !== null;
 }
 
 function parseIssues(output: string, linterType: string): Issue[] {
@@ -167,15 +197,18 @@ export function aggregateLinterOutput(
 }
 
 function detectLinterType(command: string): string {
-	const cmdLower = command.toLowerCase();
-	if (cmdLower.includes("eslint")) return "ESLint";
-	if (cmdLower.includes("ruff")) return "Ruff";
-	if (cmdLower.includes("pylint")) return "Pylint";
-	if (cmdLower.includes("mypy")) return "MyPy";
-	if (cmdLower.includes("flake8")) return "Flake8";
-	if (cmdLower.includes("clippy")) return "Clippy";
-	if (cmdLower.includes("golangci")) return "GolangCI-Lint";
-	if (cmdLower.includes("prettier")) return "Prettier";
+	// Label from the segment that actually runs the linter, so a word inside an
+	// argument or a heredoc cannot relabel the summary.
+	const segment = linterSegment(command) ?? "";
+	if (segment.includes("eslint")) return "ESLint";
+	if (segment.includes("ruff")) return "Ruff";
+	if (segment.includes("pylint")) return "Pylint";
+	if (segment.includes("mypy")) return "MyPy";
+	if (segment.includes("flake8")) return "Flake8";
+	if (segment.includes("clippy")) return "Clippy";
+	if (segment.includes("golangci")) return "GolangCI-Lint";
+	if (segment.includes("prettier")) return "Prettier";
+	if (segment.includes("black")) return "Black";
 	return "Linter";
 }
 
