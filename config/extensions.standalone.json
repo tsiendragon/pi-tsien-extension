@@ -9,6 +9,16 @@
     {
       "id": "tsien",
       "source": "${PI_TSIEN_EXTENSION_ROOT}"
+    },
+    {
+      "id": "session-aliases",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-session-aliases",
+      "autoload": false
+    },
+    {
+      "id": "capability",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-capability",
+      "autoload": false
     }
   ],
   "loadOrder": [
@@ -81,8 +91,8 @@
       "path": "extensions/schedule.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/session-aliases.ts"
+      "package": "session-aliases",
+      "path": "src/index.ts"
     },
     {
       "package": "tsien",
@@ -109,8 +119,8 @@
       "path": "extensions/trajectory-recorder.ts"
     },
     {
-      "package": "tsien",
-      "path": "extensions/capability.ts"
+      "package": "capability",
+      "path": "src/index.ts"
     }
   ],
   "prune": {

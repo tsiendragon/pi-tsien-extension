@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
-import { runCapability, type LlmReply } from "../extensions/capability/sandbox/runner.ts";
+import { runCapability, type LlmReply } from "../packages/pi-tsien-capability/src/capability/sandbox/runner.ts";
 
 const MODEL_KEY = process.env.CAPABILITY_PROBE_MODEL ?? "dashscope/deepseek-v4.1-flash";
 const CAPABILITY_DIR = join(
