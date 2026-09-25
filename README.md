@@ -278,6 +278,30 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 守卫测试：`test/pi-rtk-vendor.test.ts`（合并后的命令匹配补丁）、
 `test/pi-web-tools-vendor.test.ts`、`test/tool-result-pipeline.test.ts`（stage 顺序与“单入口”契约）。
 
+## 用 dashboard 管理扩展（推荐）
+
+`pi-dashboard` 有一个 **Extensions 页面**（`/extensions`），把「Pi 到底会加载什么」变成可核对的事实：
+
+| 分区 | 内容 |
+|---|---|
+| 汇总 | packages / 已加载条目 / 启用·禁用 / 来自 package / 直接路径 / 未纳管 / 异常·需补丁 / 跨包引用 |
+| ① 由 package 提供 | 显示包名、版本、是否在包 manifest 里声明（declared / undeclared / duplicate / missing） |
+| ② 直接路径 | 单文件条目；不伪造版本号 |
+| ③ 由 package 自带（autoload） | `pi install` 写的 string 形态包（= 加载该包全部资源）自带的条目 |
+| ④ 自动发现但未纳管 | `<agent>/extensions/*.ts` 里同步器会移入 quarantine 的散文件 |
+| ⑤ 安装 / 卸载 | npm registry 搜索（`pi-package`）或包名 / 本地路径 / git URL |
+| ⑥ 操作审计 | 装/卸/启停/排序/回滚记录，带备份路径，可一键回滚 |
+| ⑦ 共享代码（静态扫描） | 哪些包的代码被别的条目 import —— 说明「禁用 ≠ 卸载代码」 |
+
+两个前提要知道：
+
+1. **写操作需要先认证一次**：dashboard 默认监听 `0.0.0.0` 且没有全局鉴权，所以启停/排序/安装/回滚都要求 live-session 浏览器认证
+   （在终端或 live-session 页粘贴启动日志里的令牌，浏览器随后自动带 cookie）。只读浏览不需要。
+2. 写前会把 `settings.json` 备份到 `<agent>/backups/settings-<时间>.json`；审计写在 `<agent>/extension-audit.jsonl`。
+   回滚就是拿某个备份覆盖回去（回滚本身也会先备份，可再回滚）。
+
+依赖分析走独立端点（`GET /api/pi/ext/deps`，按 settings 修改时间缓存）：只统计**显式 import**，每包最多 80 个文件、单文件 256KB。
+
 ## 开发
 
 ```bash
