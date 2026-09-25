@@ -73,6 +73,41 @@ test("sync preserves configured package install order and extension load order",
 	assert.equal(existsSync(join(result.backupDir, "settings.json")), true);
 });
 
+test("standalone config syncs without an eagleeye-ai-dev checkout", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-standalone-"));
+	const repoRoot = join(root, "pi-tsien-extension");
+	const agentDir = join(root, ".pi", "agent");
+	mkdirSync(join(repoRoot, "extensions"), { recursive: true });
+	writeFileSync(join(repoRoot, "extensions", "goal.ts"), "export default {};");
+	const configPath = join(agentDir, "extensions.config.json");
+	writeJson(configPath, {
+		version: 1,
+		packages: [{ id: "tsien", source: "${PI_TSIEN_EXTENSION_ROOT}" }],
+		loadOrder: [{ package: "tsien", path: "extensions/goal.ts" }],
+		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
+	});
+	const plan = buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root } });
+	assert.deepEqual(plan.desiredExtensions, [join(repoRoot, "extensions", "goal.ts")]);
+});
+
+test("config that references the marketplace still requires an eagleeye-ai-dev checkout", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-marketplace-"));
+	const repoRoot = join(root, "pi-tsien-extension");
+	const agentDir = join(root, "agent");
+	mkdirSync(repoRoot, { recursive: true });
+	const configPath = join(agentDir, "extensions.config.json");
+	writeJson(configPath, {
+		version: 1,
+		packages: [{ id: "security-guard", source: "${EAGLEEYE_AI_DEV_ROOT}/marketplace/packages/plugins/security-guard/current" }],
+		loadOrder: [],
+		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
+	});
+	assert.throws(
+		() => buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root } }),
+		/Cannot resolve \$\{EAGLEEYE_AI_DEV_ROOT\}/,
+	);
+});
+
 test("sync rejects load-order paths that escape a package", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-invalid-"));
 	const repoRoot = join(root, "repo");
