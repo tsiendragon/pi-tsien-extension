@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-rtk-fork",
   "version": "0.1.0",
-  "private": true,
   "description": "Tool-result pipeline incl. merged RTK fusion (third-party fork, see PROVENANCE.md).",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
     "pi-coding-agent",
     "pi-extension",
     "pi-package"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

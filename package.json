@@ -25,7 +25,8 @@
     "test:vitest": "vitest run --config vitest.integrated.config.ts",
     "parity:capture": "node --import tsx scripts/extension-parity.mjs --config config/extensions.standalone.json --out test/fixtures/extension-parity-baseline.json",
     "parity:check": "node --import tsx scripts/extension-parity.mjs --config config/extensions.standalone.json --baseline test/fixtures/extension-parity-baseline.json",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "publish:packages": "node scripts/publish-packages.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1",

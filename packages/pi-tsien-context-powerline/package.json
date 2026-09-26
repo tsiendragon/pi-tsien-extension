@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-context-powerline",
   "version": "0.1.0",
-  "private": true,
   "description": "Footer/powerline context report: model, thinking level, context usage, compaction threshold, host resources.",
   "type": "module",
   "pi": {
@@ -34,5 +33,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

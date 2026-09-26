@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-git-graph",
   "version": "0.1.0",
-  "private": true,
   "description": "Renders a git graph in the terminal.",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-code-mode",
   "version": "0.1.0",
-  "private": true,
   "description": "Code mode: the run_code tool (program-driven tool calls).",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }
