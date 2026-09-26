@@ -108,3 +108,16 @@ npm run parity:check     # 与基线逐条比对（不一致 exit=1）
 
 本机**没有 npm 凭证**（`npm whoami` → `ENEEDAUTH`，`~/.npmrc` 无 token，sekret 的 `tsien/account` 等 vault 里也没有 npm token）。
 首次发布需要：`npm login`（或提供 `NPM_TOKEN`）后按依赖顺序发布（先 `pi-tsien-shared`，再其余包）。
+
+## 发布与安装验证（2026-09-26）
+
+- 26 个包已发布到公共 npm，版本 `0.1.0`（`publishConfig.access=public`）。
+- 发布工具：`scripts/publish-packages.mjs`（`npm run publish:packages`）——拓扑排序、断点续发（
+  已存在的版本自动跳过）、npm 发布限流（E429）自动退避、token 只从 `NPM_TOKEN` 环境变量读取
+  （临时 `.npmrc` 内只写 `${NPM_TOKEN}` 引用，用完即删）。
+- **从 registry 安装已验证**：在空白工程 `npm install pi-tsien-shared@0.1.0 pi-tsien-live-session@0.1.0`
+  成功，包内 `LICENSE`/`README`/`src` 齐全，`pi.extensions` 声明的入口存在，内部依赖
+  `pi-tsien-shared@^0.1.0` 被 npm 正确解析。
+- 注意：peer 范围较宽（`>=0.84.2 <1.0.0 || ^0.85.1-tsien.1`），在**没有** pi 的空白工程里 npm 会拉最新的
+  上游 `@earendil-works/pi-coding-agent`（实测 0.87.1）；装进 pi agent 目录时宿主已提供该依赖，不受影响。
+- npm 对发布有速率限制：批量首发时会遇到 `E429`，需要按 ~45-70 秒以上间隔串行发布。

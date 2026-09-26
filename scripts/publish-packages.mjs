@@ -67,6 +67,9 @@ const npmBin = process.env.NPM_BIN || 'npm'
 // Fallback path when the token may not bypass 2FA: publishing then needs an interactive 6-digit
 // code. The script is resumable, so re-running with a fresh code after each expiry is enough.
 const otp = process.env.NPM_OTP
+// npm rate limits publish requests (E429); space them out and back off when it happens.
+const delayMs = Number(process.env.PUBLISH_DELAY_MS ?? process.argv.find((a) => a.startsWith('--delay='))?.slice(8) ?? 20000)
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 const npmEnv = { ...process.env }
 let userconfig = null
 if (!dryRun) {
@@ -81,16 +84,41 @@ if (!dryRun) {
 }
 const npmArgs = (args) => (userconfig ? [...args, '--userconfig', userconfig] : args)
 
-function isPublished(name, version) {
-  try {
-    const out = execFileSync(npmBin, npmArgs(['view', `${name}@${version}`, 'version']), {
-      env: npmEnv,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    return out.trim() === version
-  } catch {
-    return false
+/** Registry writes take a few seconds to become readable, so retry before calling it missing. */
+function isPublished(name, version, attempts = 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const out = execFileSync(npmBin, npmArgs(['view', `${name}@${version}`, 'version']), {
+        env: npmEnv,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      if (out.trim() === version) return true
+    } catch {
+      // not visible yet
+    }
+    if (attempt < attempts - 1) sleep(4000)
+  }
+  return false
+}
+
+/** Publish one package, backing off on npm's publish rate limit. */
+function publishWithBackoff(pkg) {
+  const args = ['publish', '--access', 'public', ...(otp ? [`--otp=${otp}`] : []), pkg.dir]
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      execFileSync(npmBin, npmArgs(args), { env: npmEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+      return
+    } catch (error) {
+      const output = [error.stdout, error.stderr].filter(Boolean).join('')
+      if (/E429|Too Many Requests/i.test(output) && attempt < 5) {
+        const wait = 30000 * (attempt + 1)
+        console.log(`  ...   ${pkg.name} rate limited, retry in ${wait / 1000}s`)
+        sleep(wait)
+        continue
+      }
+      throw error
+    }
   }
 }
 
@@ -119,11 +147,7 @@ for (const pkg of packages) {
     continue
   }
   try {
-    execFileSync(npmBin, npmArgs(['publish', '--access', 'public', ...(otp ? [`--otp=${otp}`] : []), pkg.dir]), {
-      env: npmEnv,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    publishWithBackoff(pkg)
   } catch (error) {
     failed.push(pkg.name)
     const output = [error.stdout, error.stderr].filter(Boolean).join('')
@@ -136,8 +160,10 @@ for (const pkg of packages) {
     console.error(`  FAIL  ${pkg.name}@${pkg.version}: ${detail || error.message.split('\n')[0]}`)
     continue
   }
-  if (isPublished(pkg.name, pkg.version)) console.log(`  ok    ${pkg.name}@${pkg.version}`)
-  else {
+  if (isPublished(pkg.name, pkg.version, 8)) {
+    console.log(`  ok    ${pkg.name}@${pkg.version}`)
+    sleep(delayMs)
+  } else {
     failed.push(pkg.name)
     console.error(`  FAIL  ${pkg.name}@${pkg.version}: published but not visible on the registry yet`)
   }
