@@ -121,3 +121,23 @@ npm run parity:check     # 与基线逐条比对（不一致 exit=1）
 - 注意：peer 范围较宽（`>=0.84.2 <1.0.0 || ^0.85.1-tsien.1`），在**没有** pi 的空白工程里 npm 会拉最新的
   上游 `@earendil-works/pi-coding-agent`（实测 0.87.1）；装进 pi agent 目录时宿主已提供该依赖，不受影响。
 - npm 对发布有速率限制：批量首发时会遇到 `E429`，需要按 ~45-70 秒以上间隔串行发布。
+
+## 慢发（未发布的 16 个包，避免再撞 npm 滥用策略）
+
+首次批量发布在连发 10 个后触发账号级限流（`429 rate limited exceeded`，无 `Retry-After`），
+且短时间新建大量陌生包名容易命中滥用策略。因此提供慢发模式：
+
+```bash
+npm run publish:daily        # = --daily-limit=3 --delay=60000，一次最多发 3 个，间隔 60s
+# 或自定义：
+node scripts/publish-packages.mjs --daily-limit=2 --delay=90000
+sekret local exec tsien account -- npm run publish:daily   # 维护者：token 从 vault 注入
+```
+
+- **状态就是 registry 本身**：已发布的版本会被 `skip`，不需要任何本地记账文件，随时可重跑。
+- `--daily-limit=N` 在 dry-run 下同样生效，可以先预演「这次会发哪 N 个、剩哪些」。
+- 每天跑一次，16 个包约 6 天发完（或按你的节奏调整 `--daily-limit`）。
+
+此外，**GitHub 分发已可用**（不依赖 npm 发布）：仓库根是伞形包，
+`pi install git:github.com/tsiendragon/pi-tsien-extension` 可一条命令装齐 25 个扩展；装单个包用
+clone + 本地路径（见 `docs/quickstart.md`）。
