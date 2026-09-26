@@ -64,6 +64,9 @@ function topoSort(packages) {
 }
 
 const npmBin = process.env.NPM_BIN || 'npm'
+// Fallback path when the token may not bypass 2FA: publishing then needs an interactive 6-digit
+// code. The script is resumable, so re-running with a fresh code after each expiry is enough.
+const otp = process.env.NPM_OTP
 const npmEnv = { ...process.env }
 let userconfig = null
 if (!dryRun) {
@@ -116,14 +119,20 @@ for (const pkg of packages) {
     continue
   }
   try {
-    execFileSync(npmBin, npmArgs(['publish', '--access', 'public', pkg.dir]), {
+    execFileSync(npmBin, npmArgs(['publish', '--access', 'public', ...(otp ? [`--otp=${otp}`] : []), pkg.dir]), {
       env: npmEnv,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (error) {
     failed.push(pkg.name)
-    const detail = [error.stdout, error.stderr].filter(Boolean).join('').split('\n').filter((l) => /npm error/.test(l)).slice(0, 2).join(' | ')
+    const output = [error.stdout, error.stderr].filter(Boolean).join('')
+    if (/(EOTP|one-time password)/i.test(output)) {
+      if (userconfig) rmSync(join(userconfig, '..'), { recursive: true, force: true })
+      console.error(`\n需要新的 6 位验证码（当前${otp ? '已过期' : '未提供'}）——已发布的部分会保留，重新运行时自动跳过。`)
+      process.exit(3)
+    }
+    const detail = output.split('\n').filter((l) => /npm error/.test(l)).slice(0, 2).join(' | ')
     console.error(`  FAIL  ${pkg.name}@${pkg.version}: ${detail || error.message.split('\n')[0]}`)
     continue
   }
