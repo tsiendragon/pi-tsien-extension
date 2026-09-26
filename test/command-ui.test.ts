@@ -326,7 +326,7 @@ test("extension lifecycle registers tools, updates UI, and restores the editor",
   const ctx = {
     mode: "tui",
     hasUI: true,
-    cwd: "<repo>",
+    cwd: process.cwd(),
     sessionManager: {
       getSessionId: () => "command-ui-lifecycle",
       getSessionFile: () => undefined,

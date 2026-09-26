@@ -13,6 +13,7 @@
  * Exit code is 1 when anything differs, so it can gate a cleanup commit.
  */
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -157,9 +158,15 @@ for (const item of config.loadOrder) {
 	});
 }
 
+/** Keep baselines portable: store the config path relative to the repo when it lives inside it. */
+function portableConfigPath(path) {
+	const rel = relative(REPO_ROOT, path);
+	return !isAbsolute(rel) && !rel.startsWith("..") ? rel : path;
+}
+
 const snapshot = {
 	label: args.label ?? null,
-	config: configPath,
+	config: portableConfigPath(configPath),
 	entryCount: entries.length,
 	entries,
 };
