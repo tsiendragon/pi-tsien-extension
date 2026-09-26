@@ -70,7 +70,7 @@ node <repo>/scripts/pi-extension-sync.mjs --apply
 ## 路径变量
 
 - `${PI_TSIEN_EXTENSION_ROOT}`：优先读取环境变量，否则使用同步器所在仓库。
-- `${EAGLEEYE_AI_DEV_ROOT}`：优先读取环境变量，否则发现同级 `eagleeye-ai-dev`。
+- `${PI_MARKETPLACE_ROOT}`：优先读取环境变量，否则发现同级 `pi-marketplace`。
   只在配置真的引用它时才会解析；未引用时机器上不需要存在该仓库。
 - `${PI_AGENT_DIR}`：当前 Pi agent 配置目录。
 - `${HOME}`：用户主目录。
@@ -84,6 +84,6 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 ```
 
 它只声明本仓库与 `packages/pi-tsien-web-tools` 两个 package，加载同样的 25 个 extension，
-但不会要求 `eagleeye-ai-dev` 存在，也不会写入 marketplace 来源的 package。
+但不会要求 `pi-marketplace` 存在，也不会写入 marketplace 来源的 package。
 修改共享的 `~/.pi/agent/extensions.config.json` 后，若新增的是通用 extension，
 请同步补进这份 standalone 配置。

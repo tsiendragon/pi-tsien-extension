@@ -38,7 +38,7 @@ function parseArgs(argv) {
 function expandVars(input) {
 	return input
 		.replace(/\$\{PI_TSIEN_EXTENSION_ROOT\}/g, process.env.PI_TSIEN_EXTENSION_ROOT ?? REPO_ROOT)
-		.replace(/\$\{EAGLEEYE_AI_DEV_ROOT\}/g, process.env.EAGLEEYE_AI_DEV_ROOT ?? "\u0000EAGLEEYE_AI_DEV_ROOT\u0000");
+		.replace(/\$\{PI_MARKETPLACE_ROOT\}/g, process.env.PI_MARKETPLACE_ROOT ?? "\u0000PI_MARKETPLACE_ROOT\u0000");
 }
 
 /** Compact, stable fingerprint of a value. Keeps key names (depth <= 2) but never dumps payloads. */

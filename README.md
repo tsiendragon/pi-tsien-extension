@@ -231,7 +231,7 @@ pi -e <repo>
 
 ### 独立（standalone）配置
 
-给不接入内部 marketplace（eagleeye-ai-dev）的机器用的最小配置：
+给不接入内部 marketplace（pi-marketplace）的机器用的最小配置：
 
 ```bash
 node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json
