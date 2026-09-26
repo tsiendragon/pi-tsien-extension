@@ -51,7 +51,8 @@
     "parity:check": "node --import tsx scripts/extension-parity.mjs --config config/extensions.standalone.json --baseline test/fixtures/extension-parity-baseline.json",
     "check": "npm run typecheck && npm test",
     "publish:packages": "node scripts/publish-packages.mjs",
-    "publish:until-done": "node scripts/publish-until-done.mjs"
+    "publish:until-done": "node scripts/publish-until-done.mjs",
+    "publish:daily": "node scripts/publish-packages.mjs --daily-limit=3 --delay=60000"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1",
