@@ -278,6 +278,18 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 守卫测试：`test/pi-rtk-vendor.test.ts`（合并后的命令匹配补丁）、
 `test/pi-web-tools-vendor.test.ts`、`test/tool-result-pipeline.test.ts`（stage 顺序与“单入口”契约）。
 
+## 从 npm 安装
+
+26 个包以 `pi-tsien-*` 为名发布在公共 npm（首个版本 `0.1.0`）：
+
+```bash
+pi install pi-tsien-web-tools   # 单个扩展
+pi install pi-tsien-shared      # 跨包共享库（多个扩展依赖它）
+```
+
+包之间用普通 semver 互相依赖（如 `pi-tsien-live-session` → `pi-tsien-shared@^0.1.0`），npm 会正常解析。
+批量发布用 `npm run publish:packages`（拓扑排序 + 断点续发 + 429 退避，token 只从环境读）。
+
 ## 用 dashboard 管理扩展（推荐）
 
 `pi-dashboard` 有一个 **Extensions 页面**（`/extensions`），把「Pi 到底会加载什么」变成可核对的事实：
