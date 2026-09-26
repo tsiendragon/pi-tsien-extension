@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-metrics-sidebar",
   "version": "0.1.0",
-  "private": true,
   "description": "Sidebar with token and latency metrics.",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

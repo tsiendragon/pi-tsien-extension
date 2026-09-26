@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-auto-compact",
   "version": "0.1.0",
-  "private": true,
   "description": "Auto-compaction trigger policy: one shared resolver for the trigger and every status line.",
   "type": "module",
   "pi": {
@@ -34,5 +33,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

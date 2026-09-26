@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-web-tools",
   "version": "0.1.0",
-  "private": true,
   "description": "WebSearch and WebFetch tools for pi: key-less DuckDuckGo lite search plus readable-content extraction",
   "type": "module",
   "keywords": [
@@ -41,5 +40,9 @@
     "directory": "packages/pi-tsien-web-tools"
   },
   "homepage": "https://github.com/tsiendragon/pi-tsien-extension/tree/main/packages/pi-tsien-web-tools#readme",
-  "author": "tsiendragon"
+  "author": "tsiendragon",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

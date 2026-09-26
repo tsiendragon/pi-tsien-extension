@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-session-aliases",
   "version": "0.1.0",
-  "private": true,
   "description": "Session aliases: the /clear and /exit commands (thin stubs over the session manager).",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }
