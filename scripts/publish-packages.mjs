@@ -69,6 +69,11 @@ const npmBin = process.env.NPM_BIN || 'npm'
 const otp = process.env.NPM_OTP
 // npm rate limits publish requests (E429); space them out and back off when it happens.
 const delayMs = Number(process.env.PUBLISH_DELAY_MS ?? process.argv.find((a) => a.startsWith('--delay='))?.slice(8) ?? 20000)
+const maxAttempts = Number(process.env.PUBLISH_ATTEMPTS ?? process.argv.find((a) => a.startsWith('--attempts='))?.slice(11) ?? 3)
+// Slow-release mode: npm throttles bursts and flags many new package names in a short window, so a
+// first release can be spread over days by running this with a small limit (the registry itself is the
+// state — already published versions are skipped, so no local bookkeeping is needed).
+const dailyLimit = Number(process.env.PUBLISH_DAILY_LIMIT ?? process.argv.find((a) => a.startsWith('--daily-limit='))?.slice(14) ?? 0)
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 const npmEnv = { ...process.env }
 let userconfig = null
@@ -111,32 +116,55 @@ function publishWithBackoff(pkg) {
       return
     } catch (error) {
       const output = [error.stdout, error.stderr].filter(Boolean).join('')
-      if (/E429|Too Many Requests/i.test(output) && attempt < 5) {
-        const wait = 30000 * (attempt + 1)
+      if (/E429|Too Many Requests/i.test(output) && attempt + 1 < maxAttempts) {
+        const wait = 60000 * (attempt + 1)
         console.log(`  ...   ${pkg.name} rate limited, retry in ${wait / 1000}s`)
         sleep(wait)
         continue
+      }
+      if (/E429|Too Many Requests/i.test(output)) {
+        if (userconfig) rmSync(join(userconfig, '..'), { recursive: true, force: true })
+        console.error(`\n${pkg.name}: npm publish throttle is still active`)
+        process.exit(4)
       }
       throw error
     }
   }
 }
 
-const packages = topoSort(readPackages())
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7)
+const allPackages = topoSort(readPackages())
+const packages = only ? allPackages.filter((pkg) => pkg.name === only) : allPackages
+if (only && !packages.length) {
+  console.error(`--only=${only} matched no package`)
+  process.exit(2)
+}
 console.log(`${dryRun ? '[dry-run] ' : ''}${packages.length} packages, publish order:`)
 for (const pkg of packages) console.log(`  ${pkg.name}@${pkg.version}${pkg.deps.length ? `  (needs: ${pkg.deps.join(', ')})` : ''}`)
 
 const failed = []
+let publishedCount = 0
+let skipped = []
 for (const pkg of packages) {
   if (dryRun) {
+    if (dailyLimit > 0 && publishedCount >= dailyLimit) {
+      skipped = packages.slice(packages.indexOf(pkg)).map((item) => item.name)
+      break
+    }
     try {
       execFileSync(npmBin, npmArgs(['publish', '--dry-run', '--access', 'public', pkg.dir]), {
         env: npmEnv,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       })
+      publishedCount += 1
       console.log(`  ok (dry-run)  ${pkg.name}@${pkg.version}`)
     } catch (error) {
+      const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('')
+      if (/EPUBLISHCONFLICT|cannot publish over|already exists|409/i.test(output)) {
+        console.log(`  skip  ${pkg.name}@${pkg.version} (already on the registry)`)
+        continue
+      }
       failed.push(pkg.name)
       console.error(`  FAIL (dry-run) ${pkg.name}: ${error.message.split('\n')[0]}`)
     }
@@ -145,6 +173,11 @@ for (const pkg of packages) {
   if (isPublished(pkg.name, pkg.version)) {
     console.log(`  skip  ${pkg.name}@${pkg.version} (already on the registry)`)
     continue
+  }
+  if (dailyLimit > 0 && publishedCount >= dailyLimit) {
+    console.log(`  ...   daily limit ${dailyLimit} reached; leaving the rest for the next run`)
+    skipped = packages.slice(packages.indexOf(pkg)).map((item) => item.name)
+    break
   }
   try {
     publishWithBackoff(pkg)
@@ -161,6 +194,7 @@ for (const pkg of packages) {
     continue
   }
   if (isPublished(pkg.name, pkg.version, 8)) {
+    publishedCount += 1
     console.log(`  ok    ${pkg.name}@${pkg.version}`)
     sleep(delayMs)
   } else {
@@ -170,6 +204,7 @@ for (const pkg of packages) {
 }
 
 if (userconfig) rmSync(join(userconfig, '..'), { recursive: true, force: true })
+if (skipped.length) console.log(`\nleft for a later run (${skipped.length}): ${skipped.join(', ')}`)
 console.log(
   failed.length
     ? `\n${failed.length} failed: ${failed.join(', ')}`
