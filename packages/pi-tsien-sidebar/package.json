@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-sidebar",
   "version": "0.1.0",
-  "private": true,
   "description": "Custom sidebar for the pi TUI.",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-live-session",
   "version": "0.1.0",
-  "private": true,
   "description": "Exposes the Pi session as a remotely takeable live session (dashboard bridge).",
   "type": "module",
   "pi": {
@@ -34,5 +33,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }
