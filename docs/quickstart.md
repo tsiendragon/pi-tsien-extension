@@ -50,7 +50,20 @@ pi install npm:pi-tsien-shared    → Installed npm:pi-tsien-shared
 
 `settings.json` 里记的是 `"npm:pi-tsien-live-session"`（这个形式 dashboard 的 Extensions 页面也能正确解析）。
 
-## 2. 装扩展（未发布到 npm 的，或你要改代码）
+## 2. 从 GitHub 一条命令装齐（未发布到 npm 的也能装）
+
+仓库根是一个**伞形包**：`pi.extensions` 里显式列了全部 25 个扩展入口，所以直接装仓库根即可：
+
+```bash
+pi install git:github.com/tsiendragon/pi-tsien-extension
+```
+
+pi 会 clone 该仓库并自动执行 `npm install --omit=dev`；根 `package.json` 的 `workspaces: ["packages/*"]`
+会把 26 个包链接到同一个 `node_modules`，因此跨包 import（如 `pi-tsien-shared`）能正常解析。
+
+> 注意：`pi install git:...` **只支持仓库根**（无子目录语法），装单个包请用下面的本地路径方式。
+
+## 3. 装扩展（未发布到 npm 的，或你要改代码）
 
 先建立工作区链接（**必须在仓库根先 `npm install`**，否则跨包 import 找不到兄弟包）：
 
@@ -63,7 +76,7 @@ pi install /abs/path/to/pi-tsien-extension/packages/pi-tsien-memory
 `settings.json` 会记为相对路径（如 `../../../../abs/path/.../packages/pi-tsien-memory`），这是 pi 的正常行为。
 注意 `pi install git:github.com/user/repo` **只能装仓库根**（不支持子目录），所以 monorepo 里的单包要用本地路径。
 
-## 3. 装 dashboard（图形化管理）
+## 4. 装 dashboard（图形化管理）
 
 ```bash
 git clone https://github.com/tsiendragon/pi-dashboard.git
@@ -80,7 +93,7 @@ cd pi-dashboard && ./scripts/install-standalone.sh
    浏览器随后自动带 cookie；纯浏览不需要认证。
 2. 想更收敛暴露面就设 `PI_DASH_HOST=127.0.0.1`。
 
-## 4. 发布状态（诚实说明）
+## 5. 发布状态（诚实说明）
 
 26 个包中 **10 个已在公共 npm**：`shared`、`auto-compact`、`capability`、`code-mode`、`compact-continue`、
 `context-powerline`、`default-system-prompt`、`git-graph`、`goal`、`live-session`。
@@ -96,9 +109,11 @@ cd pi-dashboard && ./scripts/install-standalone.sh
 sekret local exec tsien account -- npm run publish:packages    # 断点续发，已发布的自动跳过
 ```
 
-## 5. 常见坑速查
+## 6. 常见坑速查
 
 | 现象 | 原因 / 处理 |
+|---|---|
+| `pi install git:...` 后没装到想要的单个包 | git 源只支持仓库根；单包用本地路径，或改用 `npm:<name>` |
 |---|---|
 | `Path does not exist: ./pi-tsien-xxx` | 漏了 `npm:` 前缀 |
 | 扩展加载报模块找不到（跨包 import） | 从源码装时没在仓库根 `npm install`（缺 workspace 链接） |

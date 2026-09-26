@@ -15,7 +15,31 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/*.ts"
+      "./packages/pi-tsien-web-tools/src/index.ts",
+      "./packages/pi-tsien-rtk-fork/src/index.ts",
+      "./packages/pi-tsien-session-ui-fork/src/index.ts",
+      "./packages/pi-tsien-side-chat/src/index.ts",
+      "./packages/pi-tsien-auto-compact/src/index.ts",
+      "./packages/pi-tsien-compact-continue/src/index.ts",
+      "./packages/pi-tsien-context-powerline/src/index.ts",
+      "./packages/pi-tsien-default-system-prompt/src/index.ts",
+      "./packages/pi-tsien-thinking-level/src/index.ts",
+      "./packages/pi-tsien-git-graph/src/index.ts",
+      "./packages/pi-tsien-goal/src/index.ts",
+      "./packages/pi-tsien-live-session/src/index.ts",
+      "./packages/pi-tsien-memory/src/extension/index.ts",
+      "./packages/pi-tsien-metrics-sidebar/src/index.ts",
+      "./packages/pi-tsien-code-mode/src/index.ts",
+      "./packages/pi-tsien-running-commands/src/index.ts",
+      "./packages/pi-tsien-schedule/src/index.ts",
+      "./packages/pi-tsien-session-aliases/src/index.ts",
+      "./packages/pi-tsien-sidebar/src/index.ts",
+      "./packages/pi-tsien-subagent-workbench/src/index.ts",
+      "./packages/pi-tsien-usage-analytics/src/index.ts",
+      "./packages/pi-tsien-prompt-inspector/src/index.ts",
+      "./packages/pi-tsien-observation-pack/src/index.ts",
+      "./packages/pi-tsien-trajectory-recorder/src/index.ts",
+      "./packages/pi-tsien-capability/src/index.ts"
     ]
   },
   "scripts": {
@@ -26,7 +50,8 @@
     "parity:capture": "node --import tsx scripts/extension-parity.mjs --config config/extensions.standalone.json --out test/fixtures/extension-parity-baseline.json",
     "parity:check": "node --import tsx scripts/extension-parity.mjs --config config/extensions.standalone.json --baseline test/fixtures/extension-parity-baseline.json",
     "check": "npm run typecheck && npm test",
-    "publish:packages": "node scripts/publish-packages.mjs"
+    "publish:packages": "node scripts/publish-packages.mjs",
+    "publish:until-done": "node scripts/publish-until-done.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1",
