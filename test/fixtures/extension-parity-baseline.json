@@ -1,6 +1,6 @@
 {
   "label": null,
-  "config": "<repo>/config/extensions.standalone.json",
+  "config": "config/extensions.standalone.json",
   "entryCount": 25,
   "entries": [
     {
