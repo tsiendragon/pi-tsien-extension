@@ -282,12 +282,26 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 
 26 个包以 `pi-tsien-*` 为名发布在公共 npm（首个版本 `0.1.0`）：
 
+**`npm:` 前缀不能省**（裸名字会被 pi 当作本地路径）：
+
 ```bash
-pi install pi-tsien-web-tools   # 单个扩展
-pi install pi-tsien-shared      # 跨包共享库（多个扩展依赖它）
+pi install npm:pi-tsien-web-tools   # 单个扩展
+pi install npm:pi-tsien-live-session   # 依赖 pi-tsien-shared 会自动一起装
 ```
 
-包之间用普通 semver 互相依赖（如 `pi-tsien-live-session` → `pi-tsien-shared@^0.1.0`），npm 会正常解析。
+装完落在 `~/.pi/agent/npm/node_modules/`，`pi list` 能看到；dashboard 的 Extensions 页面也会正确显示它自带的条目。
+
+包之间用普通 semver 互相依赖（如 `pi-tsien-live-session` → `pi-tsien-shared@^0.1.0`），pi 调 npm 安装时会自动把共享库一起装好（实测）。
+
+### 需要补丁版 pi 的只有 3 个
+
+| 包 | 用到的补丁 API |
+|---|---|
+| `pi-tsien-live-session` | `extension_ui` / `respondExtensionUi` / `extension_ui_notify` |
+| `pi-tsien-code-mode` | `executeTool` |
+| `pi-tsien-subagent-workbench` | `executeTool` |
+
+其余 **23 个包在上游原版 pi 上就能跑**。补丁版 pi 的构建产物在 [tsiendragon/pi releases](https://github.com/tsiendragon/pi/releases)（`v0.85.1-tsien.1` 起）。
 批量发布用 `npm run publish:packages`（拓扑排序 + 断点续发 + 429 退避，token 只从环境读）。
 
 ## 用 dashboard 管理扩展（推荐）
