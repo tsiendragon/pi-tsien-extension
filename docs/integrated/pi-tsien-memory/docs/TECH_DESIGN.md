@@ -31,7 +31,7 @@
 - 团队同步；
 - 自动读取整个仓库；
 - 自动调用或修改 `pi-knowledge` 私有代码；
-- 自动写入 eagleeye-knowledge；
+- 自动写入 marketplace-knowledge；
 - 自动创建或发布 Marketplace 包；
 - 默认后台模型推理；
 - 复杂 TUI 管理后台；

@@ -39,7 +39,7 @@
 
 | 字段 | 含义 |
 |---|---|
-| `packages[]` | 扩展来源：`{id, source}`。`source` 可以是绝对路径（本地 checkout）、git URL，或含 `${PI_TSIEN_EXTENSION_ROOT}` / `${EAGLEEYE_AI_DEV_ROOT}` / `${HOME}` 的模板 |
+| `packages[]` | 扩展来源：`{id, source}`。`source` 可以是绝对路径（本地 checkout）、git URL，或含 `${PI_TSIEN_EXTENSION_ROOT}` / `${PI_MARKETPLACE_ROOT}` / `${HOME}` 的模板 |
 | `loadOrder[]` | 加载顺序 = 生效顺序。`{package, path}` 或直接 `{path: 绝对路径}` |
 | `prune` | 严格模式：`packages`/`extensions` 为 true 时，不在清单里的会被移除；`autoDiscoveredExtensions: "quarantine"` 把未托管的单文件扩展移入隔离目录 |
 
@@ -47,7 +47,7 @@
 
 - 写进清单 ≠ 生效：同步器默认 dry-run，要 `--apply` 才写 Pi 的 `settings.json`（原文件会备份到 `<agent dir>/extension-sync-backups/<时间戳>/`）。
 - 只声明不存在的本地路径会**明确报错**，不会静默跳过。
-- 引用 `${EAGLEEYE_AI_DEV_ROOT}` 时该变量必须可解析（想不接内部 marketplace 就别引用它，见 `extensions.standalone.json`）。
+- 引用 `${PI_MARKETPLACE_ROOT}` 时该变量必须可解析（想不接内部 marketplace 就别引用它，见 `extensions.standalone.json`）。
 - 完整可用的 25 项清单在 `../extensions.standalone.json`；示例文件故意只留几项，方便看懂结构。
 - 非 schema 字段（如 `_comment`）会被忽略，可用来写注释。
 

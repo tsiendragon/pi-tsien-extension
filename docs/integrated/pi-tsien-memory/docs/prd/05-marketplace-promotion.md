@@ -1,4 +1,4 @@
-# 子 PRD 5：知识晋升到 EagleEye Marketplace
+# 子 PRD 5：知识晋升到 Marketplace
 
 ## 用户任务
 
@@ -10,7 +10,7 @@
 Session 事件
   → Personal Memory
   → 可复用知识候选
-  → eagleeye-knowledge 条目
+  → marketplace-knowledge 条目
   → Rule / Skill / Agent / Hook
   → 多组件协作时才是 Plugin
 ```
@@ -29,7 +29,7 @@ Session 事件
 - 只是“我喜欢怎样工作”；
 - 没有可描述的输入、输出和成功标准。
 
-## 什么时候建议进入 eagleeye-knowledge
+## 什么时候建议进入 marketplace-knowledge
 
 适合形成知识条目：
 
@@ -42,7 +42,7 @@ Session 事件
 
 建议映射：
 
-| 内容 | eagleeye-knowledge 类型 |
+| 内容 | marketplace-knowledge 类型 |
 |---|---|
 | 用户或团队偏好 | UP |
 | 错误现象与解法 | EI |
@@ -141,7 +141,7 @@ Memory extension 可以：
 
 Memory extension 不可以：
 
-- 直接修改 `eagleeye-ai-dev`；
+- 直接修改 `pi-marketplace`；
 - 自动创建、提交或发布包；
 - 自动决定 Rule、Hook 或 Agent 的安全语义；
 - 自动声明 Pi `supported`；

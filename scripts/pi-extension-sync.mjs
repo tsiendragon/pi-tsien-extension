@@ -97,16 +97,16 @@ function createContext({ repoRoot, agentDir, env }) {
 	);
 	// Resolved lazily: configs that never reference the marketplace checkout
 	// (for example the standalone profile) must sync on machines that do not
-	// have eagleeye-ai-dev installed.
-	let eagleeyeRoot;
+	// have pi-marketplace installed.
+	let marketplaceRoot;
 	return {
 		piTsienRoot,
-		get eagleeyeRoot() {
-			eagleeyeRoot ??= firstExisting(
-				[env.EAGLEEYE_AI_DEV_ROOT, resolve(piTsienRoot, "..", "eagleeye-ai-dev")],
-				"${EAGLEEYE_AI_DEV_ROOT}; set EAGLEEYE_AI_DEV_ROOT or clone eagleeye-ai-dev beside pi-tsien-extension",
+		get marketplaceRoot() {
+			marketplaceRoot ??= firstExisting(
+				[env.PI_MARKETPLACE_ROOT, resolve(piTsienRoot, "..", "pi-marketplace")],
+				"${PI_MARKETPLACE_ROOT}; set PI_MARKETPLACE_ROOT or clone pi-marketplace beside pi-tsien-extension",
 			);
-			return eagleeyeRoot;
+			return marketplaceRoot;
 		},
 		agentDir,
 		home: env.HOME ? resolve(env.HOME) : homedir(),
@@ -118,8 +118,8 @@ function expandString(value, context) {
 		.replaceAll("${PI_TSIEN_EXTENSION_ROOT}", context.piTsienRoot)
 		.replaceAll("${PI_AGENT_DIR}", context.agentDir)
 		.replaceAll("${HOME}", context.home);
-	if (!expanded.includes("${EAGLEEYE_AI_DEV_ROOT}")) return expanded;
-	return expanded.replaceAll("${EAGLEEYE_AI_DEV_ROOT}", context.eagleeyeRoot);
+	if (!expanded.includes("${PI_MARKETPLACE_ROOT}")) return expanded;
+	return expanded.replaceAll("${PI_MARKETPLACE_ROOT}", context.marketplaceRoot);
 }
 
 function normalizePackages(entries, context, agentDir) {

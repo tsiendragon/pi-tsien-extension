@@ -14,12 +14,12 @@ function writeJson(path, value) {
 test("sync preserves configured package install order and extension load order", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-"));
 	const repoRoot = join(root, "pi-tsien-extension");
-	const eagleeyeRoot = join(root, "eagleeye-ai-dev");
+	const marketplaceRoot = join(root, "pi-marketplace");
 	const agentDir = join(root, ".pi", "agent");
 	const configPath = join(agentDir, "extensions.config.json");
 	const directExtension = join(root, "direct.ts");
 	mkdirSync(join(repoRoot, "extensions"), { recursive: true });
-	mkdirSync(eagleeyeRoot, { recursive: true });
+	mkdirSync(marketplaceRoot, { recursive: true });
 	mkdirSync(join(agentDir, "extensions"), { recursive: true });
 	writeFileSync(join(repoRoot, "extensions", "goal.ts"), "export default {};");
 	writeFileSync(directExtension, "export default {};");
@@ -47,7 +47,7 @@ test("sync preserves configured package install order and extension load order",
 		configPath,
 		agentDir,
 		repoRoot,
-		env: { HOME: root, EAGLEEYE_AI_DEV_ROOT: eagleeyeRoot },
+		env: { HOME: root, PI_MARKETPLACE_ROOT: marketplaceRoot },
 	});
 	assert.deepEqual(plan.packageRemovals, ["npm:remove"]);
 	assert.equal(plan.packageUpdates.length, 1);
@@ -115,7 +115,7 @@ test("sync keeps Pi override entries instead of pruning user disable flags", () 
 	assert.deepEqual(second.extensionAdds, []);
 });
 
-test("standalone config syncs without an eagleeye-ai-dev checkout", () => {
+test("standalone config syncs without a pi-marketplace checkout", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-standalone-"));
 	const repoRoot = join(root, "pi-tsien-extension");
 	const agentDir = join(root, ".pi", "agent");
@@ -132,7 +132,7 @@ test("standalone config syncs without an eagleeye-ai-dev checkout", () => {
 	assert.deepEqual(plan.desiredExtensions, [join(repoRoot, "extensions", "goal.ts")]);
 });
 
-test("config that references the marketplace still requires an eagleeye-ai-dev checkout", () => {
+test("config that references the marketplace still requires a pi-marketplace checkout", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-marketplace-"));
 	const repoRoot = join(root, "pi-tsien-extension");
 	const agentDir = join(root, "agent");
@@ -140,23 +140,23 @@ test("config that references the marketplace still requires an eagleeye-ai-dev c
 	const configPath = join(agentDir, "extensions.config.json");
 	writeJson(configPath, {
 		version: 1,
-		packages: [{ id: "security-guard", source: "${EAGLEEYE_AI_DEV_ROOT}/marketplace/packages/plugins/security-guard/current" }],
+		packages: [{ id: "security-guard", source: "${PI_MARKETPLACE_ROOT}/marketplace/packages/plugins/security-guard/current" }],
 		loadOrder: [],
 		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
 	});
 	assert.throws(
 		() => buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root } }),
-		/Cannot resolve \$\{EAGLEEYE_AI_DEV_ROOT\}/,
+		/Cannot resolve \$\{PI_MARKETPLACE_ROOT\}/,
 	);
 });
 
 test("sync rejects load-order paths that escape a package", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-invalid-"));
 	const repoRoot = join(root, "repo");
-	const eagleeyeRoot = join(root, "eagleeye-ai-dev");
+	const marketplaceRoot = join(root, "pi-marketplace");
 	const agentDir = join(root, "agent");
 	mkdirSync(repoRoot, { recursive: true });
-	mkdirSync(eagleeyeRoot, { recursive: true });
+	mkdirSync(marketplaceRoot, { recursive: true });
 	const configPath = join(agentDir, "extensions.config.json");
 	writeJson(configPath, {
 		version: 1,
@@ -165,7 +165,7 @@ test("sync rejects load-order paths that escape a package", () => {
 		prune: { packages: true, extensions: true, autoDiscoveredExtensions: "quarantine" },
 	});
 	assert.throws(
-		() => buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root, EAGLEEYE_AI_DEV_ROOT: eagleeyeRoot } }),
+		() => buildSyncPlan({ configPath, agentDir, repoRoot, env: { HOME: root, PI_MARKETPLACE_ROOT: marketplaceRoot } }),
 		/must stay inside its package/,
 	);
 });

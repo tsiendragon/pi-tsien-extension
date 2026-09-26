@@ -22,5 +22,5 @@
     "extensions": true,
     "autoDiscoveredExtensions": "quarantine"
   },
-  "_marketplace_example": "接入内部 marketplace 时，额外声明一个包，并把它的扩展加进 loadOrder：{ \"id\": \"eagleeye\", \"source\": \"${EAGLEEYE_AI_DEV_ROOT}/marketplace/packages/pi-eagleeye\" }；此时同步器要求 EAGLEEYE_AI_DEV_ROOT 可解析，缺失会明确报错。"
+  "_marketplace_example": "接入内部 marketplace 时，额外声明一个包，并把它的扩展加进 loadOrder：{ \"id\": \"marketplace\", \"source\": \"${PI_MARKETPLACE_ROOT}/marketplace/packages/example-extension\" }；此时同步器要求 PI_MARKETPLACE_ROOT 可解析，缺失会明确报错。"
 }

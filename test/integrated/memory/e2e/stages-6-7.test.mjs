@@ -23,8 +23,8 @@ class FakeBus {
 
 test("versioned retrieval bridge discovers, merges, and respects deadline", async () => {
   const bus = new FakeBus();
-  bus.on("eagleeye.retrieval.discover.v1", ({ register }) => register({ providerId: "fake-knowledge", protocolVersion: 1, kinds: ["source-knowledge"], supportsAbort: true, ownsContextInjection: false }));
-  bus.on("eagleeye.retrieval.search.v1", ({ request, respond }) => respond({ requestId: request.requestId, providerId: "fake-knowledge", results: [{ id: "chunk-1", kind: "source-knowledge", text: "current source", score: 0.9, trust: "source-evidence", providerId: "fake-knowledge", provenance: { uri: "knowledge://kb/chunk", hash: "chunk-hash", stale: false } }], warnings: [], latencyMs: 1 }));
+  bus.on("pi-tsien.memory.retrieval.discover.v1", ({ register }) => register({ providerId: "fake-knowledge", protocolVersion: 1, kinds: ["source-knowledge"], supportsAbort: true, ownsContextInjection: false }));
+  bus.on("pi-tsien.memory.retrieval.search.v1", ({ request, respond }) => respond({ requestId: request.requestId, providerId: "fake-knowledge", results: [{ id: "chunk-1", kind: "source-knowledge", text: "current source", score: 0.9, trust: "source-evidence", providerId: "fake-knowledge", provenance: { uri: "knowledge://kb/chunk", hash: "chunk-hash", stale: false } }], warnings: [], latencyMs: 1 }));
   const bridge = new PiKnowledgeBridge(bus, Date.now);
   const capabilities = await bridge.discover();
   assert.equal(capabilities.length, 1);
@@ -32,14 +32,14 @@ test("versioned retrieval bridge discovers, merges, and respects deadline", asyn
   const results = await bridge.search(request);
   assert.equal(results[0].id, "chunk-1");
   let coordinator;
-  bus.on("eagleeye.context.coordinator.v1", (data) => { coordinator = data; });
+  bus.on("pi-tsien.memory.context.coordinator.v1", (data) => { coordinator = data; });
   bridge.announceCoordinator("run-1", "session-1", Date.now() + 1000);
   assert.equal(coordinator.owner, "pi-tsien-memory");
 
   const fallback = new PiKnowledgeBridge(undefined);
   assert.deepEqual(await fallback.search(request), []);
   const slowBus = new FakeBus();
-  slowBus.on("eagleeye.retrieval.discover.v1", ({ register }) => register({ providerId: "slow", protocolVersion: 1, kinds: ["source-knowledge"], supportsAbort: true, ownsContextInjection: false }));
+  slowBus.on("pi-tsien.memory.retrieval.discover.v1", ({ register }) => register({ providerId: "slow", protocolVersion: 1, kinds: ["source-knowledge"], supportsAbort: true, ownsContextInjection: false }));
   const slowBridge = new PiKnowledgeBridge(slowBus, Date.now);
   const startedAt = Date.now();
   assert.deepEqual(await slowBridge.search(retrievalRequest("slow", "knowledge", "/repo", "r", "main", 3, 20), undefined), []);

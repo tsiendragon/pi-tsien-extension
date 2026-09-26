@@ -199,7 +199,7 @@ Phase 3 在两个 extension 中实现共享 event contract。
 事件名：
 
 ```text
-eagleeye.retrieval.discover.v1
+pi-tsien.memory.retrieval.discover.v1
 ```
 
 请求：
@@ -225,7 +225,7 @@ Provider 在 factory 阶段注册 listener。Coordinator 在每次 `before_agent
 事件名：
 
 ```text
-eagleeye.retrieval.search.v1
+pi-tsien.memory.retrieval.search.v1
 ```
 
 ```ts
@@ -274,7 +274,7 @@ Coordinator 使用 callback + deadline 等待 provider。迟到 response 被丢�
 事件名：
 
 ```text
-eagleeye.context.coordinator.v1
+pi-tsien.memory.context.coordinator.v1
 ```
 
 Coordinator 在 run 开始 emit：
@@ -365,7 +365,7 @@ interface PromotionEligibility {
 ### 9.3 类型建议
 
 ```text
-仍是事实/经验                 → eagleeye-knowledge
+仍是事实/经验                 → marketplace-knowledge
 短、始终生效、无参数          → Rule
 有输入、步骤、输出、验收      → Skill
 独立角色型调查                → Agent candidate
@@ -401,4 +401,4 @@ interface PromotionEvidenceBundle {
 ~/.pi/tsien-memory/proposals/<proposal-id>.md
 ```
 
-生成 proposal 不修改外部仓库。用户明确同意后，Agent 再进入 eagleeye-knowledge 或 Marketplace 既有 Skill 流程。
+生成 proposal 不修改外部仓库。用户明确同意后，Agent 再进入 marketplace-knowledge 或 Marketplace 既有 Skill 流程。

@@ -12,7 +12,7 @@
 - [任务 2：自动召回并注入上下文](docs/prd/02-auto-recall.md)
 - [任务 3：查看、纠正与遗忘](docs/prd/03-user-control.md)
 - [任务 4：与 pi-knowledge 协作](docs/prd/04-pi-knowledge-collaboration.md)
-- [任务 5：知识晋升到 EagleEye Marketplace](docs/prd/05-marketplace-promotion.md)
+- [任务 5：知识晋升到 Marketplace](docs/prd/05-marketplace-promotion.md)
 - [任务 6：交付阶段与可替换模块](docs/prd/06-delivery-plan.md)
 - [实施状态与验收记录](docs/IMPLEMENTATION_STATUS.md)
 

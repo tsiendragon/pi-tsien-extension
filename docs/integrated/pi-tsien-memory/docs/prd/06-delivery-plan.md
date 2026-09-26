@@ -51,7 +51,7 @@
 范围：
 
 - 复用次数和结果记录；
-- eagleeye-knowledge 候选包；
+- marketplace-knowledge 候选包；
 - Rule / Skill / Plugin 分类建议；
 - 脱敏、反例和适用范围检查；
 - 只读 Marketplace preflight；

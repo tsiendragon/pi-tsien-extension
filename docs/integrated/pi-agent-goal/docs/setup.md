@@ -78,7 +78,7 @@ pi --goal-continuation=false
 pi --goal-continuation-interval-minutes 45
 ```
 
-Use a positive interval value. The visible `EagleEye task settled` notification does not schedule a continuation.
+Use a positive interval value. The visible `Task settled` notification does not schedule a continuation.
 
 ## Settings.json form
 

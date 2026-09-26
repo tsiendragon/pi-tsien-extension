@@ -8,7 +8,7 @@ export class PiKnowledgeBridge implements KnowledgeBridge {
   async discover(): Promise<RetrievalCapability[]> {
     if (!this.events) return [];
     const capabilities: RetrievalCapability[] = [];
-    this.events.emit("eagleeye.retrieval.discover.v1", { register: (capability: RetrievalCapability) => {
+    this.events.emit("pi-tsien.memory.retrieval.discover.v1", { register: (capability: RetrievalCapability) => {
       if (capability.protocolVersion === 1 && !capabilities.some((item) => item.providerId === capability.providerId)) capabilities.push(capability);
     } });
     return capabilities;
@@ -26,7 +26,7 @@ export class PiKnowledgeBridge implements KnowledgeBridge {
     let abortHandler: (() => void) | undefined;
     const done = new Promise<void>((resolve) => {
       const finish = () => { if (responses.size >= providerIds.size) resolve(); };
-      this.events?.emit("eagleeye.retrieval.search.v1", {
+      this.events?.emit("pi-tsien.memory.retrieval.search.v1", {
         request,
         respond: (response: RetrievalProviderResponse) => {
           if (response.requestId !== request.requestId || !providerIds.has(response.providerId) || this.now() > request.deadlineAt) return;
@@ -62,7 +62,7 @@ export class PiKnowledgeBridge implements KnowledgeBridge {
   }
 
   announceCoordinator(runId: string, sessionId: string, expiresAt: number): void {
-    this.events?.emit("eagleeye.context.coordinator.v1", { runId, sessionId, owner: "pi-tsien-memory", expiresAt });
+    this.events?.emit("pi-tsien.memory.context.coordinator.v1", { runId, sessionId, owner: "pi-tsien-memory", expiresAt });
   }
 }
 

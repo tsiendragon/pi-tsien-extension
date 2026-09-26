@@ -71,8 +71,8 @@ Agent 找到相关记忆，展示将遗忘的内容并确认；完成后不再�
 | Pi/Codex session | 当前会话原始历史、恢复、分支、压缩 | 跨会话稳定知识治理 |
 | pi-tsien-memory | 从交互中学到的偏好、决策、经验、历史上下文 | 索引整个代码库、PDF、URL |
 | pi-knowledge | 对现有文件、代码、文档、网页建立可更新索引 | 判断用户偏好、修改个人记忆 |
-| eagleeye-knowledge | 经审查、可复用、可追踪的组织知识条目 | 自动安装执行能力 |
-| EagleEye Marketplace | 可版本化、可安装、可测试的 rule/skill/hook/agent/plugin | 保存个人临时记忆 |
+| marketplace-knowledge | 经审查、可复用、可追踪的组织知识条目 | 自动安装执行能力 |
+| Marketplace | 可版本化、可安装、可测试的 rule/skill/hook/agent/plugin | 保存个人临时记忆 |
 
 关键原则：
 
@@ -156,12 +156,12 @@ Agent 找到相关记忆，展示将遗忘的内容并确认；完成后不再�
 一次对话
   → 个人 Memory
   → 多次复用的知识候选
-  → eagleeye-knowledge 条目
+  → marketplace-knowledge 条目
   → Rule 或 Skill
   → 多组件协作时才成为 Plugin
 ```
 
-Memory extension 只负责发现模式、整理证据和生成草案建议；正式写入、评审、版本化、安装和发布由 eagleeye-knowledge 与 EagleEye Marketplace 流程负责。
+Memory extension 只负责发现模式、整理证据和生成草案建议；正式写入、评审、版本化、安装和发布由 marketplace-knowledge 与 Marketplace 流程负责。
 
 详见：[任务 5](prd/05-marketplace-promotion.md)。
 
@@ -183,7 +183,7 @@ Memory extension 只负责发现模式、整理证据和生成草案建议；正
 2. [自动召回并注入上下文](prd/02-auto-recall.md)
 3. [查看、纠正与遗忘](prd/03-user-control.md)
 4. [与 pi-knowledge 协作](prd/04-pi-knowledge-collaboration.md)
-5. [知识晋升到 EagleEye Marketplace](prd/05-marketplace-promotion.md)
+5. [知识晋升到 Marketplace](prd/05-marketplace-promotion.md)
 6. [交付阶段与可替换模块](prd/06-delivery-plan.md)
 
 ## 12. Tech Design
@@ -195,4 +195,4 @@ Memory extension 只负责发现模式、整理证据和生成草案建议；正
 - Pi session：自动持久化、项目维度恢复、树分支、自动 compaction、extension `context` 临时注入；
 - Codex CLI 0.146：默认按当前工作目录筛选 session，可 resume、fork、archive、delete；
 - pi-knowledge：索引已有文件并跨 session 检索，支持可选 context auto-injection；
-- EagleEye Marketplace：Skill、Rule、Hook、Agent、Plugin 有独立职责，Plugin 只用于多组件协作，Pi adapter 要求明确兼容声明和 reviewed adapter。
+- Marketplace：Skill、Rule、Hook、Agent、Plugin 有独立职责，Plugin 只用于多组件协作，Pi adapter 要求明确兼容声明和 reviewed adapter。
