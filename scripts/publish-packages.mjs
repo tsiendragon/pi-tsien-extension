@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+/**
+ * Publish every `packages/pi-tsien-*` package to the public npm registry.
+ *
+ * Why a script instead of 26 manual `npm publish` calls:
+ *  - the packages depend on each other, so the order has to be topological;
+ *  - publishing is resumable: a version that is already on the registry is skipped,
+ *    so a failed run can simply be re-run;
+ *  - the token never touches disk: a throwaway userconfig with `${NPM_TOKEN}` is written to the
+ *    system temp dir and deleted afterwards, and the value only ever exists in the child env.
+ *
+ * Usage:
+ *   NPM_TOKEN=... node scripts/publish-packages.mjs            # publish what is missing
+ *   NPM_TOKEN=... node scripts/publish-packages.mjs --dry-run   # show tarballs + order, publish nothing
+ *
+ * Get NPM_TOKEN from the local vault (never echo it):
+ *   sekret local exec tsien account -- node scripts/publish-packages.mjs
+ */
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const REGISTRY = 'https://registry.npmjs.org/'
+const root = new URL('..', import.meta.url).pathname
+const packagesDir = join(root, 'packages')
+const dryRun = process.argv.includes('--dry-run')
+
+/** @returns {Array<{ name: string, dir: string, version: string, deps: string[] }>} */
+function readPackages() {
+  return readdirSync(packagesDir)
+    .filter((name) => name.startsWith('pi-tsien-'))
+    .map((name) => {
+      const dir = join(packagesDir, name)
+      const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'))
+      return {
+        name: manifest.name,
+        dir,
+        version: manifest.version,
+        deps: Object.keys(manifest.dependencies ?? {}),
+      }
+    })
+    .filter((pkg) => pkg.name)
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** Dependencies before dependents; falls back to alphabetical for anything left over. */
+function topoSort(packages) {
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]))
+  const sorted = []
+  const visiting = new Set()
+  const visit = (pkg) => {
+    if (sorted.includes(pkg) || visiting.has(pkg.name)) return
+    visiting.add(pkg.name)
+    for (const dep of pkg.deps) {
+      const inside = byName.get(dep)
+      if (inside) visit(inside)
+    }
+    visiting.delete(pkg.name)
+    sorted.push(pkg)
+  }
+  for (const pkg of packages) visit(pkg)
+  return sorted
+}
+
+const npmBin = process.env.NPM_BIN || 'npm'
+const npmEnv = { ...process.env }
+let userconfig = null
+if (!dryRun) {
+  const token = process.env.NPM_TOKEN
+  if (!token) {
+    console.error('NPM_TOKEN is not set. Run through: sekret local exec tsien account -- node scripts/publish-packages.mjs')
+    process.exit(2)
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'pi-tsien-publish-'))
+  userconfig = join(dir, 'npmrc')
+  writeFileSync(userconfig, `registry=${REGISTRY}\n//registry.npmjs.org/:_authToken=\${NPM_TOKEN}\n`, { mode: 0o600 })
+}
+const npmArgs = (args) => (userconfig ? [...args, '--userconfig', userconfig] : args)
+
+function isPublished(name, version) {
+  try {
+    const out = execFileSync(npmBin, npmArgs(['view', `${name}@${version}`, 'version']), {
+      env: npmEnv,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    return out.trim() === version
+  } catch {
+    return false
+  }
+}
+
+const packages = topoSort(readPackages())
+console.log(`${dryRun ? '[dry-run] ' : ''}${packages.length} packages, publish order:`)
+for (const pkg of packages) console.log(`  ${pkg.name}@${pkg.version}${pkg.deps.length ? `  (needs: ${pkg.deps.join(', ')})` : ''}`)
+
+const failed = []
+for (const pkg of packages) {
+  if (dryRun) {
+    try {
+      execFileSync(npmBin, npmArgs(['publish', '--dry-run', '--access', 'public', pkg.dir]), {
+        env: npmEnv,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      console.log(`  ok (dry-run)  ${pkg.name}@${pkg.version}`)
+    } catch (error) {
+      failed.push(pkg.name)
+      console.error(`  FAIL (dry-run) ${pkg.name}: ${error.message.split('\n')[0]}`)
+    }
+    continue
+  }
+  if (isPublished(pkg.name, pkg.version)) {
+    console.log(`  skip  ${pkg.name}@${pkg.version} (already on the registry)`)
+    continue
+  }
+  try {
+    execFileSync(npmBin, npmArgs(['publish', '--access', 'public', pkg.dir]), {
+      env: npmEnv,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (error) {
+    failed.push(pkg.name)
+    const detail = [error.stdout, error.stderr].filter(Boolean).join('').split('\n').filter((l) => /npm error/.test(l)).slice(0, 2).join(' | ')
+    console.error(`  FAIL  ${pkg.name}@${pkg.version}: ${detail || error.message.split('\n')[0]}`)
+    continue
+  }
+  if (isPublished(pkg.name, pkg.version)) console.log(`  ok    ${pkg.name}@${pkg.version}`)
+  else {
+    failed.push(pkg.name)
+    console.error(`  FAIL  ${pkg.name}@${pkg.version}: published but not visible on the registry yet`)
+  }
+}
+
+if (userconfig) rmSync(join(userconfig, '..'), { recursive: true, force: true })
+console.log(
+  failed.length
+    ? `\n${failed.length} failed: ${failed.join(', ')}`
+    : dryRun
+      ? '\ndry-run complete: every package can be packed and published'
+      : '\nall packages are on the registry',
+)
+process.exit(failed.length ? 1 : 0)

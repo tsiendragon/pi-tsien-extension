@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-session-ui-fork",
   "version": "0.1.0",
-  "private": true,
   "description": "Session UI fork (pi-zero) incl. MasuRii tool-diff renderer (see ATTRIBUTION.md).",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
     "pi-coding-agent",
     "pi-extension",
     "pi-package"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

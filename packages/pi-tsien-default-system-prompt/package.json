@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-default-system-prompt",
   "version": "0.1.0",
-  "private": true,
   "description": "Provides the default system prompt for new sessions.",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

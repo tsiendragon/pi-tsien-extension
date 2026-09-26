@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-memory",
   "version": "0.1.0",
-  "private": true,
   "description": "Long-term memory: capture, review and recall.",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

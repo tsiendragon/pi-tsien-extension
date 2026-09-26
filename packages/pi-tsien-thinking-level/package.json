@@ -1,7 +1,6 @@
 {
   "name": "pi-tsien-thinking-level",
   "version": "0.1.0",
-  "private": true,
   "description": "The /effort command: set the thinking level (off|minimal|low|medium|high|xhigh|max).",
   "type": "module",
   "pi": {
@@ -31,5 +30,9 @@
   "files": [
     "src",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }
