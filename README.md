@@ -91,26 +91,26 @@
 记录 Pi 的可复现 Agent 轨迹，供后续质量分析和任务型模型训练使用。
 
 - 记录用户输入、最终 system prompt、system prompt 来源、每次 context、provider payload、assistant 消息、Tool 参数/结果、模型、thinking level、provider effort、usage、错误、压缩和分支事件。
-- 默认目录：`/mnt/workspace/lilong/agent/pi-traces/`；可用 `PI_TRACE_DIR` 覆盖。
+- 默认目录：`<agent dir>/pi-traces/`；可用 `PI_TRACE_DIR` 覆盖。
 - 每个 session 按 `sessionId` 和进程分别追加写入 `sessions/<session-id>/events-<pid>.jsonl`，不覆盖历史；工具结果默认不截断。
 - 不做凭证或字符串脱敏；provider request/response 的 header 值也完整记录。只做 JSON 序列化处理；`message_update` 和工具流式增量默认不记录，避免数据量失控。
 - process-isolated subagent 会通过 `traceContext` 关联父 session、父 Tool call、父 workflow/work/task、当前 workflow、workId、taskId、taskKey、stageIndex 和 foreach iteration；retry 还记录 source work/workflow 与 attempt，子进程轨迹仍写入同一个 trace 根目录的独立文件。`stageIndex`/`iterationIndex` 使用 0-based。
 - 记录器写入失败只提示警告，不阻断 Pi 主流程。
 - 同时写一份紧凑计时账本（每个模型调用、Tool 调用、Agent run 一行，约 200B），用于 dashboard 的时间分析，避免解析数十 GB 的完整 trace：
-  - 默认目录 `/mnt/workspace/lilong/agent/pi/timing/<sessionId>.jsonl`；可用 `PI_TIMING_DIR` 覆盖，或用 `timingEnabled: false` 关闭。
+  - 默认目录 `<agent dir>/pi-timing/<sessionId>.jsonl`；可用 `PI_TIMING_DIR` 覆盖，或用 `timingEnabled: false` 关闭。
   - `model`：`provider`、`model`、`attempt`、`totalMs`、`ttftMs`（首个流式增量，≈首个 token）、`responseMs`（HTTP 首字节）、`thinkingMs`、`outputTokens`、`reasoningTokens`、`stopReason`、`isError`。
   - `tool`：`toolName`、`durationMs`、`isError`。
   - `run`：`durationMs`（agent_start → agent_settled）、`modelMs`、`toolMs`、`modelCount`、`toolCount`、`turnCount`。
   - 每条记录用 `scope`（`root`/`child`）标记是否为子代理进程，便于 dashboard 避免父子墙钟重复计数。
   - 不记录提示词、Tool 参数或 Tool 输出。
-- 扩展修改后执行 `/reload`；当前由用户级 `/home/tsien/.pi/agent/extensions.config.json` 的最后一项加载，以观察其他扩展修改后的最终请求。
+- 扩展修改后执行 `/reload`；当前由用户级 `~/.pi/agent/extensions.config.json` 的最后一项加载，以观察其他扩展修改后的最终请求。
 
 ### `observation-pack.ts`
 
 把大型工具结果在投影层替换为简短占位符，原始字节归档到本地，需要时用 `obs_recall` 精确分页取回；不改写已存会话历史。
 
 - 默认关闭；在 `~/.pi/agent/observation-pack.json` 设置 `observationPack.enabled: true` 后执行 `/reload` 生效。
-- 归档根目录由 `archiveDir` 配置（默认 `/mnt/workspace/lilong/agent/archiv`），可用 `PI_OBSERVATION_DIR` 覆盖；按 session 隔离存放。
+- 归档根目录由 `archiveDir` 配置（默认 `<agent dir>/archiv`），可用 `PI_OBSERVATION_DIR` 覆盖；按 session 隔离存放。
 - 仅当纯文本非错误结果超过 `thresholdBytes`（默认 10 KiB）时参与；前 `fullSends`（默认 2）次请求发送全量，之后替换为占位符。
 - `obs_recall` 仅在启用时注册，避免默认关闭时占用请求里的 tool schema；按 `offset` 分页，起点向后对齐到 UTF-8 字符边界，配合返回的 `next_offset` 连续读取。
 - 会话恢复后可继续读取；原生压缩会省略旧工具结果，压缩后不保证仍能发现 observation id。
@@ -213,18 +213,18 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 默认数据目录：`~/.pi/tsien-memory/`
 - `pi-dashboard` 与 `pi-knowledge` 保持独立；Memory 的 knowledge bridge 仍是可选协作接口。
 
-迁移后的详细设计和验收材料位于 `/mnt/workspace/lilong/repos/pi-tsien-extension/docs/integrated/`。
+迁移后的详细设计和验收材料位于 `<repo>/docs/integrated/`。
 
 ## 本地安装
 
 ```bash
-pi install /mnt/workspace/lilong/repos/pi-tsien-extension
+pi install <repo>
 ```
 
 也可以临时加载整个 package：
 
 ```bash
-pi -e /mnt/workspace/lilong/repos/pi-tsien-extension
+pi -e <repo>
 ```
 
 安装或修改后执行 `/reload`。

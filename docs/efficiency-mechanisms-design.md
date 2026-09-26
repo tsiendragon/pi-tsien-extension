@@ -1,7 +1,7 @@
 # 效率机制技术方案设计（RTK 对齐 + SoL-Pi 借鉴）
 
 状态：**设计；S0–S3 已完成，扩展已于 2026-09-15 在用户级配置中启用**
-范围：`/mnt/workspace/lilong/repos/pi-tsien-extension`
+范围：`<repo>`
 参考：NVIDIA `NVlabs/SoL-Pi`（MIT，基于 Pi 公开扩展 API）、已安装的 `npm:pi-rtk`
 本地 API 基线：`@earendil-works/pi-coding-agent` 0.85.1（`>=0.84.2`）
 
@@ -25,8 +25,8 @@
 
 ## 2. RTK 现状（已安装）
 
-- 位置：`/home/tsien/.pi/agent/npm/node_modules/pi-rtk`（`pi-rtk@0.1.4`，Matt Cowger，MIT）
-- 加载：`/home/tsien/.pi/agent/extensions.config.json` 的 `loadOrder` 第 2 项（**早于所有 tsien 扩展**）
+- 位置：`~/.pi/agent/npm/node_modules/pi-rtk`（`pi-rtk@0.1.4`，Matt Cowger，MIT）
+- 加载：`~/.pi/agent/extensions.config.json` 的 `loadOrder` 第 2 项（**早于所有 tsien 扩展**）
 - 机制：`pi.on("tool_result")` handler **返回 `{content}` 补丁**进行**有损**改写（非就地改写入参）
 - 覆盖范围：**仅** `isBashToolResult` / `isReadToolResult` / `isGrepToolResult` 三类；自定义工具（含 `run_code`）**不被改写**
 - 技术集合：ANSI 剥离、硬截断、源码过滤（minimal 去注释 / aggressive 只留签名）、smart truncation（头尾保留）、build/test/linter 聚合、git 紧凑、search 分组
@@ -124,7 +124,7 @@ retrieve: call obs_recall with {"id":"obs_xxx","offset":0}; continue with return
 **根目录 = 配置项**，解析优先级：
 1. 环境变量 `PI_OBSERVATION_DIR`
 2. `observation-pack.json` 的 `archiveDir`
-3. 内置默认 `/mnt/workspace/lilong/agent/archiv`
+3. 内置默认 `<agent dir>/archiv`
 
 > 注：默认值按用户原文写作 `archiv`；若本意是 `archive` 请指出，仅改默认值即可。
 
@@ -165,7 +165,7 @@ retrieve: call obs_recall with {"id":"obs_xxx","offset":0}; continue with return
   "version": 1,
   "observationPack": {
     "enabled": false,
-    "archiveDir": "/mnt/workspace/lilong/agent/archiv",
+    "archiveDir": "<agent dir>/archiv",
     "thresholdBytes": 10240,
     "fullSends": 2,
     "placeholderExcerptBytes": 1024,
@@ -228,7 +228,7 @@ retrieve: call obs_recall with {"id":"obs_xxx","offset":0}; continue with return
 
 | # | 问题 | 决策 | 依据 |
 |---|---|---|---|
-| 6.1 | 归档根目录 | 作为配置项，默认 `/mnt/workspace/lilong/agent/archiv`；`PI_OBSERVATION_DIR` 可覆盖；按 session 隔离 | 用户确定 |
+| 6.1 | 归档根目录 | 作为配置项，默认 `<agent dir>/archiv`；`PI_OBSERVATION_DIR` 可覆盖；按 session 隔离 | 用户确定 |
 | 6.2 | 归档保真度 | 接受：bash/read/grep 归档为 RTK 过滤后字节，`run_code` 为真原文；不补偿 | 用户确定 |
 | 6.3 | 与 PTC 分工 | `run_code` 结果纳入归档，统一阈值与计数，无白名单 | 用户确定 |
 | 6.4 | 压缩后 id 发现性 | **收窄承诺**，不做压缩钩子；仅保证「已知 id 时 resume 后可读」 | 大观测多为探索性；摘要由全量历史生成；重要结论应入 memory/goal |
@@ -268,7 +268,7 @@ retrieve: call obs_recall with {"id":"obs_xxx","offset":0}; continue with return
 - ✅ **S0**：决策已定（§6）。
 - ✅ **S1**：ObservationPack 骨架已实现（`extensions/observation-pack.ts` + `extensions/observation-pack/core.ts` + `test/observation-pack.test.ts`）；默认关，15 个单测 + 装配级冒烟测试。
 - ✅ **S2**：小样本 A/B 已完成，结论见 §8.1。
-- ✅ **S3**：已并入 `/home/tsien/.pi/agent/extensions.config.json` 的 loadOrder（第 24 项，在 trajectory-recorder 之前）并同步；README/CHANGELOG 已追加。已于 2026-09-15 在 `/home/tsien/.pi/agent/observation-pack.json` 启用（`enabled: true`，`cleanupEnabled: false`）；修改后需 `/reload`。
+- ✅ **S3**：已并入 `~/.pi/agent/extensions.config.json` 的 loadOrder（第 24 项，在 trajectory-recorder 之前）并同步；README/CHANGELOG 已追加。已于 2026-09-15 在 `~/.pi/agent/observation-pack.json` 启用（`enabled: true`，`cleanupEnabled: false`）；修改后需 `/reload`。
 - **S4（可选）**：吸收 §5.2 的并发守卫 / 终态标记到 PTC 或未来编辑工具
 
 ---

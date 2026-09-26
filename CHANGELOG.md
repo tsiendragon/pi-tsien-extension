@@ -27,7 +27,7 @@
   `nodejs.org/en/about` 去除全部空白后逐字符相同（4339 字符）；真实 `pi -p` 会话内 WebSearch 返回 `Pi Coding Agent / https://pi.dev/`。
 - **同步器保留 Pi 的启停覆盖条目**：`settings.json` 里以 `+`/`-`/`!` 开头的覆盖条目（Pi `/config` 与 dashboard 写的那种）不再被 strict prune 当陌生路径删掉，
   被 `-`/`!` 指向的扩展也不会被同步器补回；随附回归测试（5 pass）。
-- **修复 devDependencies 不可移植**：`@earendil-works/*` 原来指向已不存在的本机路径 `/home/tsien/pi-lical-dist/*.tgz`，
+- **修复 devDependencies 不可移植**：`@earendil-works/*` 原来指向已不存在的本机路径 `<local build dir>/*.tgz`，
   导致任何全新 clone 上 `npm install` 直接失败；改为指向已发布的补丁版 Release 资产 URL，并把 peer 范围放宽到同时接受上游版本与预发布补丁版
   （`>=0.84.2 <1.0.0 || ^0.85.1-tsien.1`）。验证：`npm install` exit=0、`tsc --noEmit` 干净、`test:node` 245 pass。
 - **修复 dashboard「清空」点击无反应**：`/clear`（开新会话）本来是由 `session-aliases.ts` 注册的扩展命令，命令名是对的；真正的毛病在 UI 与命令的组合上——按钮 `disabled={busy || status !== 'idle'}` 且装填（第二次点击确认）窗口只有 5s、过期后横幅不撤，于是「跑着的时候点清空」这一下会落在已变灰的按钮上：什么都不发生，而屏幕上还留着「再点一次确认」。除 UI 侧修复外，本扩展把租约拒绝文案改成对任何入口都成立（「请先「获取控制」或刷新页面后重试」，不再只提图谱页）。验证：`test/live-session.test.ts` 25 pass。
@@ -36,7 +36,7 @@
 
 - **修复 dashboard / TUI 的上下文与自动压缩阈值显示**（根因修复，非补丁）：`live-session` 原来只在 snapshot 里带 `contextUsage`，而 snapshot 只在 connect / resync / tree / fork 重建——事件序号从没断档、也没重连过的会话，页面就永远停在「会话刚打开那一刻」的值（新会话正是 `0/1.0m 0%`，实测本会话 pid 1357434 显示 0 而真实用量 ≈119k）。现在 `message_end` / `agent_settled` / `session_compact` / `model_select` 都发一条 `summary_update` 事件（约 200B），dashboard registry 用它就地修补 `entry.summary`、前端同步修补 `summary` 与页面 detail，不再需要全量 snapshot。同时把「压缩触发点」收敛成唯一 resolver `resolveCompactionTrigger`（`auto-compact-target` 目标 vs pi 的 `window − reserveTokens` 取最早者，含 per-model override），触发方、TUI 状态条、dashboard 状态行读同一个值：dashboard 那条写死在右端的 `│` 改为真实阈值刻度（1M 窗口 270K → 第 3 格），`context-powerline` 也顺带修掉 `getCompactionSettings()` 没传 model 导致 per-model `reserveTokens` 失效的问题。验证：`test/auto-compact-target.test.ts` 21 pass（新增 resolver 9 条）、`test/live-session.test.ts` 24 pass（新增遥测与顺序契约 1 条）。
 
-- **扩展数据目录改为可移植默认值**：`trajectory-recorder` 与 `observation-pack` 的默认落点原来硬编码为 `/mnt/workspace/lilong/...`（机器专属），现在统一为 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/…`：trace → `pi-traces`、计时账本 → `pi-timing`、大结果归档 → `archiv`。覆盖方式不变（`PI_TRACE_DIR` / `PI_TIMING_DIR` / `PI_OBSERVATION_DIR`），优先级为显式参数 > 环境变量 > 默认值；`observation-pack.json` 里的显式 `archiveDir` 仍然优先。验证：`npm run check` 与改动前完全一致（239 passed；唯一失败 `conversation-workbench` 已验证在 HEAD 上就存在，与本次改动无关）。
+- **扩展数据目录改为可移植默认值**：`trajectory-recorder` 与 `observation-pack` 的默认落点原来硬编码为 `<workspace>/...`（机器专属），现在统一为 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/…`：trace → `pi-traces`、计时账本 → `pi-timing`、大结果归档 → `archiv`。覆盖方式不变（`PI_TRACE_DIR` / `PI_TIMING_DIR` / `PI_OBSERVATION_DIR`），优先级为显式参数 > 环境变量 > 默认值；`observation-pack.json` 里的显式 `archiveDir` 仍然优先。验证：`npm run check` 与改动前完全一致（239 passed；唯一失败 `conversation-workbench` 已验证在 HEAD 上就存在，与本次改动无关）。
 
 - **新增配置示例 `config/examples/`**：`bash-digest.example.json` + README，说明摘要模型（`digestModel`）与凭证怎么配——凭证走宿主 pi 自己的 provider 配置（通常是环境变量，如 `DASHSCOPE_API_KEY`），dashboard 用法下写进 `<agent dir>/dashboard.env` 即可自动传给每个 pi 子进程；并说明「摘要失败会静默回落原文」时如何判断是否真的生效。
 
@@ -63,7 +63,7 @@
 - 新增 `scripts/observation-pack-placeholder-size.ts`：直接调 `placeholderFor()` 量占位符的真实 token 开销（固定样板 100 tok，摘录按比例），用于给驱逐阈值定档。
 - `run_code` 移除时间与次数上限：`maxRunComputeTimeMs` / `maxRunWallTimeMs` / `maxOuterRunCodeCalls` 支持 `null` 表示无限制（哨兵值 2^31-1，避开 Node 定时器/vm 溢出）；`docs/ptc-full-tool-config.json` 已全部设为 `null`，未配置模型也走无限制兜底。嵌套写入/子调用与 assistant token 预算保留。
 - 新增 `observation-pack`：把超过阈值的大型工具结果在投影层替换为占位符并归档到本地，`obs_recall` 按需分页取回；默认关闭，且仅在启用时注册 `obs_recall`。
-- `trajectory-recorder` 新增紧凑计时账本：每个模型调用、Tool 调用和 Agent run 追加一行约 200B 的记录（`ttftMs`、`thinkingMs`、`totalMs`、`durationMs`、`scope` 等），写入 `/mnt/workspace/lilong/agent/pi/timing/`，供 dashboard 时间分析使用；不记录提示词与 Tool 输出。
+- `trajectory-recorder` 新增紧凑计时账本：每个模型调用、Tool 调用和 Agent run 追加一行约 200B 的记录（`ttftMs`、`thinkingMs`、`totalMs`、`durationMs`、`scope` 等），写入 `<agent dir>/pi-timing/`，供 dashboard 时间分析使用；不记录提示词与 Tool 输出。
 - 自动压缩触发点统一为 `min(270000, 0.75 × contextWindow)`，替换只对 1M 窗口生效的 `auto-compact-1m`（`auto-compact-target`）；不改 `compaction.reserveTokens`，因为它同时决定摘要输出预算。
 - 新增 `bash-digest`：把超过阈值（默认 1200B ≈ 300 token）的 `bash` 输出改写为短摘要，原文归档并带 obs id 供 `obs_recall` 取回；默认关闭，observation-pack 未启用时完全惰性，任何失败都回退原文。默认排除“列出条目”类命令（`ls`/`git log`/`grep`/`cat`/`sed`…）——实测这些输出被摘要会丢行并导致错误回答；安全口径下 bash token 省 6%，激进口径可到 ~60% 但有质量风险，见 `docs/session-context-token-plan.md`。
 - PTC 简化为始终可用的 `run_code` Code Mode：动态组合当前 active tools，移除 `/ptc` 模式切换和独立权限分层，嵌套调用统一复用 Pi 原生工具流水线。

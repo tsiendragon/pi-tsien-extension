@@ -48,13 +48,13 @@
 预览：
 
 ```bash
-node /mnt/workspace/lilong/repos/pi-tsien-extension/scripts/pi-extension-sync.mjs
+node <repo>/scripts/pi-extension-sync.mjs
 ```
 
 应用：
 
 ```bash
-node /mnt/workspace/lilong/repos/pi-tsien-extension/scripts/pi-extension-sync.mjs --apply
+node <repo>/scripts/pi-extension-sync.mjs --apply
 ```
 
 应用后执行 `/reload` 或重启 Pi。Pi 先按 `packages` 顺序安装缺失来源，再按 `settings.extensions` 顺序逐个初始化扩展。

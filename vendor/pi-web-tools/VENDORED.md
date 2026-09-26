@@ -21,7 +21,7 @@ upstream parser regex no longer matched it:
 Result: 0 links parsed → 0 results. The same mismatch affected `<td … class='result-snippet'>`.
 
 Because this is our WebSearch/WebFetch path, the repo keeps a patched copy and
-loads it through the user-level `/home/tsien/.pi/agent/extensions.config.json`
+loads it through the user-level `~/.pi/agent/extensions.config.json`
 (package source `${PI_TSIEN_EXTENSION_ROOT}/vendor/pi-web-tools`) instead of
 `git:github.com/brettatoms/pi-web-tools`.
 

@@ -196,13 +196,13 @@ npm run check
 Load in Pi:
 
 ```bash
-pi -e /mnt/workspace/lilong/repos/pi-subagent-workbench
+pi -e <repos>/pi-subagent-workbench
 ```
 
 Or install locally:
 
 ```bash
-pi install /mnt/workspace/lilong/repos/pi-subagent-workbench
+pi install <repos>/pi-subagent-workbench
 ```
 
 ## Experiments

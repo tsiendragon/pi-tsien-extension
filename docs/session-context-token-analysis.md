@@ -1,7 +1,7 @@
 # 最近 3 天 session context 的 token 消耗分析
 
 状态：**分析结论（口径：UTC 09-16 06:11 → 09-19 06:11，最近 3 天）**
-数据源：`/home/tsien/.pi/agent/sessions` 内 assistant `usage`（真实计费数据，非估算）+ 事件级上下文归因
+数据源：`~/.pi/agent/sessions` 内 assistant `usage`（真实计费数据，非估算）+ 事件级上下文归因
 脚本：`/tmp/recent3d_v2.py`（上下文归因）、`/tmp/sim.out`（封顶模拟）
 日期：2026-09-19
 

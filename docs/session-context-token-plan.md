@@ -184,7 +184,7 @@ pi 用它推导摘要输出预算：`maxTokens = min(0.8 × reserveTokens, model
 `extensions/tool-result-pipeline/bash-digest/model.ts` 是扩展与测量脚本**共用的唯一模型调用路径**，保证"测的就是跑的"。
 
 ```bash
-cd /mnt/workspace/lilong/repos/pi-tsien-extension
+cd <repo>
 npx tsc --noEmit
 npx tsx --test test/*.test.ts                        # 152 pass / 0 fail
 npx tsx scripts/bash-digest-replay.ts 3              # 覆盖率与判定分布
