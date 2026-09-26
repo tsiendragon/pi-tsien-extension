@@ -280,6 +280,8 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 
 ## 从 npm 安装
 
+> 面向外部用户的完整步骤（含前提、踩坑、未发布包怎么办）：[`docs/quickstart.md`](docs/quickstart.md)
+
 26 个包以 `pi-tsien-*` 为名发布在公共 npm（首个版本 `0.1.0`）：
 
 **`npm:` 前缀不能省**（裸名字会被 pi 当作本地路径）：
