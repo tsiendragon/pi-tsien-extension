@@ -19,7 +19,7 @@ import { getBackgroundCommandManager } from "pi-tsien-shared/src/lib/background-
 import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "pi-tsien-shared/src/lib/live-observer.ts";
 import { registerForegroundHandoffBashTool } from "pi-tsien-shared/src/lib/background-commands/foreground-handoff.ts";
 
-const cwd = "/mnt/workspace/lilong/repos/pi-tsien-extension";
+const cwd = process.cwd();
 
 async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

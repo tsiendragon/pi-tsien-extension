@@ -36,14 +36,14 @@ function extensionHarness() {
 function context(state: { idle: boolean; aborted: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[]; scopedModels?: unknown }): ExtensionContext {
   return {
     mode: "tui",
-    cwd: "/mnt/workspace/lilong/repos/worktree/task-a",
+    cwd: "/tmp/worktree/task-a",
     model: { provider: "test", id: "model" },
     thinkingLevel: "high",
     sessionManager: {
       getSessionId: () => "session-a",
       getSessionFile: () => "/tmp/session-a.jsonl",
       getSessionName: () => "Task A",
-      getCwd: () => "/mnt/workspace/lilong/repos/worktree/task-a",
+      getCwd: () => "/tmp/worktree/task-a",
       getBranch: () => [{ type: "message", id: "m1", message: { role: "user", content: "hello" } }],
     },
     getContextUsage: () => ({ tokens: 20, contextWindow: 100, percent: 20 }),

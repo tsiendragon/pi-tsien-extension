@@ -18,7 +18,7 @@ function makeObservation(bytes: number, tokens: number): Observation {
 	return {
 		id: "obs_0123456789abcdef",
 		contentHash: "deadbeef",
-		filePath: "/mnt/workspace/lilong/agent/archiv/sess/observation-pack/objects/obs_0123456789abcdef.txt",
+		filePath: "/tmp/archiv/sess/observation-pack/objects/obs_0123456789abcdef.txt",
 		toolName: "bash",
 		text,
 		bytes,

@@ -22,7 +22,7 @@ function turn(userText: string): SettledTurn {
 
 test("does not capture a one-off Chinese installation request", async () => {
 	const proposals = await new RuleCaptureStrategy().extract(
-		turn("帮我安装这个 skill /mnt/workspace/lilong/repos/eagleeye-ai-dev/marketplace/packages/plugins/markdown-minify 到 codex 和 pi，并加入 eagleye-install config"),
+		turn("帮我安装这个 skill /opt/skills/markdown-minify 到 codex 和 pi，并加入 install config"),
 	);
 	assert.deepEqual(proposals, []);
 });

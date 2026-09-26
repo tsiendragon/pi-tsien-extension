@@ -17,8 +17,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const EXT = join(REPO_ROOT, "extensions");
-const RTK = "/home/tsien/.pi/agent/npm/node_modules/pi-rtk/index.ts";
+const PKG = join(REPO_ROOT, "packages");
+const RTK = process.env.PI_RTK_PATH ?? join(PKG, "pi-tsien-rtk-fork", "src", "index.ts");
 const WORKSPACE = "/tmp/s2-obs-pack";
 const OUT_DIR = join(WORKSPACE, "runs");
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "observation-pack.json");
@@ -90,7 +90,7 @@ function setEnabled(enabled) {
 	writeFileSync(
 		CONFIG_PATH,
 		JSON.stringify(
-			{ version: 1, observationPack: { enabled, archiveDir: "/mnt/workspace/lilong/agent/archiv" } },
+			{ version: 1, observationPack: { enabled, archiveDir: join(WORKSPACE, "archiv") } },
 			null,
 			2,
 		),
@@ -110,9 +110,9 @@ function runOnce({ condition, task, model, trial, expected }) {
 		"-e",
 		RTK,
 		"-e",
-		join(EXT, "observation-pack.ts"),
+		join(PKG, "pi-tsien-observation-pack", "src", "index.ts"),
 		"-e",
-		join(EXT, "ptc.ts"),
+		join(PKG, "pi-tsien-code-mode", "src", "index.ts"),
 		"--model",
 		model,
 		"--mode",

@@ -79,7 +79,7 @@ test("vendored RTK does not treat substrings as linter runs", () => {
 test("vendored RTK still recognizes real linter runs", () => {
 	for (const command of [
 		"ruff check .",
-		"/mnt/workspace/lilong/envs/tsien/conda/bin/ruff check .",
+		"/usr/local/bin/ruff check .",
 		"python3 -m ruff check .",
 		"npx eslint src",
 		"bunx prettier --check .",

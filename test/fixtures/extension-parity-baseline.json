@@ -1,6 +1,6 @@
 {
   "label": null,
-  "config": "/mnt/workspace/lilong/repos/pi-tsien-extension/config/extensions.standalone.json",
+  "config": "config/extensions.standalone.json",
   "entryCount": 25,
   "entries": [
     {
