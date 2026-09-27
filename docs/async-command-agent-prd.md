@@ -1013,7 +1013,7 @@ gpt-5.4-mini|max > ⎇ main ███░░░│░░░░░ 65.7k→136k/27
 │ Duration     3m12s                                         │
 │ PID          48217                                         │
 │ Command      npm test -- --runInBand                       │
-│ Working dir  /mnt/workspace/project                        │
+│ Working dir  /home/user/project                        │
 │ Output       /tmp/pi-background/bash-a81f.log              │
 ├─ Recent output ─────────────────────────────────────────────┤
 │ PASS src/session.test.ts                                   │
