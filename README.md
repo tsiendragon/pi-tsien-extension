@@ -219,6 +219,8 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 
 ## 本地安装
 
+> 新机器从零安装的完整步骤（前提、补丁版 pi 要求、npm 发布状态、常见坑）：[`docs/quickstart.md`](docs/quickstart.md)。
+
 ```bash
 pi install git:github.com/tsiendragon/pi-tsien-extension
 ```
@@ -248,7 +250,7 @@ node scripts/pi-extension-sync.mjs --config config/extensions.standalone.json --
 
 `config/extensions.standalone.json` 只包含本 package 与 `packages/pi-tsien-web-tools`，不含
 `task-pilot`、`security-guard`、`remote-notifications`、`pi-knowledge` 等外部来源。
-每个扩展的职责清单见 `pi-dashboard/docs/standalone-install.md` §6「扩展清单」。
+每个扩展的职责清单见 `pi-dashboard/guide/standalone-install.md` §6「扩展清单」。
 `pi-dashboard` 的一键安装脚本会自动应用这份配置，见
 `pi-dashboard/scripts/install-standalone.sh`。
 

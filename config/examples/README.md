@@ -29,7 +29,7 @@
 - **用 pi-dashboard 时（推荐）**：写进 dashboard 的环境文件
   `${PI_CODING_AGENT_DIR:-~/.pi/agent}/dashboard.env`，dashboard 启动时自动加载，
   并且会传给它启动的**每一个** pi 子进程（`backend/env-file.ts`）。
-  模板见 `pi-dashboard/.env.example`，说明见 `pi-dashboard/docs/env-configuration.md`。
+  模板见 `pi-dashboard/.env.example`，说明见 `pi-dashboard/guide/env-configuration.md`。
 - **纯命令行用 pi 时**：写进 shell profile（`~/.bashrc`/`~/.zshrc`），或 pi 的 `/login`。
 - **systemd 起 dashboard 时**：不用改 unit，环境文件已经覆盖。
 
