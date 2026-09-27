@@ -83,7 +83,7 @@ export async function digestText(input: DigestTextInput): Promise<DigestTextResu
 			{
 				maxTokens: input.maxTokens ?? resolveMaxTokens(estimateTokens(input.text), input.config),
 				temperature: 0,
-				// Non-thinking without sending `reasoning_effort`: the openai-codex
+				// Non-thinking without sending `reasoning_effort`: the provider
 				// adapter rejects that field when thinking is disabled.
 				samplingParams: { enable_thinking: false },
 				signal: AbortSignal.any(signals),

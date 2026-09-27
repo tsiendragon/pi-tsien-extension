@@ -67,7 +67,7 @@ digest 当且仅当：
 - 目标 40 token；预算按原文比例给（`resolveMaxTokens`：`clamp(0.6 × 原文, 128, 256)`），否则长列表会被 `maxTokens` 截断成静默丢行。
 - 规则要点：错误/警告/路径/数字/计数/版本/hash/名字 **always keep**；列出条目时"保持原顺序、整条缩短、不许用子集或 and more 代替"；散文/样板/进度/重复前缀 always drop。
 - `temperature=0`、`samplingParams: { enable_thinking: false }`。
-- **API 坑**：`streamSimple` 传 `reasoning: "minimal"` 会让 openai-codex 适配器发 `reasoning_effort`，与 `enable_thinking:false` 冲突报 400。不传 `reasoning`。
+- **API 坑**：`streamSimple` 传 `reasoning: "minimal"` 会让 该 provider 的适配器发 `reasoning_effort`，与 `enable_thinking:false` 冲突报 400。不传 `reasoning`。
 
 ### 1.5 配置（`~/.pi/agent/bash-digest.json`）
 

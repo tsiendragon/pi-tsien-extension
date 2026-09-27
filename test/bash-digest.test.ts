@@ -176,7 +176,7 @@ test("normalizeDigest strips markdown fences", () => {
 test("parseModelKey splits provider and model", () => {
 	assert.deepEqual(parseModelKey("openai-codex/gpt-5.4-mini"), {
 		provider: "openai-codex",
-		modelId: "model-flash",
+		modelId: "gpt-5.4-mini",
 	});
 	assert.equal(parseModelKey("nope"), undefined);
 	assert.equal(parseModelKey("/leading"), undefined);
