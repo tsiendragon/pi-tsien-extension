@@ -4,7 +4,9 @@
 
 ## Extensions
 
-### `effort.ts`
+每个扩展都是一个独立包；26 个包的完整清单（含 npm 可用性）见 [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)。
+
+### `pi-tsien-thinking-level`
 
 使用 `/effort [level]` 直接调整当前模型的 thinking level。
 
@@ -12,7 +14,7 @@
 - 支持：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`
 - 不带参数时打开级别选择；实际级别会按当前模型能力自动限制。
 
-### `btw.ts`
+### `pi-tsien-side-chat`
 
 使用 `/btw` 打开一个与主任务隔离的临时侧聊浮窗。
 
@@ -26,24 +28,24 @@
 - `F5`：同时刷新主会话当前 context 和完整活动分支历史快照。
 - `Ctrl+Y`：把最后一个 BTW 回答复制到主输入框，但不自动提交。
 
-### `git-graph.ts`
+### `pi-tsien-git-graph`
 
 使用 `/git-graph [1-2000]` 打开当前 Git 仓库的提交概览浮层，展示本地与远端引用，并自动折叠普通提交。
 
-### `sidebar.ts`
+### `pi-tsien-sidebar`
 
 显示当前 Main/Pi 会话的模型、上下文组成、用量和缓存信息，不读取或展示子代理、工作流或子会话状态。
 
 - `/sidebar [show|hide|toggle|close]`
 - `Ctrl+Alt+S`：显示或隐藏当前会话信息侧栏
 
-### `context-powerline.ts`
+### `pi-tsien-context-powerline`
 
 在 Pi footer 中显示当前模型、推理等级、上下文使用量、自动压缩阈值，以及本机 CPU/内存占用。
 
 状态条上的竖线就是「本会话真正会在哪里压缩」，取自与触发方共用的 `resolveCompactionTrigger`（`auto-compact-target` 目标与 pi 的 `window − reserveTokens` 守卫中的最早者），所以它不会再指向压缩永远不会越过的位置；`getCompactionSettings(model)` 带 model，per-model `reserveTokens` override 才生效。
 
-### `running-commands.ts`
+### `pi-tsien-running-commands`
 
 在现有 Powerline 正上方统一显示前台 Agent Bash 与显式后台任务，不改变普通 Bash 的前台执行语义。
 
@@ -73,7 +75,7 @@
 
 如果另一个 Extension 已接管自定义 Editor，命令状态仍会显示，但按键聚焦会停用并给出警告，避免静默覆盖。
 
-### `usage-analytics.ts`
+### `pi-tsien-usage-analytics`
 
 在本地统计 Tool 与 Skill 的使用频率，不上传提示词、参数或输出，也不会自动卸载任何能力。
 
@@ -86,7 +88,7 @@
 
 数据默认保存在 `~/.pi/agent/usage-analytics.json`；如果设置了 `PI_CODING_AGENT_DIR`，则保存在该目录。详细口径和限制见 [`docs/usage-analytics-prd.md`](docs/usage-analytics-prd.md)。
 
-### `trajectory-recorder.ts`
+### `pi-tsien-trajectory-recorder`
 
 记录 Pi 的可复现 Agent 轨迹，供后续质量分析和任务型模型训练使用。
 
@@ -105,7 +107,7 @@
   - 不记录提示词、Tool 参数或 Tool 输出。
 - 扩展修改后执行 `/reload`；当前由用户级 `~/.pi/agent/extensions.config.json` 的最后一项加载，以观察其他扩展修改后的最终请求。
 
-### `observation-pack.ts`
+### `pi-tsien-observation-pack`
 
 把大型工具结果在投影层替换为简短占位符，原始字节归档到本地，需要时用 `obs_recall` 精确分页取回；不改写已存会话历史。
 
@@ -117,7 +119,7 @@
 - `/obs-prune [--days N] [--yes]`：列出或清理过期归档，默认 dry-run，`--yes` 才移入 `.trash`。
 - 与 RTK 并存：`bash`/`read`/`grep` 归档的是 RTK 过滤后的文本，`run_code` 等自定义工具归档真原文。
 
-### `tool-result-pipeline.ts`
+### `pi-tsien-rtk-fork`（工具结果流水线）
 
 `tool_result` 这一层的**唯一入口**。RTK 过滤（stage 1）与 bash-digest（stage 2）不再是两个争抢同一钩子的独立扩展，而是同一流水线里显式有序的 stage：
 
@@ -130,7 +132,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - RTK 的其余界面（8 个 `rtk-*` 命令、`rtk_configure` 工具、系统提示注入、配置、统计）原样保留，由 `registerRtkSurface(pi)` 注册。源码来源与两处命令匹配补丁见 `packages/pi-tsien-rtk-fork/src/rtk/PROVENANCE.md`。
 - 新增机制 = 新增一个 stage，而不是再多一个扩展。
 
-### `bash-digest`（pipeline stage 2）
+#### `bash-digest`（`pi-tsien-rtk-fork` 的 stage 2）
 把超过阈值的 `bash` 输出在进入上下文前改写为一段短摘要，原文按 observation-pack 布局归档，摘要头带 obs id，细节仍可用 `obs_recall` 取回。
 
 - 默认关闭；在 `~/.pi/agent/bash-digest.json` 设置 `enabled: true` 后执行 `/reload` 生效。
@@ -142,7 +144,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - `excludePatterns` 默认排除“列出条目”类命令（`ls`/`find`/`git log`/`grep`/`cat`/`sed`/`head`/`wc` …），按子命令边界匹配，只测真正产出 stdout 的那一段。理由：这些命令的输出就是调用方要的条目集合，**摘要只能靠丢行压缩，而丢掉的行就是丢事实**。实测过一次丢行导致的错误回答。
 - 改写形如 `[digest 703 tok -> 60 tok | raw: obs_xxx]` + 摘要正文；同一 `toolCallId` 命中缓存不重复调用。
 
-### `large-read-pack`（pipeline stage 3，**实测否决，默认关闭**）
+#### `large-read-pack`（`pi-tsien-rtk-fork` 的 stage 3，**实测否决，默认关闭**）
 
 把过大的 `read` 结果在进入上下文前换成“头部 + 尾部 + observation id”的包，**全文先归档**，所以 `obs_recall` 能把省掉的每一个字节取回来——改写是指针，不是删除。
 
@@ -157,7 +159,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 与 RTK 并存：摘要输入是 RTK 过滤后的文本（已确认 pi 的 `tool_result` handler 是链式生效）；改写后的结果不再触发 observation-pack 的占位符替换。
 - 实测（3 天真实数据）：安全口径覆盖 7.0% 的 bash token、摘要路径压缩 88%、bash 总省 6.0%；激进口径（清空 `excludePatterns`）可达 bash 省 ~60% 但有丢行风险。取舍与 A/B 见 `docs/session-context-token-plan.md`。
 
-### `auto-compact-target.ts`
+### `pi-tsien-auto-compact`
 
 把所有模型的压缩触发点统一到 `min(270000, 0.75 × contextWindow)`，而不是只对 ≥1M 窗口的模型按 50% 触发。
 
@@ -167,16 +169,16 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 触发点由 `core.ts` 的 `resolveCompactionTrigger` 统一给出（本扩展目标与 pi 守卫取最早者），触发方与所有显示（TUI 状态条、dashboard 状态行）读同一个值；`live-session` 把该值随 `summary_update` 遥测推给 dashboard。
 - 可选配置 `~/.pi/agent/auto-compact-target.json`：`targetTokens`、`windowRatio`、`modelOverrides`。
 
-### `live-session.ts`
+### `pi-tsien-live-session`
 
 把本会话桥接到 pi-dashboard 的 `/live-sessions`：订阅 pi 事件、投影快照、按事件流下发增量，并提供 `/ls-*` 命令（导航/分叉、模型与思考等级、abort/compact 等）。
 
 - **完整 summary 只走快照**（connect / resync / `/tree` / fork 才重建），因此**每轮都变的值走事件流**：`summary_update` 只带变化字段（`contextUsage`、`compact`、`status`），registry 就地修补自己的 summary，浏览器同步修补侧栏与页面，不会渲染成转写气泡。
 - **状态按真源推导**：`status` 在发布时问 pi 的 `ctx.isIdle()`（覆盖 agent run 与压缩两种忙碌），而不是累积一个由 `agent_start`/`agent_settled` 改写的标志——pi 只在 run 循环结束时发 `agent_settled`，独立压缩（`auto-compact-target` 调 `ctx.compact()`）永远不会有它。
-- **命令**：`/ls-navigate`、`/ls-fork`、`/live-session-reload`、`/dashboard-release` 都是**注册的扩展命令**——带 `/` 的文本只有注册过的命令会被 pi 执行（`_tryExecuteExtensionCommand`），pi 自己的内置命令（`/new`、`/compact`）由交互式 editor 分发、走不到 input 文本流，所以 web 侧的按钮必须对应到**注册名**。注意：`/clear`（开新会话）由 `session-aliases.ts` 注册，不是本扩展，但同样是注册命令，dashboard 的「清空」就是发它。
+- **命令**：`/ls-navigate`、`/ls-fork`、`/live-session-reload`、`/dashboard-release` 都是**注册的扩展命令**——带 `/` 的文本只有注册过的命令会被 pi 执行（`_tryExecuteExtensionCommand`），pi 自己的内置命令（`/new`、`/compact`）由交互式 editor 分发、走不到 input 文本流，所以 web 侧的按钮必须对应到**注册名**。注意：`/clear`（开新会话）由 `pi-tsien-session-aliases` 注册，不是本扩展，但同样是注册命令，dashboard 的「清空」就是发它。
 - **状态心跳**：默认每 20s 重算一次，只有与上次发布不同才发补丁（空闲零流量、不动 `lastActivityAt`），任何「本地已停、面板还显示工作中」的漂移 ≤1 个心跳自愈；周期可用 `statusHeartbeatMs` 覆盖。
 
-### `00-zero.ts`
+### `pi-tsien-session-ui-fork`
 
 已将 `pi-zero` 的全部模块迁入本 package：Powerline、工作状态消息、`/context`、Claude Code 风格 Tool 渲染、compact thinking 和 `/transcript`。
 
@@ -185,9 +187,9 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - `/context`
 - `/ccstyle [on|off|compact|status|panel]`
 - `/transcript [status|expand|collapse|turns <n>]`
-- `running-commands.ts` 使用 Zero 的 `pre-powerline v1` 插槽；现在插槽宿主也由本 package 内的 Zero 提供。
+- `pi-tsien-running-commands` 使用 Zero 的 `pre-powerline v1` 插槽；现在插槽宿主也由本 package 内的 Zero 提供。
 
-### `subagent-workbench.ts`
+### `pi-tsien-subagent-workbench`
 
 已将 `pi-subagent-workbench` 的 Runtime、ResourceGovernor、RPC 子 Agent、Workflow 和 TUI Workbench 迁入本 package。
 
@@ -196,14 +198,14 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 支持 Direct Subagent、可恢复的单 task/分阶段 Workflow、后台运行、跟进消息和独立视图；Workflow 默认通过摘要与绝对产物路径交接上下文，支持 `retry_task` 精确重试失败 task，并可显式使用受限 JavaScript 编译动态计划为可持久化结构化定义。每个任务可设置 `thinking`，跟进消息固定复用初始 `cwd`、模型与 thinking。
 - 原生全屏路由需要 Pi 宿主支持 `ctx.ui.custom(..., { fullscreen: true })` 与 `aboveStatus` Widget；缺少增强 UI API 时仍使用兼容的编辑器/Footer fallback，但不能保证原生全屏布局。
 
-### `goal.ts`
+### `pi-tsien-goal`
 
 已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项、每 20 分钟自动 continuation 和 Agent 可说明原因的暂停。
 
 - `/goal`、`/goal status`、`/goal start`、`/goal import`、`/goal pause|resume|complete|clear`
 - Tools：`get_goal`、`create_goal`、`propose_goal_draft`、`complete_goal`、`pause_goal`、`update_goal_progress`、`update_goal_graph`
 
-### `memory.ts`
+### `pi-tsien-memory`
 
 已将 `pi-tsien-memory` 迁入本 package，提供本地 SQLite/FTS5 长期记忆、自动召回、候选审核和遗忘/撤销流程。
 
@@ -218,13 +220,19 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 ## 本地安装
 
 ```bash
-pi install <repo>
+pi install git:github.com/tsiendragon/pi-tsien-extension
 ```
 
-也可以临时加载整个 package：
+也可以指向本地 clone 的目录：
 
 ```bash
-pi -e <repo>
+pi install /path/to/pi-tsien-extension
+```
+
+不安装、临时加载整个 package：
+
+```bash
+pi -e /path/to/pi-tsien-extension
 ```
 
 安装或修改后执行 `/reload`。
