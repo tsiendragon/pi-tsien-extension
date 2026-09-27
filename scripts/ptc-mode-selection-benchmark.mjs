@@ -9,11 +9,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ptcExtension = join(repoRoot, "extensions", "ptc.ts");
 
 const MODEL_IDS = [
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
+  "openai-codex/model-reasoning",
+  "openai-codex/model-mid",
+  "openai-codex/model-large",
+  "openai-codex/model-flash-b",
+  "openai-codex/model-pro",
 ];
 
 const CASE_IDS = ["simple", "batch"];

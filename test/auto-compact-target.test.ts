@@ -147,12 +147,12 @@ test("resolveCompactionTrigger drops pi's candidate when the window is unknown",
 test("resolveCompactionTrigger honours per-model overrides", () => {
 	const config = {
 		...DEFAULT_AUTO_COMPACT_TARGET_CONFIG,
-		modelOverrides: { "openai-codex/gpt-5.4-mini": { targetTokens: 100_000 } },
+		modelOverrides: { "openai-codex/model-flash-c": { targetTokens: 100_000 } },
 	};
 	assert.equal(
 		resolveCompactionTrigger({
 			contextWindow: 1_048_576,
-			model: { provider: "openai-codex", id: "gpt-5.4-mini" },
+			model: { provider: "openai-codex", id: "model-flash-c" },
 			config,
 		}).triggerTokens,
 		100_000,
@@ -199,7 +199,7 @@ test("loadAutoCompactTargetConfig reads config, overrides and rejects junk", asy
 				targetTokens: 150_000,
 				windowRatio: 0.5,
 				modelOverrides: {
-					"openai-codex/gpt-5.4-mini": { targetTokens: 200_000 },
+					"openai-codex/model-flash-c": { targetTokens: 200_000 },
 					"broken/model": { targetTokens: -1 },
 					"alsobroken/model": "nope",
 				},
@@ -212,7 +212,7 @@ test("loadAutoCompactTargetConfig reads config, overrides and rejects junk", asy
 	assert.equal(config.targetTokens, 150_000);
 	assert.equal(config.windowRatio, 0.5);
 	assert.deepEqual(config.modelOverrides, {
-		"openai-codex/gpt-5.4-mini": { targetTokens: 200_000 },
+		"openai-codex/model-flash-c": { targetTokens: 200_000 },
 	});
 });
 

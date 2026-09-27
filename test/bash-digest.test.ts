@@ -176,7 +176,7 @@ test("normalizeDigest strips markdown fences", () => {
 test("parseModelKey splits provider and model", () => {
 	assert.deepEqual(parseModelKey("openai-codex/gpt-5.4-mini"), {
 		provider: "openai-codex",
-		modelId: "gpt-5.4-mini",
+		modelId: "model-flash",
 	});
 	assert.equal(parseModelKey("nope"), undefined);
 	assert.equal(parseModelKey("/leading"), undefined);
@@ -220,7 +220,7 @@ test("loadBashDigestConfig reads values and rejects junk", async () => {
 				maxTokens: 128,
 				timeoutMs: 1500,
 				maxConcurrent: 1,
-				digestModel: "openai-codex/gpt-5.4-mini",
+				digestModel: "openai-codex/model-flash-c",
 				codeDumpRatio: 0.5,
 				excludePatterns: ["a", 3, "b"],
 			},
@@ -234,7 +234,7 @@ test("loadBashDigestConfig reads values and rejects junk", async () => {
 	assert.equal(loaded.maxTokens, 128);
 	assert.equal(loaded.timeoutMs, 1500);
 	assert.equal(loaded.maxConcurrent, 1);
-	assert.equal(loaded.digestModel, "openai-codex/gpt-5.4-mini");
+	assert.equal(loaded.digestModel, "openai-codex/model-flash-c");
 	assert.equal(loaded.codeDumpRatio, 0.5);
 	assert.deepEqual(loaded.excludePatterns, ["a", "b"]);
 });

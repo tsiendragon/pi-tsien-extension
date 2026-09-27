@@ -15,7 +15,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { runCapability, type LlmReply } from "../packages/pi-tsien-capability/src/capability/sandbox/runner.ts";
 
-const MODEL_KEY = process.env.CAPABILITY_PROBE_MODEL ?? "openai-codex/gpt-5.4-mini";
+const MODEL_KEY = process.env.CAPABILITY_PROBE_MODEL ?? "openai-codex/model-flash-c";
 const CAPABILITY_DIR = join(
 	import.meta.dirname,
 	"..",

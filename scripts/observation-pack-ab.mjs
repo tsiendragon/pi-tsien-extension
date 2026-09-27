@@ -24,7 +24,7 @@ const OUT_DIR = join(WORKSPACE, "runs");
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "observation-pack.json");
 
 function parseArgs(argv) {
-	const options = { model: "openai-codex/gpt-5.4-mini", trials: 1 };
+	const options = { model: "openai-codex/model-flash-b", trials: 1 };
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "--model") options.model = argv[++index];

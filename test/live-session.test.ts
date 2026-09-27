@@ -167,12 +167,12 @@ test("get_models mirrors the scoped model set, falling back to the whole catalog
 
   // A configured scope wins, so the picker shows only the models we actually use.
   const scoped = await run([
-    { model: { provider: "openai-codex", id: "gpt-5.4-mini", name: "DS", reasoning: true, contextWindow: 100, thinkingLevelMap: {} } },
-    { model: { provider: "openai-codex", id: "gpt-5.4-mini", name: "Sol", reasoning: true, contextWindow: 100, thinkingLevelMap: {} } },
+    { model: { provider: "openai-codex", id: "model-flash-c", name: "DS", reasoning: true, contextWindow: 100, thinkingLevelMap: {} } },
+    { model: { provider: "openai-codex", id: "model-reasoning", name: "Sol", reasoning: true, contextWindow: 100, thinkingLevelMap: {} } },
   ]);
   assert.deepEqual(scoped, [
-    { provider: "openai-codex", id: "gpt-5.4-mini" },
-    { provider: "openai-codex", id: "gpt-5.4-mini" },
+    { provider: "openai-codex", id: "model-flash-c" },
+    { provider: "openai-codex", id: "model-reasoning" },
   ]);
 });
 
