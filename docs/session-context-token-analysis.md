@@ -73,7 +73,7 @@
 "compaction": { "enabled": true, "reserveTokens": 22000 }
 ```
 
-主力模型窗口是 1,000,000（gpt-5.4-mini 等），压缩触发线 = 1M − 22K ≈ **978K**，
+主力模型窗口是 1,000,000（model-flash-c 等），压缩触发线 = 1M − 22K ≈ **978K**，
 等于「不会压缩」。实测 `tokensBefore` 530K+ 的压缩记录证实：上下文是**涨到 20–50 万才结束**，
 而不是被主动控制。压缩本身极便宜（28 次 $3.2），远低于少压缩一次省下的重放成本。
 
@@ -99,7 +99,7 @@
   "reserveTokens": 880000,
   "keepRecentTokens": 20000,
   "modelOverrides": {
-    "openai-codex/gpt-5.4-mini": { "reserveTokens": 28000 }
+    "openai-codex/model-flash-c": { "reserveTokens": 28000 }
   }
 }
 ```
@@ -116,18 +116,18 @@
 ### L3 模型选择（3 天数据暴露的新问题）
 | 模型 | 花费 | 占比 | 调用数 | 单次成本 |
 |---|---|---|---|---|
-| `openai-codex/gpt-5.4-mini` | $55.1 | 55% | 4,089 | $0.013 |
+| `openai-codex/model-flash-c` | $55.1 | 55% | 4,089 | $0.013 |
 | `openai-codex/gpt-5.4-mini` | **$44.6** | **45%** | **381** | **$0.117（8.7x）** |
 | `dsw/local-model`（本地 vLLM） | $0 | 0% | 1,919 | — |
 | `dsw/dsw/local-model` | $0 | 0% | 617 | — |
 
 - **kimi-k3 用 5% 的调用吃掉 45% 的花费**（$0.40/M prompt、$15/M output，是 deepseek 的 8x/12x）。
-  审查这 381 次调用是否都必要，或降级到 gpt-5.4-mini，是除 L1 外最大的省钱点。
+  审查这 381 次调用是否都必要，或降级到 model-flash-c，是除 L1 外最大的省钱点。
 - `dsw/*`（本地 vLLM）**缓存命中率 0%**：3 天 318M token 全量 prefill。不花钱，但吃本地 GPU
   吞吐。这不是账单问题，是容量问题。
 
 ### L4 避免 session 中途切模型
-36 个 session 中 **10 个在窗口内切换过模型**（如 `gpt-5.4-mini` ↔ `kimi-k3` /
+36 个 session 中 **10 个在窗口内切换过模型**（如 `model-flash-c` ↔ `kimi-k3` /
 `local-model`）。每次切换都会击穿 prompt cache，后续请求按未命中价计费。
 openai-codex 单模型内命中率 92–97%，说明缓存机制正常，损失来自切换。
 → 长 session 尽量一个模型跑到底；需要切就 `/clear` 换新会话。
@@ -192,7 +192,7 @@ output 占 10%（$9.5），reasoning 3.46M token。降 `defaultThinkingLevel` �
 注意事项：
 
 - 该扩展仅对 `contextWindow >= 1M` 的模型生效；3 天主力模型都命中
-  （`openai-codex/gpt-5.4-mini` 1,048,576；`openai-codex/gpt-5.4-mini` 1,048,576）。
+  （`openai-codex/model-flash-c` 1,048,576；`openai-codex/gpt-5.4-mini` 1,048,576）。
 - **不要用 `compaction.reserveTokens` 调触发点**：官方文档明确 `reserveTokens` 同时决定摘要
   输出预算（`reserveTokens: 0` 会把摘要预算归零）。用扩展的 `ctx.compact()` 干净得多。
 - 压缩后只保留 `keepRecentTokens`（默认 20K），上下文会在 **20K ⇄ 270K** 锯齿波动，
@@ -219,7 +219,7 @@ output 占 10%（$9.5），reasoning 3.46M token。降 `defaultThinkingLevel` �
 - `pi.on("tool_result", async (event, ctx) => { ... })` 可返回 `{ content, usage }` 改写结果
   （RTK 正是这样做的）；`ctx.signal` 支持 Esc 取消。
 - `ctx.modelRegistry.streamSimple(model, context, { reasoning })` 可调用任意已配置模型
-  （`openai-codex/gpt-5.4-mini`、`openai-codex/gpt-5.4-mini`），不需要自建 HTTP 客户端。
+  （`openai-codex/model-large`、`openai-codex/gpt-5.4-mini`），不需要自建 HTTP 客户端。
 - 设计文档 §3 已把这条列为「委托层 Evidence-Preserving Reducer ❌ 缺（另案）」，属规划内。
 
 **但实测数据不支持「每次 bash 都总结」**：
@@ -247,7 +247,7 @@ output 占 10%（$9.5），reasoning 3.46M token。降 `defaultThinkingLevel` �
    取回。摘要把关键错误行删掉是这类方案最大的失败模式。
 4. **摘要输出结构化**：退出码 / 关键错误 / 文件与行号 / 计数 / 下一步命令，而非自由文本。
 5. **并发限流 + fail-open**：bash 常并行，摘要调用要限流；失败一律返回原文。
-6. **绝不用主模型做摘要**，用 large / gpt-5.4-mini（non-thinking）。
+6. **绝不用主模型做摘要**，用 large / model-flash（non-thinking）。
 
 **收益不能简单相加**：触发点（6.1）与 bash 压缩（6.3）降低的是同一个量（平均 prompt 大小）。
 建议先做触发点，再叠加摘要/占位符，分步实测。
@@ -293,7 +293,7 @@ prompt 要求「目标 40 token，保留错误/路径/行号/数字/标识符，
 | **>500 token（11 条）** | 11,987 | 665 | **5.5%** |
 | ≤300 token（13 条） | 2,404 | 458 | 19.1% |
 
-对比 `openai-codex/gpt-5.4-mini`：9.5%，p50 延迟 1.39s（略快）。
+对比 `openai-codex/model-flash-c`：9.5%，p50 延迟 1.39s（略快）。
 
 **对照基线**：确定性规则（去 ANSI/空行 + 同输出内行去重 + 按分节各留头尾 8 行）只能压 **38.3%**。
 LLM 摘要明显更强，因为它能判断「哪些行才是结论」。
@@ -304,7 +304,7 @@ LLM 摘要明显更强，因为它能判断「哪些行才是结论」。
 |---|---|---|---|
 | `max_tokens=256`（宽松） | 2.56 s | 4.59 s | 12.43 s |
 | **`max_tokens=96`（目标 40 token）** | **1.60 s** | 2.17 s | 2.49 s |
-| 同上（gpt-5.4-mini） | 1.39 s | 1.70 s | 1.94 s |
+| 同上（model-flash-c） | 1.39 s | 1.70 s | 1.94 s |
 
 - 输出长度确实是延迟主因之一：把上限从 256 收到 96，p50 从 2.56s 降到 1.60s。
 - **但有长尾**：报错类样本重测时出现 9.4s / 13.3s 的离群调用 → 必须设超时兜底。
@@ -338,7 +338,7 @@ LLM 摘要明显更强，因为它能判断「哪些行才是结论」。
 1. 只对 **>300 token** 的 bash 结果做摘要（占结果数约 36%，覆盖约 85% 的 bash 上下文 token）。
 2. 先跑确定性预处理（剥 ANSI、去空行、按 `== 标签 ==` 分节、去重复行），再送 LLM：
    降低输入量、降低输出波动。
-3. LLM 用 non-thinking 小模型（`gpt-5.4-mini` / `gpt-5.4-mini`），`temperature=0`
+3. LLM 用 non-thinking 小模型（`model-flash` / `model-flash-c`），`temperature=0`
    （可复现 + prompt cache 稳定），`max_tokens≈96`。
 4. **原文归档 + 摘要里带 obs id**，agent 要细节时 `obs_recall`。
 5. 超时（≤3s）与并发限流；失败一律返回原文（fail-open）。

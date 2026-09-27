@@ -275,7 +275,7 @@ retrieve: call obs_recall with {"id":"obs_xxx","offset":0}; continue with return
 
 ## 8.1 S2 小样本 A/B 结论（2026-09-15）
 
-设置：`openai-codex/gpt-5.4-mini`；headless 最小扩展集（RTK + observation-pack + ptc，`pi -p --mode json`）；2 个固定 7 步确定性任务 × {off,on} × 3 trials；脚本 `scripts/observation-pack-ab.mjs`。
+设置：`openai-codex/model-flash-b`；headless 最小扩展集（RTK + observation-pack + ptc，`pi -p --mode json`）；2 个固定 7 步确定性任务 × {off,on} × 3 trials；脚本 `scripts/observation-pack-ab.mjs`。
 
 - **机制确已触发**：ON ledger 出现 2–4 次 `placeholder`；无 `recall`（占位符已足够，模型未调用 `obs_recall`）。
 - **单请求上下文显著下降**：打包后每请求 prompt 从 ≈20.5K 降到 ≈4.5K（T1）/ ≈21K → ≈5K（T2），约 −75%~−78%。
@@ -289,7 +289,7 @@ retrieve: call obs_recall with {"id":"obs_xxx","offset":0}; continue with return
 
 ---
 
-## 9. 复核采纳记录（`openai-codex/gpt-5.4-mini`，thinking=medium，只读）
+## 9. 复核采纳记录（`openai-codex/model-reasoning`，thinking=medium，只读）
 
 - 正面核实：`context` 可返回 `{messages}`；`tool_result` 可返回补丁；`create{Edit,Write,Bash}ToolDefinition` 与 `withFileMutationQueue` 均公开导出；发送计数算法与上游一致；mutation 队列自锁判断成立。
 - 采纳并已落入 r3：high #1（每请求开销）、high #2（TTL）、high #3（压缩承诺）、medium #4（UTF-8 起点）、medium #5（内容寻址措辞）、medium #6（session 路径安全）、low #7（RTK 措辞）。
