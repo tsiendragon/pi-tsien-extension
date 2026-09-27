@@ -1,6 +1,6 @@
 {
   "name": "pi-tsien-capability",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Capability layer: register and run reusable, verifiable execution units as pi tools.",
   "type": "module",
   "pi": {
