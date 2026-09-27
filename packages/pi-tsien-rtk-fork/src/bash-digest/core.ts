@@ -23,7 +23,8 @@ export const DEFAULT_TARGET_TOKENS = 40;
 export const DEFAULT_MAX_TOKENS = 128;
 export const DEFAULT_TIMEOUT_MS = 6000;
 export const DEFAULT_MAX_CONCURRENT = 2;
-export const DEFAULT_DIGEST_MODEL = "openai-codex/gpt-5.4-mini";
+/** 摘要模型由用户配置（`digestModel`）；留空表示未配置，摘要功能默认关闭。 */
+export const DEFAULT_DIGEST_MODEL = "";
 export const DEFAULT_CODE_DUMP_RATIO = 0.3;
 /**
  * Commands whose output is a list of items the caller asked for. A digest can

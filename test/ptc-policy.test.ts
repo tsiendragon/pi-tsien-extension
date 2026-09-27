@@ -10,9 +10,9 @@ import {
 
 test("removed run_code limits resolve to the unlimited sentinel", () => {
 	for (const model of [
-		{ provider: "openai-codex", id: "gpt-5.4-mini" }, // fallback (no configured policy)
-		{ provider: "openai-codex", id: "gpt-5.4-mini" }, // configured policy
-		{ provider: "openai-codex", id: "gpt-5.4-mini" }, // configured policy
+		{ provider: "openai-codex", id: "model-flash-c" }, // fallback (no configured policy)
+		{ provider: "openai-codex", id: "model-flash-b" }, // configured policy
+		{ provider: "openai-codex", id: "model-reasoning" }, // configured policy
 	]) {
 		const policy = resolvePtcPolicy("full", model);
 		assert.equal(policy.maxOuterRunCodeCalls, PTC_UNLIMITED, `outer ${model.id}`);
@@ -23,7 +23,7 @@ test("removed run_code limits resolve to the unlimited sentinel", () => {
 
 test("many outer run_code calls are never blocked", () => {
 	const state = createBudgetState(
-		resolvePtcPolicy("full", { provider: "openai-codex", id: "gpt-5.4-mini" }),
+		resolvePtcPolicy("full", { provider: "openai-codex", id: "model-flash-c" }),
 	);
 	for (let index = 0; index < 50; index += 1) reserveOuterRunCode(state);
 	assert.equal(state.outerRunCodeCalls, 50);

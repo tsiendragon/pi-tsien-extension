@@ -10,11 +10,11 @@ const ptcExtension = join(repoRoot, "extensions", "ptc.ts");
 const packageEntry = join(repoRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
 
 const MODEL_IDS = [
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
-  "openai-codex/gpt-5.4-mini",
+  "openai-codex/model-reasoning",
+  "openai-codex/model-mid",
+  "openai-codex/model-large",
+  "openai-codex/model-flash-b",
+  "openai-codex/model-pro",
 ];
 
 const LEVELS = [

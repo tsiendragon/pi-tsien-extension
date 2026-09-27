@@ -43,7 +43,7 @@ const pi: any = {
 };
 const ctx: any = {
   cwd: process.cwd(),
-  model: { provider: "openai-codex", id: "gpt-5.4-mini" },
+  model: { provider: "openai-codex", id: "model-flash-b" },
   hasUI: false,
   ui: {
     setStatus() {},

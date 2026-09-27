@@ -77,7 +77,7 @@ await writeFile(
 		"  - id: classify",
 		"    kind: llm",
 		"    prompt: prompts/classify.md",
-		"    model: openai-codex/gpt-5.4-mini",
+		"    model: openai-codex/model-flash-c",
 		"    max_tokens: 64",
 		"",
 	].join("\n"),
