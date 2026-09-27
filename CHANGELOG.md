@@ -6,7 +6,7 @@
 
 - `pi-tsien-code-mode@0.1.1`：逐模型策略不再读仓库内 JSON，改读 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/code-mode/{model-complexity,full-tool}.json`；源码注释里的内部模型代号移除。
 - `pi-tsien-code-mode@0.1.2`：注释统一为 `openai-codex` 示例，去掉其余 provider 名。
-- `pi-tsien-capability@0.1.1`：`classify-text` 示例模型改为 `openai-codex/gpt-5.4-mini`。
+- `pi-tsien-capability@0.1.2`：`classify-text` 示例模型改为 `openai-codex/gpt-5.4-mini`。
 - `pi-tsien-rtk-fork`：`DEFAULT_DIGEST_MODEL` 改为 `openai-codex/gpt-5.4-mini`（内部代号移除）——**尚未重新发布**，随下次发布生效。
 - `pi-tsien-memory`：候选审核默认模型改为 `openai-codex/gpt-5.4-mini`——**尚未重新发布**。
 
