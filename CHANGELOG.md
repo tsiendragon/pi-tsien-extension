@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-09-27（包级修订：移除内部模型名）
+
+只重新发布受影响的两个包，其余包内容未变。
+
+- `pi-tsien-code-mode@0.1.1`：逐模型策略不再读仓库内 JSON，改读 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/code-mode/{model-complexity,full-tool}.json`；源码注释里的内部模型名移除。
+- `pi-tsien-capability@0.1.1`：`classify-text` 示例里的内部模型名换成占位符（使用前替换成你自己模型清单里的 `provider/modelId`）。
+- `pi-tsien-rtk-fork`：`DEFAULT_DIGEST_MODEL` 改为空（摘要默认关闭，启用时用 `digestModel` 指定自己的模型）——**尚未重新发布**，随下次发布生效。
+- `pi-tsien-memory`：候选审核默认关闭（`capture.reviewer.enabled=false`），由用户自己的配置指定模型——**尚未重新发布**。
+
 ## 0.1.0 — 2026-09-27（首个公开发布）
 
 首个公开发布：**26 个扩展包**（25 个可加载扩展 + 1 个共享库），MIT 许可。

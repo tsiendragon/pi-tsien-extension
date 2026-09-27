@@ -20,6 +20,7 @@ steps:
   - id: classify
     kind: llm
     prompt: prompts/classify.md
+    # 换成你自己模型清单里存在的模型（provider/modelId）；这里只是占位示例。
     model: openai-codex/gpt-5.4-mini
     max_tokens: 64
 
