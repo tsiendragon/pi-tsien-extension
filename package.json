@@ -1,6 +1,6 @@
 {
   "name": "pi-tsien-extension",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "description": "A collection of practical Pi extensions maintained by Tsien.",
   "type": "module",
   "workspaces": [
