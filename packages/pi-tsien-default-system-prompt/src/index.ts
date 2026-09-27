@@ -45,6 +45,7 @@ export default function defaultSystemPromptExtension(pi: ExtensionAPI): void {
     try {
       customIntro = await readDefaultSystemPrompt();
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       if (!notifiedReadError && ctx.hasUI) {
         notifiedReadError = true;
         ctx.ui.notify(`无法读取自定义系统提示：${DEFAULT_SYSTEM_PROMPT_FILE}`, "warning");
