@@ -138,7 +138,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 默认关闭；在 `~/.pi/agent/bash-digest.json` 设置 `enabled: true` 后执行 `/reload` 生效。
 - 摘要被当作**索引**而不是替代品：**observation-pack 未启用时本扩展完全惰性**，因为失去召回路径的有损改写不可接受。
 - 判定：纯文本、非错误、命令未命中 `excludePatterns`、预清洗后 > `thresholdBytes`（默认 1200 ≈ 300 token）、且代码特征行占比 ≤ `codeDumpRatio`（默认 0.3）。
-- 摘要模型由 `digestModel` 指定（默认 `openai-codex/gpt-5.4-mini`，non-thinking、`temperature=0`），预算按原文比例给（`clamp(0.6 × 原文, 128, 256)`），`timeoutMs` 默认 6000、`maxConcurrent` 默认 2。
+- 摘要模型由 `digestModel` 指定（**默认留空 = 摘要不启用**，请填你自己的 `provider/modelId`，例如 `openai-codex/gpt-5.4-mini`；non-thinking、`temperature=0`），预算按原文比例给（`clamp(0.6 × 原文, 128, 256)`），`timeoutMs` 默认 6000、`maxConcurrent` 默认 2。
 - 配置模板在 `config/examples/bash-digest.example.json`；「模型与凭证怎么配、怎么确认真的生效」见 `config/examples/README.md`。凭证走宿主 pi 自己的 provider 配置（通常是环境变量，如 `ANTHROPIC_API_KEY`），dashboard 用法下建议写进 dashboard 的环境文件。
 - 采纳还需摘要 < 原文 `maxDigestRatio`（默认 0.6），否则回落原文；任何失败（超时、报错、守卫不过、信号量饱和）一律返回原文，绝不抛错。
 - `excludePatterns` 默认排除“列出条目”类命令（`ls`/`find`/`git log`/`grep`/`cat`/`sed`/`head`/`wc` …），按子命令边界匹配，只测真正产出 stdout 的那一段。理由：这些命令的输出就是调用方要的条目集合，**摘要只能靠丢行压缩，而丢掉的行就是丢事实**。实测过一次丢行导致的错误回答。
@@ -215,7 +215,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 默认数据目录：`~/.pi/tsien-memory/`
 - `pi-dashboard` 与 `pi-knowledge` 保持独立；Memory 的 knowledge bridge 仍是可选协作接口。
 
-迁移后的详细设计和验收材料位于 `<repo>/docs/integrated/`。
+每个扩展的设计与验收材料在 `docs/` 下（部分内部实验记录与逐模型调参数据不随仓库公开）。
 
 ## 本地安装
 

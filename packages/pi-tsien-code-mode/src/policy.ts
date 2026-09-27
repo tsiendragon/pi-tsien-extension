@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 export type PolicyMode = "readOnly" | "full";
 export type ResultKind = "object" | "array";
@@ -67,16 +69,27 @@ type PolicyConfig = {
   models?: Record<string, { recommended?: RecommendedPolicy }>;
 };
 
-function readConfig(url: URL): PolicyConfig {
+function readConfig(path: string): PolicyConfig {
   try {
-    return JSON.parse(readFileSync(url, "utf8")) as PolicyConfig;
+    return JSON.parse(readFileSync(path, "utf8")) as PolicyConfig;
   } catch {
     return {};
   }
 }
 
-const readOnlyConfig = readConfig(new URL("../../docs/ptc-model-complexity-config.json", import.meta.url));
-const fullConfig = readConfig(new URL("../../docs/ptc-full-tool-config.json", import.meta.url));
+/**
+ * Per-model run budgets live outside this repository, because they name concrete models:
+ * `<PI_CODING_AGENT_DIR | ~/.pi/agent>/code-mode/model-complexity.json` and `.../full-tool.json`.
+ * Missing files are expected (the fallback budgets below still apply).
+ */
+function policyConfigDir(): string {
+  const fromEnv = process.env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = fromEnv ? resolve(fromEnv) : join(homedir(), ".pi", "agent");
+  return join(agentDir, "code-mode");
+}
+
+const readOnlyConfig = readConfig(join(policyConfigDir(), "model-complexity.json"));
+const fullConfig = readConfig(join(policyConfigDir(), "full-tool.json"));
 
 /**
  * Sentinel for a budget that should not stop a program. It is the maximum delay
@@ -99,7 +112,7 @@ function modelKeyCandidates(key: string): string[] {
   const provider = key.slice(0, slash + 1);
   const id = key.slice(slash + 1);
   // Strip a trailing version/date suffix like "-0813" so a pinned model
-  // such as openai-codex/gpt-5.4-mini matches its base policy key.
+  // such as openai-codex/model-pro-0813 matches its base policy key.
   const baseId = id.replace(/-[A-Za-z0-9]+$/, "");
   if (!baseId || baseId === id) return [key];
   return [key, `${provider}${baseId}`];

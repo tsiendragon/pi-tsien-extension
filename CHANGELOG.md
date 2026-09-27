@@ -69,7 +69,7 @@
 - **实测否决**"降 observation-pack 阈值"方案（`docs/session-context-token-plan.md` §7）：在隔离 agent 目录 + `pi -p` headless 的 A/B 中，把阈值 10240→1600、摘录 1024→250、`fullSends` 2→1 后，短会话 token −19% 但**成本 +41%**（`openai-codex` 的 `cacheRead 0.03 / input 0.30`，投影时改写 `pi.on("context")` 会击穿已缓存前缀，1 个 token 的击穿≈10 个 token 的节省），长会话则**质量失败**（答不出被替换掉的中部细节，control 答对）。正确形态是**插入时精简**（`pi.on("tool_result")`，同 `bash-digest`），不产生击穿。
 - 修正 §6 的推断：token 节省不等于成本节省；`cacheRead:input = 1:10` 时该等价关系会被击穿打破。
 - 新增 `scripts/observation-pack-placeholder-size.ts`：直接调 `placeholderFor()` 量占位符的真实 token 开销（固定样板 100 tok，摘录按比例），用于给驱逐阈值定档。
-- `run_code` 移除时间与次数上限：`maxRunComputeTimeMs` / `maxRunWallTimeMs` / `maxOuterRunCodeCalls` 支持 `null` 表示无限制（哨兵值 2^31-1，避开 Node 定时器/vm 溢出）；`docs/ptc-full-tool-config.json` 已全部设为 `null`，未配置模型也走无限制兜底。嵌套写入/子调用与 assistant token 预算保留。
+- `run_code` 移除时间与次数上限：`maxRunComputeTimeMs` / `maxRunWallTimeMs` / `maxOuterRunCodeCalls` 支持 `null` 表示无限制（哨兵值 2^31-1，避开 Node 定时器/vm 溢出）；逐模型配置（`<agent dir>/code-mode/full-tool.json`）已全部设为 `null`，未配置模型也走无限制兜底。嵌套写入/子调用与 assistant token 预算保留。
 - 新增 `observation-pack`：把超过阈值的大型工具结果在投影层替换为占位符并归档到本地，`obs_recall` 按需分页取回；默认关闭，且仅在启用时注册 `obs_recall`。
 - `trajectory-recorder` 新增紧凑计时账本：每个模型调用、Tool 调用和 Agent run 追加一行约 200B 的记录（`ttftMs`、`thinkingMs`、`totalMs`、`durationMs`、`scope` 等），写入 `<agent dir>/pi-timing/`，供 dashboard 时间分析使用；不记录提示词与 Tool 输出。
 - 自动压缩触发点统一为 `min(270000, 0.75 × contextWindow)`，替换只对 1M 窗口生效的 `auto-compact-1m`（`auto-compact-target`）；不改 `compaction.reserveTokens`，因为它同时决定摘要输出预算。

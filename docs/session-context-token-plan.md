@@ -105,7 +105,7 @@ digest 当且仅当：
 
 要点：**这套工作流里的大块 bash 输出，绝大多数本身就是条目列表或文件内容**，不是可安全摘要的冗长日志。所以"便宜又安全"的池子只有 7%。
 
-摘要自身开销：`gpt-5.4-mini`，延迟 p50 3.4s / max 5.7s（超时 6000ms），156 次/3 天，≈ $0.02/3 天。对照 bash 命令均耗时 26.9s，延迟占比可忽略。
+摘要自身开销：`model-flash`，延迟 p50 3.4s / max 5.7s（超时 6000ms），156 次/3 天，≈ $0.02/3 天。对照 bash 命令均耗时 26.9s，延迟占比可忽略。
 
 ### 1.7 A/B 实证（3 轮，子 Agent 进程隔离，配置开关对照）
 
@@ -148,10 +148,10 @@ targetTokens = min(270000, floor(0.75 × contextWindow))
 
 | 模型窗口 | 触发目标 | 原生阈值（window − reserveTokens） |
 |---|---|---|
-| 1,048,576（gpt-5.4-mini / kimi-k3） | 270,000 | 1,026,576 |
-| 1,050,000（openai-codex/gpt-5.4-mini） | 270,000 | 1,028,000 |
-| 1,000,000（gpt-5.4-mini） | 270,000 | 978,000 |
-| 272,000（openai-codex/gpt-5.4-mini） | 204,000 | 250,000 |
+| 1,048,576（model-flash-c / kimi-k3） | 270,000 | 1,026,576 |
+| 1,050,000（openai-codex/model-large） | 270,000 | 1,028,000 |
+| 1,000,000（model-flash） | 270,000 | 978,000 |
+| 272,000（openai-codex/model-large） | 204,000 | 250,000 |
 | 262,144（dsw/local-model，reserveTokens 32768） | 196,608 | 229,376 |
 | 128,000（qwen3-coder-plus） | 96,000 | 106,000 |
 
@@ -372,7 +372,7 @@ for f in ~/.pi/agent/*; do b=$(basename "$f")
 
 PI_CODING_AGENT_DIR=/tmp/p1-ab/treat/agent PI_OBSERVATION_DIR=/tmp/p1-ab/treat/archiv \
   pi -p --session-dir /tmp/p1-ab/treat/sessions \
-     --model openai-codex/gpt-5.4-mini --thinking high --tools read,bash,obs_recall "<task>"
+     --model openai-codex/model-flash-c --thinking high --tools read,bash,obs_recall "<task>"
 ```
 
 **两个踩坑**：
