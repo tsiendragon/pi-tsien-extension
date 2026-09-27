@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-09-27
+
+首个公开发布：**26 个扩展包**（25 个可加载扩展 + 1 个共享库），MIT 许可。
+
+- 完整发布说明（安装方式、包清单、已知限制）：[docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)
+- 安装：`pi install git:github.com/tsiendragon/pi-tsien-extension` 一次装齐；单包用 `pi install npm:pi-tsien-<name>`（npm 首发 10/26，其余走 GitHub）
+- 等价性验收：`npm run parity:check` 25/25 条目与迁移前指纹逐条一致
+
+### 0.1.0 开发纪要（内部记录）
 
 - **发布准备**：仓库与所有包补 MIT LICENSE；每个包补 `license`/`repository`/`homepage`/`author`/`keywords` 与 `files`；24 个包补 README
   （工具/命令/事件清单取自迁移前抓的注册指纹）。26 个包 `npm pack --dry-run` 复核全部含 LICENSE + README + 入口。
