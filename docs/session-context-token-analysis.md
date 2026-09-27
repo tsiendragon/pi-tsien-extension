@@ -121,7 +121,7 @@
 | `dsw/local-model`（本地 vLLM） | $0 | 0% | 1,919 | — |
 | `dsw/dsw/local-model` | $0 | 0% | 617 | — |
 
-- **kimi-k3 用 5% 的调用吃掉 45% 的花费**（$0.40/M prompt、$15/M output，是 deepseek 的 8x/12x）。
+- **kimi-k3 用 5% 的调用吃掉 45% 的花费**（$0.40/M prompt、$15/M output，是本地 vLLM 模型的 8x/12x）。
   审查这 381 次调用是否都必要，或降级到 model-flash-c，是除 L1 外最大的省钱点。
 - `dsw/*`（本地 vLLM）**缓存命中率 0%**：3 天 318M token 全量 prefill。不花钱，但吃本地 GPU
   吞吐。这不是账单问题，是容量问题。
@@ -247,7 +247,7 @@ output 占 10%（$9.5），reasoning 3.46M token。降 `defaultThinkingLevel` �
    取回。摘要把关键错误行删掉是这类方案最大的失败模式。
 4. **摘要输出结构化**：退出码 / 关键错误 / 文件与行号 / 计数 / 下一步命令，而非自由文本。
 5. **并发限流 + fail-open**：bash 常并行，摘要调用要限流；失败一律返回原文。
-6. **绝不用主模型做摘要**，用 large / model-flash（non-thinking）。
+6. **绝不用主模型做摘要**，用 `model-large` / `model-flash`（non-thinking）。
 
 **收益不能简单相加**：触发点（6.1）与 bash 压缩（6.3）降低的是同一个量（平均 prompt 大小）。
 建议先做触发点，再叠加摘要/占位符，分步实测。
