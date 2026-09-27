@@ -48,12 +48,12 @@ const pi = {
 
 const LARGE_OUTPUT = [
 	"== tables ==",
-	...Array.from({ length: 40 }, (_, i) => `dwd_demo_user_kyc_table_${i}_df: ${20 + i} cols, pt YYYYMMDD`),
+	...Array.from({ length: 40 }, (_, i) => `dwd_user_profile_table_${i}_df: ${20 + i} cols, pt YYYYMMDD`),
 	"== partitions ==",
 	...Array.from({ length: 30 }, (_, i) => `2026${String((i % 12) + 1).padStart(2, "0")}01\t${1024 * (i + 1)} bytes`),
 	"== warnings ==",
 	"WARN: partition pt=20260931 is empty, skipped",
-	"ERROR: table dwd_demo_user_kyc_table_7_df missing partition pt=20260901",
+	"ERROR: table dwd_user_profile_table_7_df missing partition pt=20260901",
 ].join("\n");
 
 function makeEvent(text: string, toolCallId: string): Record<string, unknown> {
@@ -119,7 +119,7 @@ async function run(): Promise<void> {
 	const sessionRoot = resolveSessionRoot(observations.archiveDir, SESSION_ID);
 	assert.ok(sessionRoot, "expected a session root");
 	const archived = await readFile(join(sessionRoot, "objects", `${observationId}.txt`), "utf8");
-	assert.ok(archived.includes("dwd_demo_user_kyc_table_7_df"), "archive must hold the raw text");
+	assert.ok(archived.includes("dwd_user_profile_table_7_df"), "archive must hold the raw text");
 
 	console.log(`\ndigest in ${elapsed} ms: ${originalTokens} tok -> ${digestTokens} tok`);
 	console.log(`archive: ${join(sessionRoot, "objects", `${observationId}.txt`)}`);
