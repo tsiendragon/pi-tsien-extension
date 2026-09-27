@@ -18,7 +18,7 @@ const turn: SettledTurn = {
 
 function reviewer(output: string) {
 	return new ModelCandidateReviewer(
-		{ model: "openai-codex/gpt-5.4-mini", timeoutMs: 1_000, maxInputChars: 2_000 },
+		{ model: "openai-codex/model-large", timeoutMs: 1_000, maxInputChars: 2_000 },
 		{ run: async () => ({ output, isError: false }) },
 	);
 }

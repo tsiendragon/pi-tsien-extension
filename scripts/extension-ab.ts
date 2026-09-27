@@ -28,8 +28,8 @@ import { join, resolve } from "node:path";
 
 /** Per-million-token prices for the model under test. */
 const PRICES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-	"openai-codex/gpt-5.4-mini": { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0 },
-	"openai-codex/gpt-5.4-mini": { input: 0.2, output: 0.4, cacheRead: 0.02, cacheWrite: 0 },
+	"openai-codex/model-flash-c": { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0 },
+	"openai-codex/model-flash-b": { input: 0.2, output: 0.4, cacheRead: 0.02, cacheWrite: 0 },
 };
 
 interface Args {
@@ -55,7 +55,7 @@ function parseArgs(argv: readonly string[]): Args {
 	return {
 		task: value("--task") ?? "",
 		trials: Number(value("--trials", "1")),
-		model: value("--model", "openai-codex/gpt-5.4-mini")!,
+		model: value("--model", "openai-codex/model-flash-c")!,
 		thinking: value("--thinking", "high")!,
 		tools: value("--tools", "read,bash,obs_recall")!,
 		arms: arms.length > 0 ? arms : ["control"],
@@ -206,7 +206,7 @@ function collectMetrics(armPath: string): ArmMetrics {
 }
 
 function costOf(metrics: ArmMetrics, model: string): number {
-	const price = PRICES[model] ?? PRICES["openai-codex/gpt-5.4-mini"]!;
+	const price = PRICES[model] ?? PRICES["openai-codex/model-flash-c"]!;
 	return (
 		(metrics.input / 1e6) * price.input +
 		(metrics.cacheRead / 1e6) * price.cacheRead +

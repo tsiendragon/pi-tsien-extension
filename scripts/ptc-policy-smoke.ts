@@ -25,7 +25,7 @@ function expectPolicyError(action: () => unknown, code: string): void {
 
 const readPolicy = resolvePtcPolicy("readOnly", {
   provider: "openai-codex",
-  id: "gpt-5.4-mini",
+  id: "model-flash-b",
 });
 if (
   readPolicy.source !== "configured"
@@ -39,8 +39,8 @@ if (
 }
 
 // A version-pinned model must resolve to the same base policy, not fallback.
-const baseProRead = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "gpt-5.4-mini" });
-const pinnedProRead = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "gpt-5.4-mini" });
+const baseProRead = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "model-pro" });
+const pinnedProRead = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "model-pro-0813" });
 if (
   pinnedProRead.source !== "configured"
   || pinnedProRead.maxRunWallTimeMs !== baseProRead.maxRunWallTimeMs
@@ -53,7 +53,7 @@ if (
 
 // An unconfigured reasoning model defaults fence normalization on; a plain
 // unconfigured model keeps it off.
-const fallbackReasoning = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "gpt-5.4-mini" });
+const fallbackReasoning = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "model-reason" });
 const fallbackPlain = resolvePtcPolicy("readOnly", { provider: "anthropic", id: "claude-sonnet-4-5" });
 if (fallbackReasoning.source !== "fallback" || fallbackReasoning.normalizeJsonFence !== true) {
   throw new Error(`Fallback reasoning model should enable fence normalization: ${JSON.stringify(fallbackReasoning)}`);
@@ -89,16 +89,16 @@ if (!runTimeout.message.includes("runWallTimeMs") || runBudgetState.violation) {
 }
 assertBudgetAvailable(runBudgetState);
 
-const largePolicy = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "gpt-5.4-mini" });
+const largePolicy = resolvePtcPolicy("readOnly", { provider: "openai-codex", id: "model-large" });
 reserveOuterRunCode(runBudgetState);
 const retargeted = retargetBudgetState(runBudgetState, largePolicy);
-if (retargeted.policy.modelKey !== "openai-codex/gpt-5.4-mini" || retargeted.outerRunCodeCalls !== 1) {
+if (retargeted.policy.modelKey !== "openai-codex/model-large" || retargeted.outerRunCodeCalls !== 1) {
   throw new Error(`Model retargeting lost usage: ${JSON.stringify(budgetSnapshot(retargeted))}`);
 }
 
 const fullPolicy = resolvePtcPolicy("full", {
   provider: "openai-codex",
-  id: "gpt-5.4-mini",
+  id: "model-large",
 });
 const writeBudget = createBudgetState(fullPolicy);
 for (let index = 0; index < (fullPolicy.maxNestedWrites ?? 0); index += 1) reserveNestedCall(writeBudget, "write");

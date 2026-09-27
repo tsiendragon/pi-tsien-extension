@@ -768,7 +768,7 @@ describe("WorkbenchController", () => {
 
     const exact = controller.submitAgent({
       ...agentRequest,
-      model: "openai-codex/gpt-5.4-mini",
+      model: "openai-codex/model-large",
     });
     await expect(exact.completion).resolves.toMatchObject({
       output: expect.stringContaining("model-reference-check"),

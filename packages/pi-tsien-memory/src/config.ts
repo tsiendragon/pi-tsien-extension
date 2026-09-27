@@ -44,7 +44,8 @@ const defaults: Omit<MemoryConfig, "dataDir" | "warnings"> = {
     candidateRetentionDays: 30,
     reviewCandidates: true,
     reviewPromptTimeoutMs: 15_000,
-    reviewer: { enabled: true, model: "openai-codex/gpt-5.4-mini", timeoutMs: 15_000, maxInputChars: 2_000 },
+    // 候选审核是可选的 LLM 步骤：默认关闭，由用户在自己的配置里指定 provider/model。
+    reviewer: { enabled: false, model: "", timeoutMs: 15_000, maxInputChars: 2_000 },
   },
   recall: { enabled: true, maxItems: 6, maxTokens: 1000, minScore: 0.62, timeoutMs: 150 },
   privacy: { storeEvidenceSummary: false, remoteProcessing: false },
