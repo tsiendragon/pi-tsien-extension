@@ -1,13 +1,14 @@
 # Changelog
 
-## 0.1.1 — 2026-09-27（包级修订：移除内部模型名）
+## 0.1.1 — 2026-09-27（包级修订：移除内部模型代号）
 
-只重新发布受影响的两个包，其余包内容未变。
+只重新发布受影响的包，其余包内容未变。默认值与示例统一改用 `openai-codex` 的模型作案例。
 
-- `pi-tsien-code-mode@0.1.1`：逐模型策略不再读仓库内 JSON，改读 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/code-mode/{model-complexity,full-tool}.json`；源码注释里的内部模型名移除。
-- `pi-tsien-capability@0.1.1`：`classify-text` 示例里的内部模型名换成占位符（使用前替换成你自己模型清单里的 `provider/modelId`）。
-- `pi-tsien-rtk-fork`：`DEFAULT_DIGEST_MODEL` 改为空（摘要默认关闭，启用时用 `digestModel` 指定自己的模型）——**尚未重新发布**，随下次发布生效。
-- `pi-tsien-memory`：候选审核默认关闭（`capture.reviewer.enabled=false`），由用户自己的配置指定模型——**尚未重新发布**。
+- `pi-tsien-code-mode@0.1.1`：逐模型策略不再读仓库内 JSON，改读 `<PI_CODING_AGENT_DIR | ~/.pi/agent>/code-mode/{model-complexity,full-tool}.json`；源码注释里的内部模型代号移除。
+- `pi-tsien-code-mode@0.1.2`：注释统一为 `openai-codex` 示例，去掉其余 provider 名。
+- `pi-tsien-capability@0.1.1`：`classify-text` 示例模型改为 `openai-codex/gpt-5.4-mini`。
+- `pi-tsien-rtk-fork`：`DEFAULT_DIGEST_MODEL` 改为 `openai-codex/gpt-5.4-mini`（内部代号移除）——**尚未重新发布**，随下次发布生效。
+- `pi-tsien-memory`：候选审核默认模型改为 `openai-codex/gpt-5.4-mini`——**尚未重新发布**。
 
 ## 0.1.0 — 2026-09-27（首个公开发布）
 
@@ -75,7 +76,7 @@
 - 结论修正：`bash-digest` 按新口径只值 1.5% of replay（≈0.9% prompt 成本），而**驱逐**方向上限为 34–53% of replay（≈21–33% 成本）；现 `observation-pack`（阈值 10KB、占位符实测 352 tok）只覆盖约 7% 成本，把阈值降到 1600B、摘录降到 250B（占位符 136 tok）可增量 **+20%**。
 - 新增 `scripts/auto-compact-cost-analysis.ts` 并复验 auto-compact 触发点（`docs/session-context-token-plan.md` §8）：全量 92,378 请求显示**每 100K token 的边际成本随上下文变长而下降**（$0.0069→$0.0032，命中率 85%→98.9%），每请求成本 ≈ $0.004 固定（全价新内容）+ 上下文 × $0.03/M（缓存价）。因此"上下文老 token 是便宜货"，驱逐类机制亏钱、插入时精简划算；触发点收益从 24.9%（token 口径）下修为 **~10–14%（成本口径）**，方向仍为正。
 - 新增 `scripts/extension-ab.ts`：扩展机制 A/B 台架。用 `PI_CODING_AGENT_DIR` + `PI_OBSERVATION_DIR` 把每个 arm 的配置与归档完全隔离（只软链真实配置），headless `pi -p` 跑多 trial，按真实单价（`cacheRead:input` 价差）算成本并把答案落盘供对照 ground truth。踩坑已内置处理：必须用 `--tools` 否则模型走 `run_code` 让机制不触发；`pi -p` 的 stdin 必须 `ignore`。
-- **实测否决**"降 observation-pack 阈值"方案（`docs/session-context-token-plan.md` §7）：在隔离 agent 目录 + `pi -p` headless 的 A/B 中，把阈值 10240→1600、摘录 1024→250、`fullSends` 2→1 后，短会话 token −19% 但**成本 +41%**（`openai-codex` 的 `cacheRead 0.03 / input 0.30`，投影时改写 `pi.on("context")` 会击穿已缓存前缀，1 个 token 的击穿≈10 个 token 的节省），长会话则**质量失败**（答不出被替换掉的中部细节，control 答对）。正确形态是**插入时精简**（`pi.on("tool_result")`，同 `bash-digest`），不产生击穿。
+- **实测否决**"降 observation-pack 阈值"方案（`docs/session-context-token-plan.md` §7）：在隔离 agent 目录 + `pi -p` headless 的 A/B 中，把阈值 10240→1600、摘录 1024→250、`fullSends` 2→1 后，短会话 token −19% 但**成本 +41%**（该模型的 `cacheRead 0.03 / input 0.30`，投影时改写 `pi.on("context")` 会击穿已缓存前缀，1 个 token 的击穿≈10 个 token 的节省），长会话则**质量失败**（答不出被替换掉的中部细节，control 答对）。正确形态是**插入时精简**（`pi.on("tool_result")`，同 `bash-digest`），不产生击穿。
 - 修正 §6 的推断：token 节省不等于成本节省；`cacheRead:input = 1:10` 时该等价关系会被击穿打破。
 - 新增 `scripts/observation-pack-placeholder-size.ts`：直接调 `placeholderFor()` 量占位符的真实 token 开销（固定样板 100 tok，摘录按比例），用于给驱逐阈值定档。
 - `run_code` 移除时间与次数上限：`maxRunComputeTimeMs` / `maxRunWallTimeMs` / `maxOuterRunCodeCalls` 支持 `null` 表示无限制（哨兵值 2^31-1，避开 Node 定时器/vm 溢出）；逐模型配置（`<agent dir>/code-mode/full-tool.json`）已全部设为 `null`，未配置模型也走无限制兜底。嵌套写入/子调用与 assistant token 预算保留。

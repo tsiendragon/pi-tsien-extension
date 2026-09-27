@@ -690,7 +690,7 @@ export default function piZero(pi: ExtensionAPI): void {
           return;
         }
         if (!modelSpec.includes("/")) {
-          ctx.ui.notify("Invalid model format. Use: provider/modelId (e.g., openai-codex/model-id)", "error");
+          ctx.ui.notify("Invalid model format. Use: provider/modelId (e.g., openai-codex/gpt-5.4-mini)", "error");
           return;
         }
         const persisted = setVibeModel(modelSpec);
