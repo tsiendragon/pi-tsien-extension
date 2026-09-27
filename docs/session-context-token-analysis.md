@@ -18,7 +18,7 @@
 | output token | 6.72 M（其中 reasoning 3.46 M） |
 | 平均 prompt | **198,110 token** |
 | prompt 分位 | p50 164K / p90 422K / p99 554K |
-| prompt 缓存命中率 | 71.2%（分模型看：openai-codex 92–97%，本地 dsw 0%） |
+| prompt 缓存命中率 | 71.2%（分模型看：云端模型 92–97%，本地 dsw 0%） |
 
 费用拆分：
 
@@ -117,7 +117,7 @@
 | 模型 | 花费 | 占比 | 调用数 | 单次成本 |
 |---|---|---|---|---|
 | `openai-codex/model-flash-c` | $55.1 | 55% | 4,089 | $0.013 |
-| `openai-codex/gpt-5.4-mini` | **$44.6** | **45%** | **381** | **$0.117（8.7x）** |
+| `openai-codex/kimi-k3` | **$44.6** | **45%** | **381** | **$0.117（8.7x）** |
 | `dsw/local-model`（本地 vLLM） | $0 | 0% | 1,919 | — |
 | `dsw/dsw/local-model` | $0 | 0% | 617 | — |
 
@@ -129,7 +129,7 @@
 ### L4 避免 session 中途切模型
 36 个 session 中 **10 个在窗口内切换过模型**（如 `model-flash-c` ↔ `kimi-k3` /
 `local-model`）。每次切换都会击穿 prompt cache，后续请求按未命中价计费。
-openai-codex 单模型内命中率 92–97%，说明缓存机制正常，损失来自切换。
+同一模型内命中率 92–97%，说明缓存机制正常，损失来自切换。
 → 长 session 尽量一个模型跑到底；需要切就 `/clear` 换新会话。
 
 ### L5 图片（不是 token 问题）
@@ -192,7 +192,7 @@ output 占 10%（$9.5），reasoning 3.46M token。降 `defaultThinkingLevel` �
 注意事项：
 
 - 该扩展仅对 `contextWindow >= 1M` 的模型生效；3 天主力模型都命中
-  （`openai-codex/model-flash-c` 1,048,576；`openai-codex/gpt-5.4-mini` 1,048,576）。
+  （`openai-codex/model-flash-c` 1,048,576；`openai-codex/kimi-k3` 1,048,576）。
 - **不要用 `compaction.reserveTokens` 调触发点**：官方文档明确 `reserveTokens` 同时决定摘要
   输出预算（`reserveTokens: 0` 会把摘要预算归零）。用扩展的 `ctx.compact()` 干净得多。
 - 压缩后只保留 `keepRecentTokens`（默认 20K），上下文会在 **20K ⇄ 270K** 锯齿波动，

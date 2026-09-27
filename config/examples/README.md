@@ -19,7 +19,7 @@
 
 | provider 示例 | `digestModel` 写法 | 需要的环境变量 |
 |---|---|---|
-| 阿里云 DashScope（默认值） | `openai-codex/gpt-5.4-mini` | `ANTHROPIC_API_KEY` |
+| OpenAI Codex 订阅账号（默认值） | `openai-codex/gpt-5.4-mini` | 用 ChatGPT 账号登录即可，无需额外 key |
 | Anthropic | `anthropic/claude-haiku-4.5`（按你的清单里实际 id 写） | `ANTHROPIC_API_KEY` |
 | OpenAI | `openai/gpt-5-mini`（按实际 id 写） | `OPENAI_API_KEY` |
 | 本地兼容 OpenAI 的网关 | 需先在 pi 的 provider 配置里声明该 provider | 按你声明的变量名 |
