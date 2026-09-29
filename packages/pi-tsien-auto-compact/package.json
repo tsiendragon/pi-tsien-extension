@@ -1,7 +1,7 @@
 {
   "name": "pi-tsien-auto-compact",
-  "version": "0.1.0",
-  "description": "Auto-compaction trigger policy: one shared resolver for the trigger and every status line.",
+  "version": "0.1.1",
+  "description": "Auto-compaction trigger policy: one shared resolver for the trigger and every status line, plus the agent-callable compact_context tool.",
   "type": "module",
   "pi": {
     "extensions": [

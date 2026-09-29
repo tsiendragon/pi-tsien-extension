@@ -560,16 +560,25 @@
       "package": "pi-tsien-auto-compact",
       "path": "src/index.ts",
       "status": "ok",
-      "tools": [],
+      "tools": [
+        "compact_context"
+      ],
       "commands": [],
       "handlers": {
         "agent_settled": 1,
         "context": 1,
         "model_select": 1,
+        "session_shutdown": 1,
         "session_start": 1
       },
-      "callCount": 4,
+      "callCount": 6,
       "calls": [
+        [
+          "registerTool",
+          [
+            "{description:\"Summarize older conversation con…\",execute:fn,label:\"Compact context\",name:\"compact_context\",parameters:{additionalProperties:false,properties:{instructions:{4}},type:\"object\"},promptGuidelines:[\"Call compact_context when the us…\"],promptSnippet:\"Schedule a context compaction at…\"}"
+          ]
+        ],
         [
           "on",
           [
@@ -595,6 +604,13 @@
           "on",
           [
             "\"model_select\"",
+            "fn"
+          ]
+        ],
+        [
+          "on",
+          [
+            "\"session_shutdown\"",
             "fn"
           ]
         ]
