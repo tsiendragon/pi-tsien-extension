@@ -168,6 +168,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 - 带 `ctx.isIdle()` 守卫，只在 run 边界（`agent_settled` / `session_start` / `model_select`）真正触发；长自治 run 可能越过目标，pi 内置阈值仍是最后防线。
 - 触发点由 `core.ts` 的 `resolveCompactionTrigger` 统一给出（本扩展目标与 pi 守卫取最早者），触发方与所有显示（TUI 状态条、dashboard 状态行）读同一个值；`live-session` 把该值随 `summary_update` 遥测推给 dashboard。
 - 可选配置 `~/.pi/agent/auto-compact-target.json`：`targetTokens`、`windowRatio`、`modelOverrides`。
+- 暴露 `compact_context` 工具：用户在自然语言里要求「压缩上下文」时，Agent 自己登记一次压缩请求（`instructions` 可选）。工具**只登记不内联压缩**（`ctx.compact()` 会先 abort 当前 run），真正压缩仍在同一个 run 边界执行；不受 `enabled` 影响。代价是：压缩在本轮 run 结束（空闲）后才发生，不会中途打断任务，也不能在任务中途立刻释放上下文。仅在 `tui`/`rpc` 会话可用：`-p`/`--mode print|json` 在 run 结束就销毁会话，延迟压缩会被取消，工具在两种模式下直接返回 `unavailable_in_one_shot_mode`。
 
 ### `pi-tsien-live-session`
 

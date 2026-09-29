@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `pi-tsien-auto-compact@0.1.1`：新增 Agent 可调用的 `compact_context` 工具——用户在自然语言里要求「压缩上下文」时，Agent 可以登记一次压缩请求。工具只登记不内联压缩（`ctx.compact()` 会先 abort 当前 run），真正压缩仍在同一个 run 边界（空闲）执行；请求按 session id 隔离并在 `session_shutdown` 清理；不受 `auto-compact-target.json` 的 `enabled` 影响。
+
 ## 0.1.1 — 2026-09-27（包级修订：移除内部模型代号）
 
 只重新发布受影响的包，其余包内容未变。默认值与示例统一改用 `openai-codex` 的模型作案例。
