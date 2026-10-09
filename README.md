@@ -201,7 +201,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 
 ### `pi-tsien-goal`
 
-已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项、每 20 分钟自动 continuation；外部等待（缺权限、缺外部数据、待用户决定）记录为结构化 blocker 并保持目标 active、由 continuation 每轮先复核，暂停仅用于用户要求停止或继续不安全的场景。
+已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项、每 20 分钟自动 continuation；遇到卡点先走「绕过/自助解决/先推进其他工作」阶梯，仍无法解决的外部等待记录为结构化 blocker 并保持目标 active、由 continuation 每轮先复核，暂停仅用于用户要求停止或继续不安全的场景。
 
 - `/goal`、`/goal status`、`/goal start`、`/goal import`、`/goal pause|resume|complete|clear`
 - Tools：`get_goal`、`create_goal`、`propose_goal_draft`、`complete_goal`、`pause_goal`、`update_goal_progress`、`update_goal_graph`

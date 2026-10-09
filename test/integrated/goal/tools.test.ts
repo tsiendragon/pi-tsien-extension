@@ -153,6 +153,15 @@ describe("goal tool schemas and registration", () => {
 		expect(pauseGuidance).toContain("keep the goal active");
 		expect(tools.get("pause_goal")?.promptSnippet ?? "").toContain("keep the goal active");
 	});
+
+	it("asks for a workaround attempt before a blocker is marked needs_user or external_wait", () => {
+		const { pi, tools } = createHarness();
+		registerGoalTools(pi);
+		const graphGuidance = tools.get("update_goal_graph")?.description ?? "";
+		expect(graphGuidance).toContain("Try the ladder first");
+		expect(graphGuidance).toContain("record each attempt with evidence");
+		expect(graphGuidance).toContain("only mark a blocker needs_user or external_wait after that");
+	});
 });
 
 describe("goal tool execution", () => {

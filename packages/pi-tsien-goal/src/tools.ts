@@ -302,7 +302,7 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "update_goal_graph",
 		label: "Update Goal Work Graph",
 		description:
-			"Update work items and structured blockers for the active goal; attempts are append-only audit records. Only credentials, permissions, irreversible actions, product decisions, and policy limits need user/external waiting; record each agent-can-try attempt with evidence.",
+			"Update work items and structured blockers for the active goal; attempts are append-only audit records. Try the ladder first — a way around the blocker, a self-service path, then other advanceable work — record each attempt with evidence, and only mark a blocker needs_user or external_wait after that; credentials, permissions, irreversible actions, product decisions, and policy limits need user/external waiting.",
 		promptSnippet:
 			"Use update_goal_graph to record work-item state, structured blockers, and blocker attempts.",
 		parameters: updateGoalGraphParams,

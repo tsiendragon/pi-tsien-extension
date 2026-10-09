@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `pi-tsien-goal@0.1.1`：外部等待不再中断持续驱动——缺权限、缺外部数据、待用户决定时记录结构化 blocker 并保持 goal 为 active，20 分钟自动 continuation 每轮先复核 open blocker 并记录重试 attempt，条件具备后自动接续；`pause_goal` 工具说明与 goal context 规则改为仅用于用户要求停止或继续不安全的场景。
+- `pi-tsien-goal@0.1.1`：外部等待不再中断持续驱动——遇到卡点先走阶梯：先尝试绕过（替代来源/方法/代理证据，不得越权或降低证据标准）、自助解决、先推进其他工作项，再把仍未解决的记录为结构化 blocker 与尝试证据并保持 goal 为 active；20 分钟自动 continuation 每轮先复核 open blocker 并记录重试 attempt，条件具备后自动接续；`pause_goal` 与 goal context 规则改为仅用于用户要求停止或继续不安全的场景。
 - `pi-tsien-auto-compact@0.1.1`：新增 Agent 可调用的 `compact_context` 工具——用户在自然语言里要求「压缩上下文」时，Agent 可以登记一次压缩请求。工具只登记不内联压缩（`ctx.compact()` 会先 abort 当前 run），真正压缩仍在同一个 run 边界（空闲）执行；请求按 session id 隔离并在 `session_shutdown` 清理；不受 `auto-compact-target.json` 的 `enabled` 影响。
 
 ## 0.1.1 — 2026-09-27（包级修订：移除内部模型代号）
