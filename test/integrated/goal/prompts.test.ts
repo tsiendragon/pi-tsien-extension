@@ -84,7 +84,9 @@ describe("goal prompt rendering", () => {
 	it("keeps the goal active and re-checks blockers instead of pausing on external waits", () => {
 		const context = renderGoalContext(goal());
 
-		expect(context).toContain("record a structured blocker, keep the goal active");
+		expect(context).toContain("try the ladder before treating it as blocked");
+		expect(context).toContain("a self-service path you can act on yourself");
+		expect(context).toContain("Record a structured blocker only for what stays unresolved");
 		expect(context).toContain("re-check open blockers first");
 		expect(context).toContain("never pause the goal for external waits");
 	});
