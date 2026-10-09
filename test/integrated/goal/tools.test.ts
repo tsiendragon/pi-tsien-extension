@@ -144,6 +144,15 @@ describe("goal tool schemas and registration", () => {
 			expect(tool?.promptSnippet).toContain(toolName);
 		}
 	});
+
+	it("keeps the goal driving through external waits instead of pausing", () => {
+		const { pi, tools } = createHarness();
+		registerGoalTools(pi);
+		const pauseGuidance = tools.get("pause_goal")?.description ?? "";
+		expect(pauseGuidance).toContain("only when the user asked to stop it or continuing would be unsafe");
+		expect(pauseGuidance).toContain("keep the goal active");
+		expect(tools.get("pause_goal")?.promptSnippet ?? "").toContain("keep the goal active");
+	});
 });
 
 describe("goal tool execution", () => {
