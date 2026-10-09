@@ -1,6 +1,6 @@
 {
   "name": "pi-tsien-goal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Goal tracking: /goal state, acceptance criteria and progress.",
   "type": "module",
   "pi": {

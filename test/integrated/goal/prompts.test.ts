@@ -81,6 +81,14 @@ describe("goal prompt rendering", () => {
 		expect(context).not.toContain("<runtime>");
 	});
 
+	it("keeps the goal active and re-checks blockers instead of pausing on external waits", () => {
+		const context = renderGoalContext(goal());
+
+		expect(context).toContain("record a structured blocker, keep the goal active");
+		expect(context).toContain("re-check open blockers first");
+		expect(context).toContain("never pause the goal for external waits");
+	});
+
 	it("creates hidden messages only for active goals", () => {
 		expect(createGoalContextMessage(goal())).toMatchObject({
 			customType: GOAL_CONTEXT_CUSTOM_TYPE,

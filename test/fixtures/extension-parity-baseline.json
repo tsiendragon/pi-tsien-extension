@@ -840,7 +840,7 @@
         [
           "registerTool",
           [
-            "{description:\"Pause the active goal only when …\",execute:fn,label:\"Pause Goal\",name:\"pause_goal\",parameters:{additionalProperties:false,properties:{reason:{2}},required:[\"reason\"],type:\"object\"},promptSnippet:\"Use pause_goal with a concrete r…\",renderCall:fn,renderResult:fn}"
+            "{description:\"Pause the active goal only when …\",execute:fn,label:\"Pause Goal\",name:\"pause_goal\",parameters:{additionalProperties:false,properties:{reason:{2}},required:[\"reason\"],type:\"object\"},promptSnippet:\"Use pause_goal only when the use…\",renderCall:fn,renderResult:fn}"
           ]
         ],
         [

@@ -138,6 +138,9 @@ export function renderGoalContext(goal: GoalState): string {
 		"- Work toward the goal unless the user asks for something else.",
 		"- If the goal is complete, call complete_goal with evidence.",
 		"- Do not change objective, source docs, or acceptance criteria without explicit user confirmation.",
+		"- If progress is blocked by missing permissions, external data, or a pending user decision: record a structured blocker, keep the goal active, and continue other actionable work.",
+		"- On each continuation, re-check open blockers first and record a blocker attempt whenever you retry; if nothing can move, report one concise status and wait for the next continuation without inventing progress.",
+		"- Call pause_goal only when the user asked to stop the goal or continuing would be unsafe; never pause the goal for external waits.",
 		"</goal_context>",
 	]
 		.filter((line): line is string => line !== undefined)

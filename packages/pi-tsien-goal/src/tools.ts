@@ -285,8 +285,9 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "pause_goal",
 		label: "Pause Goal",
 		description:
-			"Pause the active goal only when a concrete problem prevents safe progress. Include the reason so the user can resolve it before resuming.",
-		promptSnippet: "Use pause_goal with a concrete reason when a problem prevents safe progress on the active goal.",
+			"Pause the active goal only when the user asked to stop it or continuing would be unsafe. For missing permissions, external data, or pending user decisions, record a structured blocker and keep the goal active so continuation keeps re-checking; include a concrete reason when pausing.",
+		promptSnippet:
+			"Use pause_goal only when the user asked to stop the goal or continuing is unsafe; for external waits, record blockers and keep the goal active.",
 		parameters: pauseGoalParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executePauseGoal(params as PauseGoalToolInput, ctx as GoalToolContext, pi);
