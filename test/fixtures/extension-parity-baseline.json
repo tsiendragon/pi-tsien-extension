@@ -10,13 +10,15 @@
       "status": "ok",
       "tools": [
         "WebFetch",
-        "WebSearch"
+        "WebSearch",
+        "arxiv_search",
+        "openreview_search"
       ],
       "commands": [],
       "handlers": {
         "session_start": 1
       },
-      "callCount": 3,
+      "callCount": 5,
       "calls": [
         [
           "on",
@@ -35,6 +37,18 @@
           "registerTool",
           [
             "{description:\"Fetch a web page and extract its…\",execute:fn,label:\"Web Fetch\",name:\"WebFetch\",parameters:{properties:{prompt:{2},url:{2}},required:[\"url\"],type:\"object\"}}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Search arXiv through its officia…\",execute:fn,label:\"arXiv Search\",name:\"arxiv_search\",parameters:{properties:{category:{2},limit:{2},query:{2},sort:{2}},required:[\"query\"],type:\"object\"}}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Search OpenReview (conference su…\",execute:fn,label:\"OpenReview Search\",name:\"openreview_search\",parameters:{properties:{limit:{2},query:{2}},required:[\"query\"],type:\"object\"}}"
           ]
         ]
       ]
@@ -788,6 +802,7 @@
         "get_goal",
         "pause_goal",
         "propose_goal_draft",
+        "update_goal",
         "update_goal_graph",
         "update_goal_progress"
       ],
@@ -804,7 +819,7 @@
         "session_start": 1,
         "session_tree": 1
       },
-      "callCount": 18,
+      "callCount": 19,
       "calls": [
         [
           "registerCommand",
@@ -828,7 +843,13 @@
         [
           "registerTool",
           [
-            "{description:\"Open a structured /goal draft fo…\",execute:fn,label:\"Propose Goal Draft\",name:\"propose_goal_draft\",parameters:{additionalProperties:false,properties:{acceptanceCriteria:{4},commandId:{2},description:{2},draftId:{2},objective:{2},sourcePaths:{3},startImmediately:{2}},required:[\"objective\",\"acceptanceCriteria\"],type:\"object\"},promptSnippet:\"Use propose_goal_draft to draft …\",renderCall:fn,renderResult:fn}"
+            "{description:\"Open a structured /goal draft fo…\",execute:fn,label:\"Propose Goal Draft\",name:\"propose_goal_draft\",parameters:{additionalProperties:false,properties:{acceptanceCriteria:{4},autoApprove:{2},commandId:{2},description:{2},draftId:{2},objective:{2},sourcePaths:{3},startImmediately:{2}},required:[\"objective\",\"acceptanceCriteria\"],type:\"object\"},promptSnippet:\"Use propose_goal_draft to draft …\",renderCall:fn,renderResult:fn}"
+          ]
+        ],
+        [
+          "registerTool",
+          [
+            "{description:\"Update the active goal's objecti…\",execute:fn,label:\"Update Goal\",name:\"update_goal\",parameters:{additionalProperties:false,properties:{acceptance_criteria:{3},constraints:{3},objective:{2},reason:{2},source_paths:{3}},required:[\"reason\"],type:\"object\"},promptSnippet:\"Use update_goal to keep the obje…\",renderCall:fn,renderResult:fn}"
           ]
         ],
         [
