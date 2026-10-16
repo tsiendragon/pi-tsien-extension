@@ -35,6 +35,18 @@ export function subscribeLiveFeatures(listener: Listener): () => void {
   return () => current.listeners.delete(listener);
 }
 
+/**
+ * The latest snapshot of every feature this process published.
+ *
+ * Feature snapshots are not part of the live-session snapshot, so the bridge
+ * re-announces them from here after each snapshot — the dashboard rebuilds its
+ * timeline from a snapshot and would otherwise drop the panel state on every
+ * connect/resync.
+ */
+export function liveFeatureSnapshots(): Array<[LiveFeatureName, unknown]> {
+  return [...store().snapshots.entries()];
+}
+
 export function registerLiveFeatureCommandHandler(feature: LiveFeatureName, handler: CommandHandler): () => void {
   const current = store();
   current.commandHandlers.set(feature, handler);
