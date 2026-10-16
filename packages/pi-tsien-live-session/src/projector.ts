@@ -13,6 +13,18 @@ import {
   encodedBytes,
 } from "./protocol.ts";
 
+/**
+ * `custom` entries the dashboard renders structurally instead of as transcript text.
+ *
+ * Only the goal state needs this: the dashboard's 目标 panel reads `goal-state` from
+ * the session entries. Everything else stays private — the transcript only ever shows
+ * real messages and `display: true` custom messages.
+ */
+const PROJECTED_CUSTOM_TYPES = new Set(["goal-state"]);
+
+/** Subset of the projected types that must survive snapshot trimming. */
+const PINNED_CUSTOM_TYPES = PROJECTED_CUSTOM_TYPES;
+
 const REDACTED = "[redacted]";
 const SENSITIVE_KEY = /(^|_)(api[_-]?key|authorization|credential|env|environment|password|secret|token)($|_)/i;
 const DEFAULT_STRING_LIMIT_BYTES = 512 * 1024;
@@ -103,6 +115,23 @@ function projectedEntry(entry: unknown): ProjectedSessionEntry | undefined {
     return output as ProjectedSessionEntry;
   }
 
+  if (source.type === "custom" && typeof source.customType === "string" && PROJECTED_CUSTOM_TYPES.has(source.customType)) {
+    // Only the state itself travels: `event`/`reason` are bookkeeping the dashboard
+    // never reads, and dropping them keeps the snapshot small.
+    const state = record(record(source.data)?.state);
+    if (!state) return undefined;
+    const projected = sanitizeJson({ state }, DEFAULT_STRING_LIMIT_BYTES);
+    const output: Record<string, JsonValue> = {
+      type: "custom",
+      customType: source.customType,
+      data: projected.value,
+    };
+    if (typeof source.id === "string") output.id = source.id;
+    if (typeof source.timestamp === "string") output.timestamp = source.timestamp;
+    if (projected.truncated) output.truncated = true;
+    return output as ProjectedSessionEntry;
+  }
+
   if (source.type === "custom_message" && source.display === true) {
     const projected = sanitizeJson({
       customType: source.customType,
@@ -123,11 +152,31 @@ function projectedEntry(entry: unknown): ProjectedSessionEntry | undefined {
   return undefined;
 }
 
+function isPinnedEntry(entry: ProjectedSessionEntry): boolean {
+  const customType = entry.customType;
+  return entry.type === "custom" && typeof customType === "string" && PINNED_CUSTOM_TYPES.has(customType);
+}
+
 export function projectBranchEntries(entries: readonly unknown[], entryLimit: number): ProjectedSessionEntry[] {
   const projected = entries
     .map(projectedEntry)
     .filter((entry): entry is ProjectedSessionEntry => entry !== undefined);
-  return projected.slice(-Math.max(0, entryLimit));
+  const window = projected.slice(-Math.max(0, entryLimit));
+
+  // Pinned state (the goal) is written the moment it is created — near the start of the
+  // session — while snapshots only carry the tail. Without this the dashboard's 目标
+  // panel would stay empty for every session longer than the entry window. The latest
+  // pinned entry rides at the end, which reads as "current state, as of now".
+  let latestPinned: ProjectedSessionEntry | undefined;
+  for (const entry of projected) {
+    if (isPinnedEntry(entry)) latestPinned = entry;
+  }
+  if (latestPinned && !window.includes(latestPinned)) {
+    // `pinned` tells consumers this copy is state carried past the window, not a fresh
+    // phase in the conversation: it may update the checklist but must not start an activity.
+    window.push({ ...latestPinned, pinned: true });
+  }
+  return window;
 }
 
 export interface SnapshotProjectorOptions {

@@ -9,6 +9,7 @@ import {
   MAX_EVENT_BYTES,
   MAX_SNAPSHOT_BYTES,
   REQUEST_CACHE_SIZE,
+  commandEnvelopeIdentity,
   encodedBytes,
   failure,
   parseBrokerMessage,
@@ -41,6 +42,18 @@ export interface LiveSessionClientOptions {
   readonly getSnapshot: () => SnapshotMessage;
   readonly executeCommand: (envelope: CommandEnvelope) => Promise<CommandExecutionResult>;
   readonly onConnected?: () => void;
+  /**
+   * Ran right after a snapshot went out.
+   *
+   * Snapshots transport session entries only, while feature panels (BTW,
+   * background commands, scheduler, subagent workbench) travel as separate
+   * `live_feature_snapshot` events. The dashboard drops every event older than
+   * the last snapshot's sequence and rebuilds its timeline from that snapshot,
+   * so state published before a snapshot is lost. Re-announcing the current
+   * feature state here is what keeps those panels correct after a connect or
+   * resync.
+   */
+  readonly afterSnapshot?: () => void;
   readonly onDisconnected?: () => void;
 }
 
@@ -101,6 +114,7 @@ export class LiveSessionClient {
       return;
     }
     this.sendMessage(snapshot);
+    this.options.afterSnapshot?.();
   }
 
   stop(reason = "session_shutdown"): void {
@@ -187,6 +201,14 @@ export class LiveSessionClient {
     }
     const message = parseBrokerMessage(parsed);
     if (!message) {
+      // A command envelope with an unsupported inner command is answered with a
+      // normal error result. Dropping the socket for it used to wipe every
+      // feature panel on the dashboard and blanked the BTW side chat mid-use.
+      const envelope = commandEnvelopeIdentity(parsed);
+      if (envelope && envelope.processInstanceId === this.options.processInstanceId) {
+        this.sendMessage(failure(envelope.requestId, "unsupported_command", "this command is not supported by the installed live-session extension"));
+        return;
+      }
       this.socket?.destroy(new Error("Invalid Live Session broker message"));
       return;
     }

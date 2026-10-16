@@ -65,6 +65,23 @@ export interface LiveSessionSummary {
     }[];
   };
   /**
+   * The compaction running right now, or absent when none is.
+   *
+   * Extensions never see pi's `compaction_start` / `compaction_end`; the only
+   * honest signal is the `session_before_compact` → `session_compact` /
+   * `session_compact_failed` pair, and `ctx.isIdle()` is false for the whole
+   * run (indistinguishable from a busy turn). Additive: an old dashboard simply
+   * ignores it, and `compacting: null` in a patch clears it.
+   */
+  readonly compacting?: {
+    /** When the compaction started (epoch ms). */
+    readonly since: number;
+    /** What triggered it: /compact, the context threshold, or overflow recovery. */
+    readonly reason: "manual" | "threshold" | "overflow";
+    /** True when the aborted turn is retried after this compaction. */
+    readonly willRetry: boolean;
+  };
+  /**
    * Additive, optional capability list. Absent = older bridge. Adding values is
    * backward compatible in both directions and does NOT change
    * `LIVE_SESSION_PROTOCOL_VERSION` (an old dashboard ignores unknown fields).
@@ -72,6 +89,9 @@ export interface LiveSessionSummary {
    * extension commands, so the dashboard may drive session-tree writes. Without
    * it the dashboard must NOT send those commands: pi falls back to submitting
    * an unrecognized `/command` text as a normal model prompt.
+   * `session_shutdown` = this bridge accepts a dedicated `ctx.shutdown()` command;
+   * shutdown must never be simulated through prompt input.
+   * `context_view` = this bridge answers the read-only `get_context` command.
    */
   readonly capabilities?: readonly string[];
 }
@@ -113,6 +133,12 @@ export interface LiveSessionSummaryPatch {
   readonly status?: LiveSessionStatus;
   readonly contextUsage?: LiveSessionSummary["contextUsage"];
   readonly compact?: LiveSessionSummary["compact"];
+  /**
+   * Running compaction, or `null` when the one that was running ended.
+   * Absent = unchanged — never “cleared”, so a partial patch cannot hide a
+   * compaction that is still holding the input queue.
+   */
+  readonly compacting?: LiveSessionSummary["compacting"] | null;
 }
 
 export type LiveSessionInputChannel = "web" | "terminal" | "chatapp" | "mobile";
@@ -138,14 +164,17 @@ export type LiveSessionCommand =
   | { readonly type: "abort"; readonly leaseId: string }
   | { readonly type: "set_session_name"; readonly name: string }
   | { readonly type: "get_models" }
+  /** Read-only: what this session sends to the model (see `context-view.ts`). */
+  | { readonly type: "get_context" }
   | { readonly type: "set_model"; readonly provider: string; readonly modelId: string }
   | { readonly type: "compact"; readonly leaseId: string }
   | { readonly type: "reload" }
+  | { readonly type: "shutdown" }
   | {
       readonly type: "feature_command";
       readonly leaseId: string;
       readonly feature: "btw";
-      readonly command: { readonly type: "open" | "close" };
+      readonly command: { readonly type: "open" | "close" } | { readonly type: "abort" | "refresh-parent" } | { readonly type: "submit"; readonly text: string };
     }
   | {
       readonly type: "feature_command";
@@ -304,6 +333,8 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
 
   if (value.type === "get_models" && hasOnlyKeys(value, ["type"])) return { type: "get_models" };
 
+  if (value.type === "get_context" && hasOnlyKeys(value, ["type"])) return { type: "get_context" };
+
   if (value.type === "set_model" && hasOnlyKeys(value, ["type", "provider", "modelId"])) {
     if (!isBoundedString(value.provider, 512) || !isBoundedString(value.modelId, 1024)) return undefined;
     return { type: "set_model", provider: value.provider, modelId: value.modelId };
@@ -316,15 +347,35 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
 
   if (value.type === "reload" && hasOnlyKeys(value, ["type"])) return { type: "reload" };
 
+  if (value.type === "shutdown" && hasOnlyKeys(value, ["type"])) return { type: "shutdown" };
+
   if (value.type === "feature_command"
     && hasOnlyKeys(value, ["type", "leaseId", "feature", "command"])) {
     if (!isBoundedString(value.leaseId, 256) || !isRecord(value.command)) return undefined;
     // The broker validates the same whitelist; both copies must accept a feature
     // before the command can reach this process (a mismatch closes the connection).
     if (value.feature === "btw") {
-      if (!hasOnlyKeys(value.command, ["type"])
-        || (value.command.type !== "open" && value.command.type !== "close")) return undefined;
-      return { type: "feature_command", leaseId: value.leaseId, feature: "btw", command: { type: value.command.type } };
+      // The dashboard's BTW panel drives the side chat over this channel: open,
+      // close, submit (carrying the question), abort and refresh-parent — the
+      // exact set `BtwDashboardAdapter.dispatch` accepts. This list has to stay
+      // identical to pi-dashboard's `backend/live-sessions/protocol.ts` and
+      // `backend/routes/integrations.ts`.
+      if (value.command.type === "submit") {
+        if (!hasOnlyKeys(value.command, ["type", "text"])
+          || !isBoundedString(value.command.text, MAX_PROMPT_BYTES)) return undefined;
+        return {
+          type: "feature_command",
+          leaseId: value.leaseId,
+          feature: "btw",
+          command: { type: "submit", text: value.command.text },
+        };
+      }
+      if (value.command.type === "open" || value.command.type === "close"
+        || value.command.type === "abort" || value.command.type === "refresh-parent") {
+        if (!hasOnlyKeys(value.command, ["type"])) return undefined;
+        return { type: "feature_command", leaseId: value.leaseId, feature: "btw", command: { type: value.command.type } };
+      }
+      return undefined;
     }
     if (value.feature === "background-commands") {
       if (!hasOnlyKeys(value.command, ["type", "toolCallId"])
@@ -371,6 +422,23 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The identity of a broker `command` envelope, even when its inner command is
+ * not supported by this build.
+ *
+ * A command this extension does not understand must NOT be treated as a
+ * malformed message: destroying the live-session socket for it also throws away
+ * every feature snapshot the dashboard is holding and forces a full resync, so
+ * one unknown command silently disabled whole dashboard panels. The client now
+ * answers such an envelope with a normal `command_result` error instead.
+ */
+export function commandEnvelopeIdentity(value: unknown): { requestId: string; processInstanceId: string } | undefined {
+  if (!isRecord(value) || value.type !== "command") return undefined;
+  if (!hasOnlyKeys(value, ["type", "requestId", "processInstanceId", "command"])) return undefined;
+  if (!isBoundedString(value.requestId, 256) || !isBoundedString(value.processInstanceId, 256)) return undefined;
+  return { requestId: value.requestId, processInstanceId: value.processInstanceId };
 }
 
 export function parseBrokerMessage(value: unknown): BrokerToExtensionMessage | undefined {

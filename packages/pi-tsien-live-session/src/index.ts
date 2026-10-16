@@ -3,16 +3,20 @@ import { existsSync } from "node:fs";
 import { Type } from "typebox";
 import {
   SettingsManager,
+  convertToLlm,
+  sessionEntryToContextMessages,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
   type InputEvent,
 } from "@earendil-works/pi-coding-agent";
 import { autoCompactTargetConfig, resolveCompactionTrigger } from "pi-tsien-shared/src/auto-compact-target/core.ts";
+import { GOAL_STATE_CHANGED_EVENT } from "pi-tsien-shared/src/lib/goal-events.ts";
 import { LiveSessionClient, type LiveSessionClientOptions } from "./client.ts";
 import { LeaseError, LeaseManager, type LeaseSnapshot } from "./lease.ts";
 import { SnapshotProjector } from "./projector.ts";
-import { dispatchLiveFeatureCommand, subscribeLiveFeatures } from "pi-tsien-shared/src/lib/live-observer.ts";
+import { buildContextView, contextViewJson, CONTEXT_TOTAL_TEXT_BUDGET, type ContextView, type ContextViewInput } from "./context-view.ts";
+import { dispatchLiveFeatureCommand, liveFeatureSnapshots, subscribeLiveFeatures } from "pi-tsien-shared/src/lib/live-observer.ts";
 import {
   LIVE_SESSION_PROTOCOL_VERSION,
   type CommandEnvelope,
@@ -33,6 +37,12 @@ const PROCESS_IDENTITY_SYMBOL = Symbol.for("pi.live-session.process-identity.v1"
  */
 export const DEFAULT_STATUS_HEARTBEAT_MS = 20_000;
 const LIVE_FEATURE_PUBLISH_INTERVAL_MS = 250;
+
+/**
+ * Goal updates arrive in bursts (one turn can save progress, the work graph and a
+ * pause back-to-back). Coalesce them into a single snapshot push.
+ */
+const GOAL_SNAPSHOT_DEBOUNCE_MS = 500;
 
 /**
  * Live Session is only meaningful for the interactive TUI and the rpc bridge.
@@ -57,6 +67,22 @@ type QueuedInput = {
   images?: InputEvent["images"];
   deliverAs?: "steer" | "followUp";
   expandPromptTemplates: boolean;
+};
+
+/**
+ * The compaction pi is running right now, as far as extensions can tell.
+ *
+ * `session_before_compact` fires after pi installed its compaction abort
+ * controller — the exact moment `session.prompt()` starts rejecting with
+ * “Cannot submit a prompt while compaction is in progress” — and the matching
+ * `session_compact` / `session_compact_failed` fires when the run is over.
+ * pi's own `compaction_start` / `compaction_end` are internal session-bus events
+ * that never reach extensions, so this pair is the honest signal.
+ */
+type CompactionActivity = {
+  reason: "manual" | "threshold" | "overflow";
+  since: number;
+  willRetry: boolean;
 };
 
 /**
@@ -205,6 +231,13 @@ export function registerLiveSessionExtension(
    * request exists. Keeping the last payload lets `resync` replay it.
    */
   const pendingUi = new Map<string, JsonObject>();
+  /**
+   * The payload of the latest provider request in this session, as seen at
+   * `before_provider_request`. Held by reference (no copy) and only read when the
+   * dashboard asks for the context view; cleared on session switch so a view never
+   * mixes two sessions.
+   */
+  let lastProviderRequest: { payload: unknown; capturedAt: number; model?: { provider: string; id: string } } | undefined;
   const inputQueue: QueuedInput[] = [];
   /**
    * A tree action outcome waiting for a connected client.
@@ -217,7 +250,29 @@ export function registerLiveSessionExtension(
    */
   let pendingTreeAction: TreeActionOutcome | undefined;
   let activeInput: QueuedInput | undefined;
+  /** Set between `session_before_compact` and its matching end event. */
+  let compaction: CompactionActivity | undefined;
   let lastActivityAt = identity.startedAt;
+
+  /**
+   * Goal-state changes are session entries, but snapshots are only rebuilt at
+   * connect/resync — so a goal created mid-session used to stay invisible on the
+   * dashboard until the next reconnect. pi-tsien-goal emits an event after every
+   * save; debounce the bursts and push one fresh snapshot so the goal panel tracks it.
+   */
+  let goalStateCleanup: (() => void) | undefined;
+  let goalSnapshotTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleGoalSnapshotRefresh = (): void => {
+    if (goalSnapshotTimer) return;
+    goalSnapshotTimer = setTimeout(() => {
+      goalSnapshotTimer = undefined;
+      if (!client || !projector) return;
+      // The broker ignores a snapshot whose revision is not newer.
+      projector.markChanged();
+      client.sendSnapshot();
+    }, GOAL_SNAPSHOT_DEBOUNCE_MS);
+    goalSnapshotTimer.unref?.();
+  };
 
   const clientIsReady = (): boolean => {
     const current = client;
@@ -285,6 +340,9 @@ export function registerLiveSessionExtension(
   const startStatusHeartbeat = (): void => {
     stopStatusHeartbeat();
     statusHeartbeat = setInterval(() => {
+      // A lost compaction-end event must not leave the dashboard marked as
+      // compacting forever when no new input arrives to wake the queue drain.
+      if (compaction && !compactionBlocksInput()) drainInputQueue();
       if (!clientIsReady()) return;
       publishStatusPatch();
     }, STATUS_HEARTBEAT_MS);
@@ -348,8 +406,48 @@ export function registerLiveSessionExtension(
     publish("summary_update", { ...(telemetry ?? {}), status }, ctx);
   };
 
+  /**
+   * Push the compaction marker, and with it the fresh context usage once the
+   * compaction is over.
+   *
+   * Without this the dashboard cannot tell a compaction from a running turn —
+   * pi keeps `ctx.isIdle()` false for the whole run — so it showed “工作中” while
+   * the summarization model was busy, and a prompt sent in that window was
+   * rejected by pi and silently lost. `compacting: null` clears the marker.
+   */
+  const publishCompactionState = (ctx: ExtensionContext): void => {
+    const status = statusNow();
+    publishedStatus = status;
+    const telemetry = compaction ? undefined : contextTelemetry(ctx);
+    publish("summary_update", {
+      ...(telemetry ?? {}),
+      compacting: compaction ? { ...compaction } : null,
+      status,
+    }, ctx);
+  };
+
+  /**
+   * Whether pi would reject a prompt right now because a compaction is running.
+   *
+   * Self-healing: pi keeps `isIdle()` false for the whole compaction, so a marker
+   * still set at an idle session is one whose end event was lost (a session
+   * switch that skipped cleanup, a dropped `session_compact_failed`); clear it and
+   * tell the dashboard instead of wedging the input queue forever.
+   */
+  const compactionBlocksInput = (): boolean => {
+    if (!compaction) return false;
+    if (!currentContext || !currentContext.isIdle()) return true;
+    compaction = undefined;
+    publishCompactionState(currentContext);
+    return false;
+  };
+
   const drainInputQueue = (): void => {
     if (activeInput || !currentContext) return;
+    // A prompt sent while pi compacts is rejected and the rejection is swallowed
+    // by the runtime (`sendUserMessage` returns void), so the message would be
+    // lost without a trace. Hold the queue until the compaction ends.
+    if (compactionBlocksInput()) return;
     const next = inputQueue.shift();
     if (!next) return;
     activeInput = next;
@@ -381,6 +479,31 @@ export function registerLiveSessionExtension(
   const clearInputQueue = (): void => {
     inputQueue.length = 0;
     activeInput = undefined;
+    // A switch/fork abandons whatever pi was compacting; a stale marker would
+    // hold every later input hostage.
+    compaction = undefined;
+  };
+
+  /**
+   * Close a compaction and release the inputs it held.
+   *
+   * The `session_compact` / `session_compact_failed` handlers run while pi is
+   * still inside its `compact()` call — the abort controller that rejects prompts
+   * is cleared one synchronous step later, and `compaction_end` never reaches
+   * extensions. So both the state clear and the drain hop to a macrotask, which
+   * lands after pi's own continuation (and after `agent.continue()` for a
+   * retrying compaction, so a queued prompt cannot race that resume).
+   */
+  const finishCompaction = (ctx: ExtensionContext): void => {
+    const timer = setTimeout(() => {
+      if (currentContext !== ctx) return;
+      if (compaction) {
+        compaction = undefined;
+        publishCompactionState(ctx);
+      }
+      drainInputQueue();
+    }, 0);
+    timer.unref?.();
   };
 
   const clearFeaturePublishQueue = (): void => {
@@ -415,6 +538,25 @@ export function registerLiveSessionExtension(
     featurePublishTimer.unref?.();
   };
 
+  /**
+   * Re-announce the feature state that a snapshot does not carry.
+   *
+   * Runs right after every snapshot (`LiveSessionClientOptions.afterSnapshot`),
+   * for the same reason the first queued snapshot flush waits for a connection:
+   * the dashboard drops events older than the snapshot's sequence and rebuilds
+   * its timeline from the snapshot. Feature panels (BTW included) are events,
+   * so without this handshake a connect/resync sent the BTW panel back to
+   * “未打开” even while the side chat was open — and the next “打开 BTW” click
+   * looked like it did nothing, because the adapter was already open.
+   */
+  const republishLiveFeatures = (): void => {
+    if (!projector || !clientIsReady()) return;
+    for (const [feature, snapshot] of liveFeatureSnapshots()) {
+      if (snapshot === undefined) continue;
+      client?.publish(projector.createEvent("live_feature_snapshot", { feature, snapshot }));
+    }
+  };
+
   const lease = new LeaseManager({
     onChange: (snapshot, reason) => {
       projector?.markChanged();
@@ -426,6 +568,8 @@ export function registerLiveSessionExtension(
    * Capabilities this bridge advertises to the dashboard (see
    * `LiveSessionSummary.capabilities`). Additive: no protocol version bump.
    *
+   * - `session_shutdown`: this TUI bridge accepts a dedicated `ctx.shutdown()` command;
+   *   the dashboard never simulates it through prompt input.
    * - `session_tree`: the `/ls-navigate` and `/ls-fork` commands below are registered.
    * - `session_clear`: this session really has a working “start a new session”
    *   command. The dashboard's 「清空」 rides the plain input channel as `/clear`,
@@ -436,8 +580,9 @@ export function registerLiveSessionExtension(
    *   is exactly the kind of silent lie this flag exists to prevent. `getCommands()`
    *   reads the live command registry, so the claim is checked, not assumed.
    */
-  const liveSessionCapabilities = (): readonly string[] => {
-    const capabilities: string[] = ["session_tree"];
+  const liveSessionCapabilities = (ctx: ExtensionContext): readonly string[] => {
+    const capabilities: string[] = ["session_tree", "context_view"];
+    if (ctx.mode === "tui" && typeof ctx.shutdown === "function") capabilities.push("session_shutdown");
     try {
       if (pi.getCommands().some((command) => command.name === "clear")) capabilities.push("session_clear");
     } catch {
@@ -472,7 +617,7 @@ export function registerLiveSessionExtension(
         : { state: "unclaimed" },
       startedAt: identity.startedAt,
       lastActivityAt,
-      capabilities: liveSessionCapabilities(),
+      capabilities: liveSessionCapabilities(ctx),
       ...(usage
         ? {
             contextUsage: {
@@ -487,6 +632,7 @@ export function registerLiveSessionExtension(
         const compact = telemetry?.compact as LiveSessionSummaryBase["compact"] | undefined;
         return compact ? { compact } : {};
       })(),
+      ...(compaction ? { compacting: { ...compaction } } : {}),
     };
   };
 
@@ -506,6 +652,61 @@ export function registerLiveSessionExtension(
     },
   });
 
+  /**
+   * The pi-format payload pi would send next, for when no real request has been
+   * captured yet. Extension `context` transforms and per-turn system prompt changes
+   * are not applied — the view says so (`source: "reconstructed"`).
+   */
+  const reconstructPayload = (ctx: ExtensionContext): unknown => {
+    let systemPrompt = "";
+    try { systemPrompt = ctx.getSystemPrompt(); } catch {
+      // Older pi without `getSystemPrompt()`: the view degrades to messages + tools.
+    }
+    let messages: unknown[] = [];
+    try {
+      const entries = ctx.sessionManager.buildContextEntries();
+      messages = convertToLlm(entries.flatMap(entry => sessionEntryToContextMessages(entry)));
+    } catch {
+      // Older pi without these helpers: show the system prompt and tools only.
+    }
+    let tools: unknown[] = [];
+    try {
+      const active = new Set(pi.getActiveTools());
+      tools = pi.getAllTools().filter(tool => active.has(tool.name)).map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }));
+    } catch {
+      // Tool registry unavailable (runtime already replaced): leave the section empty.
+    }
+    return { systemPrompt, tools, messages };
+  };
+
+  /**
+   * Build the context view and keep the command result well inside the broker's
+   * 8 MiB frame limit (an oversized result would drop the live connection): each
+   * retry shrinks the text budget until the serialized view fits.
+   */
+  const contextView = (ctx: ExtensionContext): ContextView => {
+    const captured = lastProviderRequest;
+    const usage = ctx.getContextUsage();
+    const base = captured
+      ? { source: "provider_request" as const, payload: captured.payload, capturedAt: captured.capturedAt, ...(captured.model ? { model: captured.model } : {}) }
+      : { source: "reconstructed" as const, payload: reconstructPayload(ctx), format: "pi", ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}) };
+    const common: ContextViewInput = {
+      ...base,
+      ...(usage ? { contextUsage: { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } } : {}),
+    };
+    const limit = 6 * 1024 * 1024;
+    let view = buildContextView(common);
+    for (const textBudget of [CONTEXT_TOTAL_TEXT_BUDGET / 4, 64 * 1024, 0]) {
+      if (Buffer.byteLength(JSON.stringify(view), "utf8") <= limit) break;
+      view = buildContextView({ ...common, textBudget });
+    }
+    return view;
+  };
+
   const executeCommand = async (envelope: CommandEnvelope): Promise<CommandExecutionResult> => {
     const ctx = currentContext;
     if (!ctx) return commandError("session_unavailable", "Session context is unavailable");
@@ -520,6 +721,13 @@ export function registerLiveSessionExtension(
       if (command.type === "release") {
         const released = lease.release(command.leaseId, "remote_release");
         return { ok: true, result: { released } };
+      }
+      if (command.type === "shutdown") {
+        if (ctx.mode !== "tui") return commandError("session_not_restartable", "Only TUI sessions can be shut down from the dashboard");
+        setTimeout(() => {
+          if (currentContext === ctx) ctx.shutdown();
+        }, 50);
+        return { ok: true, result: { shuttingDown: true } };
       }
       if (command.type === "input") {
         // 统一输入模型：与 TUI 逐字等价，命令/skill/template 统一展开。
@@ -563,6 +771,9 @@ export function registerLiveSessionExtension(
           thinkingLevels: Object.keys(model.thinkingLevelMap || {}),
         }));
         return { ok: true, result: { models } };
+      }
+      if (command.type === "get_context") {
+        return { ok: true, result: contextViewJson(contextView(ctx)) };
       }
       if (command.type === "set_model") {
         const model = ctx.modelRegistry.find(command.provider, command.modelId);
@@ -815,11 +1026,19 @@ export function registerLiveSessionExtension(
 
   pi.on("session_start", async (event, ctx) => {
     currentContext = ctx;
+    // A new/forked/switched session has not sent anything yet; the old payload
+    // belongs to another conversation.
+    lastProviderRequest = undefined;
     running = !ctx.isIdle();
     reconnecting = false;
     lastActivityAt = Date.now();
     if (!isLiveSessionActive(ctx)) return;
     const mode: LiveSessionMode = ctx.mode;
+
+    // Re-subscribe per session_start so a fork/switch cannot leave two listeners
+    // behind (pi also drops tracked bus subscriptions when the runtime reloads).
+    goalStateCleanup?.();
+    goalStateCleanup = pi.events.on(GOAL_STATE_CHANGED_EVENT, () => scheduleGoalSnapshotRefresh());
 
     const rebuildProjector = (): void => {
       projector = new SnapshotProjector({
@@ -879,6 +1098,7 @@ export function registerLiveSessionExtension(
         return projector.createSnapshot();
       },
       executeCommand,
+      afterSnapshot: republishLiveFeatures,
       onConnected: () => {
         reconnecting = false;
         // `onConnected` runs just BEFORE `sendSnapshot()`, so defer to a microtask
@@ -904,6 +1124,15 @@ export function registerLiveSessionExtension(
   });
 
   pi.on("session_info_changed", (event, ctx) => publish("session_info_changed", { name: event.name ?? null }, ctx));
+  // Observe only: returning undefined leaves the payload untouched for the provider.
+  pi.on("before_provider_request", (event, ctx) => {
+    lastProviderRequest = {
+      payload: event.payload,
+      capturedAt: Date.now(),
+      ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
+    };
+    return undefined;
+  });
   // Tree navigation (terminal `/tree`, or the web `/ls-navigate` above).
   // The snapshot only carries the ACTIVE branch, so without this subscription a
   // terminal-side branch switch would leave the web transcript showing the old
@@ -928,9 +1157,17 @@ export function registerLiveSessionExtension(
     publishContextTelemetry(ctx);
     publish("agent_settled", {}, ctx);
   });
+  // Compaction is the one busy state with no agent event of its own: mark it at
+  // the `session_before_compact` hook (already past pi's prompt guard) and hold
+  // every queued input until the matching end event lands.
+  pi.on("session_before_compact", (event, ctx) => {
+    compaction = { reason: event.reason, since: Date.now(), willRetry: event.willRetry };
+    publishCompactionState(ctx);
+  });
   // Compaction rewrites the context: publish immediately so the dashboard does
   // not keep showing the pre-compaction size until the next turn.
-  pi.on("session_compact", (_event, ctx) => publishContextTelemetry(ctx));
+  pi.on("session_compact", (_event, ctx) => finishCompaction(ctx));
+  pi.on("session_compact_failed", (_event, ctx) => finishCompaction(ctx));
   pi.on("turn_start", (event, ctx) => publish("turn_start", event, ctx));
   pi.on("turn_end", (event, ctx) => publish("turn_end", event, ctx));
   pi.on("message_start", (event, ctx) => {
@@ -1061,9 +1298,18 @@ export function registerLiveSessionExtension(
     lease.dispose(event.reason === "quit" ? "session_shutdown" : "session_switch");
     featureCleanup?.();
     featureCleanup = undefined;
+    goalStateCleanup?.();
+    goalStateCleanup = undefined;
+    if (goalSnapshotTimer) {
+      clearTimeout(goalSnapshotTimer);
+      goalSnapshotTimer = undefined;
+    }
     clearFeaturePublishQueue();
     clearInputQueue();
     stopStatusHeartbeat();
+    // Drop the captured provider payload with the session it belongs to; nothing
+    // reads it after this, and a 1 MB payload should not outlive its conversation.
+    lastProviderRequest = undefined;
     client?.stop(event.reason === "quit" ? "session_shutdown" : "session_switch");
     client = undefined;
     projector = undefined;
