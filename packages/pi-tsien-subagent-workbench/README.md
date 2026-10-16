@@ -20,7 +20,16 @@
 
 ## 配置
 
-无
+- `PI_SUBAGENT_EXECUTION_MODEL`：精确的 `provider/model` 默认模型；未设置时使用 `azure-gateway/gpt-5.6-luna`。
+- 默认思考强度为 `medium`；任务模型覆盖工作流模型，只有显式 `inheritModel: true` 才继承父模型。
+
+## 局限
+
+- 模型名只接受精确 `provider/model`；本包没有模型注册表时不能验证远端是否可用，也不会自动 fallback。
+- 输入预算包含 task、context 和工作流输入，默认硬限 9 MiB；结果默认硬限 8 MiB，超限会明确失败，不截断关键输入或原始结果。
+- `read_only`、`research`、`code` 角色在工具事件入口拦截不允许的工具；底层 Pi 的扩展和项目规则仍会加载，不使用 `--no-extensions`。如果底层运行时已经执行了不可逆外部副作用，工作台不能撤销它。
+- `resultPreview` 只是有限预览，原始结果仍保存在工作台，可再次 collect；重复完成不会重复通知。对于背景命令或交接状态不明的外部清理，本包目前不提供自动判断，调用方必须自行确认后清理，不能把它当作已完成。
+- 一次性任务默认关闭子会话；只有显式 `retainSession` 才保留。当前实现不承诺跨进程恢复未持久化的实时流。
 
 ## 依赖
 

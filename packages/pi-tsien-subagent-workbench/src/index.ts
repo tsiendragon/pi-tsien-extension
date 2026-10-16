@@ -50,6 +50,7 @@ import {
   workflowRunPath,
 } from "./workflow-run-store.ts";
 import { compileWorkflowJavaScript } from "./workflow-javascript.ts";
+import { resultPreview } from "./runner-stage.ts";
 import type { SubagentTraceContext } from "./subagent-service.ts";
 import { parseTraceContext } from "pi-tsien-trajectory-recorder/src/index.ts";
 const WORKBENCH_API_VERSION = 1 as const;
@@ -158,6 +159,9 @@ const AgentToolParams = Type.Object({
         "Optional exact provider/model override. Short or fuzzy model names are rejected.",
     }),
   ),
+  inheritModel: Type.Optional(Type.Boolean()),
+  role: Type.Optional(Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")])),
+  retainSession: Type.Optional(Type.Boolean()),
   thinking: Type.Optional(ThinkingLevelParam),
   context: Type.Optional(
     Type.String({
@@ -781,7 +785,6 @@ function workflowRequestFromDefinition(
     label: definition.label,
     parameters: definition.parameters,
     cwd: ctx.cwd,
-    model: currentModel(ctx),
     thinking: currentThinking(ctx),
     signal,
     traceContext,
@@ -793,7 +796,7 @@ function workflowRequestFromDefinition(
         inputs: task.inputs,
         label: task.label,
         cwd: task.cwd || ctx.cwd,
-        model: task.model || currentModel(ctx),
+        model: task.model,
         thinking: task.thinking ?? currentThinking(ctx),
         context: task.context,
         outputSchema: task.outputSchema,
@@ -1082,7 +1085,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_start",
       label: "Subagent Workbench",
       description:
-        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Use a self-contained task and cwd; parallelize independent work. Use an exact provider/model override; omit model to inherit the current Session model. Never pass a fuzzy short name. Continue while it runs and collect only at a real dependency point; the main Agent retains authorization and final decisions.",
+        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Model precedence is task override, workflow model, then PI_SUBAGENT_EXECUTION_MODEL or azure-gateway/gpt-5.6-luna; inheritModel must be explicit. Thinking defaults to medium.",
       promptSnippet:
         "Delegate bounded independent work to a full-capability process subagent, normally in background.",
       executionMode: "parallel",
@@ -1101,8 +1104,11 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               task: params.task,
               label: params.label,
               cwd: params.cwd || ctx.cwd,
-              model: params.model || currentModel(ctx),
-              thinking: params.thinking ?? currentThinking(ctx),
+              model: params.model,
+              inheritModel: params.inheritModel,
+              role: params.role,
+              retainSession: params.retainSession,
+              thinking: params.thinking,
               context: params.context,
               traceContext: parentTraceContext(ctx, toolCallId),
               signal: background ? undefined : signal,
@@ -1146,6 +1152,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               runId: result.runId,
               model: result.model,
               usage: result.usage,
+              ...resultPreview(result.output),
             },
           };
         } catch (error) {
@@ -1166,7 +1173,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow",
       label: "Subagent Workflow",
       description:
-        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs. Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow. Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach. Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates. Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded. Use exact provider/model task overrides; omit model to inherit the current Session model. Never pass fuzzy short names. Use dryRun to preview dynamic or saved definitions without creating work. Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed. Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful. Prefer background; wait only when correctness or delivery depends on the result.",
+        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs. Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow. Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach. Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates. Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded. Use exact provider/model task overrides; omit model to use PI_SUBAGENT_EXECUTION_MODEL or azure-gateway/gpt-5.6-luna. Set inheritModel only when parent-model inheritance is intended; never pass fuzzy short names. Use dryRun to preview dynamic or saved definitions without creating work. Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed. Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful. Prefer background; wait only when correctness or delivery depends on the result.",
       promptSnippet:
         "Run recoverable single-task or staged subagent workflows with explicit prior-task handoffs.",
       executionMode: "parallel",
