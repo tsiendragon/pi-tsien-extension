@@ -160,6 +160,7 @@ export interface ProviderRunRequest {
   readonly cwd: string;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
+  readonly allowedTools?: readonly string[];
   readonly signal: AbortSignal;
   readonly emit: (event: ProviderEvent) => void;
 }
@@ -184,6 +185,7 @@ export interface StartAgentRequest {
   readonly cwd?: string;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
+  readonly allowedTools?: readonly string[];
   readonly parentId?: string;
   readonly workflowId?: string;
   readonly foreground?: boolean;
@@ -631,6 +633,7 @@ export class SubagentService {
         cwd,
         model: request.model,
         thinking: request.thinking,
+        allowedTools: request.allowedTools,
         signal: abort.signal,
         emit: (event) =>
           this.onProviderEvent(session, run, event, request.workflowId),

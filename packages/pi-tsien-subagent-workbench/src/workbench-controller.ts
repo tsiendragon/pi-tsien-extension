@@ -24,6 +24,13 @@ import {
   type SubagentTraceContext,
 } from "./subagent-service.ts";
 import {
+  assertExecutionBudget,
+  executionDefaultModel,
+  roleToolNames,
+  selectExecution,
+  type ExecutionRole,
+} from "./runner-stage.ts";
+import {
   evaluateWorkflowWhen,
   resolveWorkflowForeach,
   resolveWorkflowTemplate,
@@ -151,6 +158,11 @@ export interface WorkbenchAgentRequest {
   readonly cwd: string;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
+  readonly workflowModel?: string;
+  readonly inheritModel?: boolean;
+  readonly role?: ExecutionRole;
+  readonly workflowInputs?: readonly string[];
+  readonly retainSession?: boolean;
   readonly context?: string;
   readonly signal?: AbortSignal;
   readonly parentId?: string;
@@ -728,7 +740,16 @@ export class WorkbenchController {
 
   async runAgent(request: WorkbenchAgentRequest): Promise<AgentResult> {
     if (this.disposed) throw new Error("Workbench controller is disposed.");
-    assertCanonicalModelReference(request.model, "Agent model");
+    const selection = selectExecution({
+      taskModel: request.model,
+      workflowModel: request.workflowModel,
+      inheritModel: request.inheritModel,
+      parentModel: undefined,
+      taskThinking: request.thinking,
+      role: request.role,
+    });
+    assertCanonicalModelReference(selection.model, "Agent model");
+    assertExecutionBudget(request.task, request.context, request.workflowInputs);
     await this.ensureProviderCapacity(1);
     return this.service.start({
       task: request.task,
@@ -736,8 +757,9 @@ export class WorkbenchController {
       isolation: "process",
       foreground: request.foreground ?? true,
       cwd: request.cwd,
-      model: request.model,
-      thinking: request.thinking,
+      model: selection.model,
+      thinking: selection.thinking,
+      allowedTools: roleToolNames(selection.role),
       parentId: request.parentId,
       traceContext: request.traceContext,
       signal: request.signal
@@ -788,6 +810,12 @@ export class WorkbenchController {
           sessionId: result.sessionId,
           runId: result.runId,
         });
+        if (!request.retainSession) {
+          await this.provider.closeSession(
+            result.sessionId,
+            "One-shot subagent completed; retainSession was not requested.",
+          );
+        }
         this.settleJob(created.handle.workId, {
           status: result.isError ? "failed" : "completed",
           result,
@@ -1653,6 +1681,17 @@ export class WorkbenchController {
                   outputs,
                 );
                 try {
+                  const selection = selectExecution({
+                    taskModel: task.model,
+                    workflowModel: request.model,
+                    taskThinking: task.thinking,
+                    workflowThinking: request.thinking,
+                  });
+                  assertExecutionBudget(
+                    resolvedTask,
+                    explicitContext,
+                    task.inputs?.map((key) => outputs.get(key)?.summary ?? "") ?? [],
+                  );
                   const result = await this.service.start({
                     task: resolvedTask,
                     label: task.foreach
@@ -1661,8 +1700,9 @@ export class WorkbenchController {
                     isolation: "process",
                     foreground: false,
                     cwd: task.cwd || request.cwd,
-                    model: task.model || request.model,
-                    thinking: task.thinking ?? request.thinking,
+                    model: selection.model,
+                    thinking: selection.thinking,
+                    allowedTools: roleToolNames(selection.role),
                     parentId: task.foreach
                       ? `${taskResult.id}:iteration:${index + 1}`
                       : taskResult.id,

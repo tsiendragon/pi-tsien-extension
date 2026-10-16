@@ -1043,13 +1043,26 @@ export class PiRpcProcessProvider implements SubagentProvider {
             });
           }
         } else if (event.type === "tool_execution_start" && event.toolName) {
-          request.emit({
-            type: "tool-start",
-            toolCallId:
-              event.toolCallId ?? `${request.runId}:${event.toolName}`,
-            name: event.toolName,
-            args: event.args ?? {},
-          });
+          const toolCallId = event.toolCallId ?? `${request.runId}:${event.toolName}`;
+          if (request.allowedTools && !request.allowedTools.includes(event.toolName)) {
+            request.emit({
+              type: "tool-end",
+              toolCallId,
+              name: event.toolName,
+              output: {
+                content: [{ type: "text", text: `Tool ${event.toolName} is not allowed for this role.` }],
+              },
+              isError: true,
+            });
+            void session.client.abort().catch(() => undefined);
+          } else {
+            request.emit({
+              type: "tool-start",
+              toolCallId,
+              name: event.toolName,
+              args: event.args ?? {},
+            });
+          }
         } else if (event.type === "tool_execution_update" && event.toolName) {
           request.emit({
             type: "tool-update",
