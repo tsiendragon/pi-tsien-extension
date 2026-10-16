@@ -5,7 +5,6 @@ export const GOAL_CONTEXT_CUSTOM_TYPE = "goal-context";
 export const GOAL_CONTINUATION_PROMPT = "继续目标";
 
 export interface GoalDraftingPromptOptions {
-	start?: boolean;
 	replacingExistingGoal?: boolean;
 	currentGoal?: Pick<GoalState, "goalId" | "objective" | "status" | "acceptanceCriteria">;
 }
@@ -15,9 +14,9 @@ export function renderGoalAgentDraftingPrompt(
 	options: GoalDraftingPromptOptions = {},
 ): string {
 	return [
-		"You are drafting a user-reviewable /goal proposal from the user's plain request.",
+		"You are drafting an unattended /goal proposal from the user's plain request.",
 		"Do not answer in prose. Call the propose_goal_draft tool exactly once with the draft fields.",
-		"This is a proposal step only: propose_goal_draft opens user review and does not persist the goal by itself.",
+		"This drafting turn is unattended: pass autoApprove: true and startImmediately: true so propose_goal_draft saves the goal and starts work without any review dialog.",
 		"Do not call create_goal for this drafting flow; create_goal is only for already-approved, explicit persistence requests.",
 		"",
 		"Draft requirements:",
@@ -28,12 +27,11 @@ export function renderGoalAgentDraftingPrompt(
 		"- Acceptance criteria must be useful for completion review; avoid vague criteria and do not leave the draft criteria-free.",
 		"- If details are ambiguous, keep the ambiguity visible in the objective or criteria instead of inventing implementation scope.",
 		"- Include sourcePaths only for paths the user explicitly mentioned.",
-		"- Set startImmediately to true only if the user asked to start immediately or the command context says to start after review.",
 		"",
 		"Example boundary: if the user asks for a deep branch review, draft criteria for reviewing the branch, reporting findings, and noting risks/tests; do not expand into fixing issues unless the user asked for fixes.",
 		options.replacingExistingGoal
-			? "This request is replacing an existing goal; preserve the new user request and let the review flow confirm replacement."
-			: "This request is for a new draft unless the review flow later decides otherwise.",
+			? "This request is replacing an existing goal; the unattended save replaces it without another confirmation."
+			: "This request creates a new goal; the unattended save replaces a current goal when one exists.",
 		options.currentGoal
 			? "Current goal context (for replacement awareness only; do not merge unless the user requested it):"
 			: undefined,
@@ -43,9 +41,7 @@ export function renderGoalAgentDraftingPrompt(
 		options.currentGoal ? "Acceptance criteria:" : undefined,
 		...(options.currentGoal ? formatAcceptanceCriteriaXmlList(options.currentGoal.acceptanceCriteria) : []),
 		options.currentGoal ? "</current_goal>" : undefined,
-		options.start
-			? "Command context: user requested start after review; pass startImmediately: true."
-			: "Command context: user did not request immediate start; pass startImmediately: false or omit it.",
+		"Command context: unattended creation; pass autoApprove: true and startImmediately: true.",
 		"",
 		"User request:",
 		"<goal_request>",
@@ -137,7 +133,7 @@ export function renderGoalContext(goal: GoalState): string {
 		"Rules:",
 		"- Work toward the goal unless the user asks for something else.",
 		"- If the goal is complete, call complete_goal with evidence.",
-		"- Do not change objective, source docs, or acceptance criteria without explicit user confirmation.",
+		"- Keep the anchor accurate with update_goal when the work reveals detail the user already implied — wording refinements, acceptance criteria, constraints, source docs — always with a reason; never add or remove scope, deliverables, or boundaries without the user asking.",
 		"- If progress looks blocked, try the ladder before treating it as blocked: (1) a way around it that keeps evidence standards and stays within your authorization; (2) a self-service path you can act on yourself; (3) other work items or acceptance criteria that can advance now.",
 		"- Record a structured blocker only for what stays unresolved after those attempts, with evidence for each attempt; keep the goal active and continue other actionable work.",
 		"- On each continuation, re-check open blockers first and record a blocker attempt whenever you retry; if nothing can move, report one concise status and wait for the next continuation without inventing progress.",

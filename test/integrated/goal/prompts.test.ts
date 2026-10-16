@@ -41,17 +41,15 @@ function goal(overrides: Partial<GoalState> = {}): GoalState {
 }
 
 describe("goal prompt rendering", () => {
-	it("renders agent drafting prompt with propose_goal_draft tool-call instructions", () => {
-		const prompt = renderGoalAgentDraftingPrompt("Review the deep branch and flag risks, no fixes yet", {
-			start: true,
-		});
+	it("renders agent drafting prompt with unattended propose_goal_draft instructions", () => {
+		const prompt = renderGoalAgentDraftingPrompt("Review the deep branch and flag risks, no fixes yet");
 
 		expect(prompt).toContain("Call the propose_goal_draft tool exactly once");
 		expect(prompt).toContain("Do not answer in prose");
 		expect(prompt).toContain("Do not call create_goal for this drafting flow");
-		expect(prompt).toContain("Set startImmediately to true");
-		expect(prompt).toContain("pass startImmediately: true");
-		expect(prompt).not.toContain("Set start to true");
+		expect(prompt).toContain("This drafting turn is unattended");
+		expect(prompt).toContain("pass autoApprove: true and startImmediately: true");
+		expect(prompt).not.toContain("opens user review");
 		expect(prompt).toContain("Review the deep branch and flag risks, no fixes yet");
 	});
 
@@ -89,6 +87,14 @@ describe("goal prompt rendering", () => {
 		expect(context).toContain("Record a structured blocker only for what stays unresolved");
 		expect(context).toContain("re-check open blockers first");
 		expect(context).toContain("never pause the goal for external waits");
+	});
+
+	it("documents update_goal guardrails in the goal context rules", () => {
+		const context = renderGoalContext(goal());
+
+		expect(context).toContain("Keep the anchor accurate with update_goal");
+		expect(context).toContain("never add or remove scope");
+		expect(context).toContain("without the user asking");
 	});
 
 	it("creates hidden messages only for active goals", () => {

@@ -9,6 +9,7 @@
 - `get_goal`
 - `pause_goal`
 - `propose_goal_draft`
+- `update_goal`（原地改 objective / 验收标准 / 约束 / 来源文档，必带理由；不得改变用户的范围）
 - `update_goal_graph`
 - `update_goal_progress`
 

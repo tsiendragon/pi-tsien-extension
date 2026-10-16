@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GOAL_STATE_CHANGED_EVENT } from "pi-tsien-shared/src/lib/goal-events.ts";
 import {
 	createGoalStateSnapshot,
 	getCurrentGoal,
@@ -298,6 +299,38 @@ describe("goal state persistence helpers", () => {
 
 		expect(next).toEqual(created);
 		expect(appendEntry).not.toHaveBeenCalled();
+	});
+
+	it("emits a cross-extension event whenever it appends a goal-state entry", () => {
+		const appendEntry = vi.fn();
+		const emit = vi.fn();
+		const pi = { appendEntry, events: { emit } };
+
+		const created = saveGoalState(pi, createEvent(), null);
+		expect(emit).toHaveBeenLastCalledWith(GOAL_STATE_CHANGED_EVENT, {
+			goalId: "goal-1",
+			status: "active",
+			action: "create",
+		});
+
+		saveGoalState(pi, { action: "pause", goalId: "goal-1", now: baseTime + 1, reason: "waiting" }, created);
+		expect(emit).toHaveBeenLastCalledWith(GOAL_STATE_CHANGED_EVENT, {
+			goalId: "goal-1",
+			status: "paused",
+			action: "pause",
+		});
+	});
+
+	it("skips the event together with the entry for an empty progress update", () => {
+		const appendEntry = vi.fn();
+		const emit = vi.fn();
+		const pi = { appendEntry, events: { emit } };
+		const created = saveGoalState(pi, createEvent(), null);
+		emit.mockClear();
+
+		saveGoalState(pi, { action: "progress", goalId: "goal-1", now: baseTime + 1, progress: {} }, created);
+
+		expect(emit).not.toHaveBeenCalled();
 	});
 
 	it("reconstructs only from current branch goal-state custom entries", () => {

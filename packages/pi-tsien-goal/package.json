@@ -1,12 +1,15 @@
 {
   "name": "pi-tsien-goal",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Goal tracking: /goal state, acceptance criteria and progress.",
   "type": "module",
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
+  },
+  "dependencies": {
+    "pi-tsien-shared": "^0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.2 <1.0.0 || ^0.85.1-tsien.1"
