@@ -1,4 +1,5 @@
 import { initialWorkItems } from "./goal-graph.ts";
+import { GOAL_STATE_CHANGED_EVENT, type GoalStateChangedEvent } from "pi-tsien-shared/src/lib/goal-events.ts";
 import type {
 	GoalBlocker,
 	GoalBlockerAttempt,
@@ -30,6 +31,8 @@ interface GoalSessionContext {
 
 interface GoalAppendAPI {
 	appendEntry(customType: string, data?: unknown): unknown;
+	/** Optional so tests and read-only harnesses can keep passing a minimal stub. */
+	events?: { emit(channel: string, data: unknown): void };
 }
 
 export class GoalStateValidationError extends Error {
@@ -172,6 +175,14 @@ export function saveGoalState(
 	if (event.action === "progress" && !hasProgressUpdate(event.progress)) return cloneGoalState(current);
 	const entry = toGoalStateEntry(event, current);
 	pi.appendEntry(GOAL_CUSTOM_TYPE, entry);
+	// The live-session bridge listens for this and re-pushes its snapshot, so the
+	// dashboard's goal panel tracks changes without waiting for a reconnect.
+	const changed: GoalStateChangedEvent = {
+		goalId: event.goalId,
+		...(entry.state ? { status: entry.state.status } : {}),
+		action: event.action,
+	};
+	pi.events?.emit(GOAL_STATE_CHANGED_EVENT, changed);
 	return cloneGoalState(entry.state);
 }
 

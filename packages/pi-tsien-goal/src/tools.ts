@@ -63,6 +63,12 @@ export const proposeGoalDraftParams = Type.Object(
 		startImmediately: Type.Optional(
 			Type.Boolean({ description: "True when the draft should offer Start as the intended action." }),
 		),
+		autoApprove: Type.Optional(
+			Type.Boolean({
+				description:
+					"Unattended /goal command drafts only: save and start the goal without the review dialog. Set true only when the command context explicitly requests unattended creation.",
+			}),
+		),
 		draftId: Type.Optional(Type.String({ description: "Optional model-generated draft correlation id." })),
 		commandId: Type.Optional(Type.String({ description: "Optional /goal drafting command correlation id." })),
 	},
@@ -92,6 +98,33 @@ export const updateGoalProgressParams = Type.Object(
 		summary: Type.Optional(Type.String({ description: "Short progress summary." })),
 	},
 	{ additionalProperties: false, minProperties: 1 },
+);
+export const updateGoalParams = Type.Object(
+	{
+		objective: Type.Optional(
+			Type.String({
+				description:
+					"Refined objective text that keeps the user's meaning; omit to keep the current objective.",
+			}),
+		),
+		acceptance_criteria: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "Replacement acceptance criteria (non-empty); omit to keep the current list.",
+			}),
+		),
+		constraints: Type.Optional(
+			Type.Array(Type.String(), { description: "Replacement constraints list; omit to keep the current constraints." }),
+		),
+		source_paths: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "Replacement source document paths; omit to keep the current source docs.",
+			}),
+		),
+		reason: Type.String({
+			description: "Short reason this edit keeps the goal accurate; recorded as the audit reason.",
+		}),
+	},
+	{ additionalProperties: false },
 );
 const workItemSchema = Type.Object(
 	{
@@ -184,6 +217,7 @@ export type CompleteGoalToolInput = Static<typeof completeGoalParams>;
 export type PauseGoalToolInput = Static<typeof pauseGoalParams>;
 export type UpdateGoalProgressToolInput = Static<typeof updateGoalProgressParams>;
 export type UpdateGoalGraphToolInput = Static<typeof updateGoalGraphParams>;
+export type UpdateGoalToolInput = Static<typeof updateGoalParams>;
 
 interface GoalToolContext extends Partial<GoalWorkflowContext> {
 	sessionManager: { getBranch(): Array<{ type: string; customType?: string; data?: unknown }> };
@@ -244,7 +278,8 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "propose_goal_draft",
 		label: "Propose Goal Draft",
 		description:
-			"Open a structured /goal draft for user review. Saves only after the user chooses Start in the review UI. " +
+			"Open a structured /goal draft for user review. Saves only after the user chooses Start in the review UI, " +
+			"or saves and starts immediately when an unattended /goal command drafts it (autoApprove: true). " +
 			proposeGoalDraftPromptGuidelines.join(" "),
 		promptSnippet: proposeGoalDraftPromptSnippet,
 		parameters: proposeGoalDraftParams,
@@ -253,6 +288,25 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		},
 		renderCall: (args, theme) =>
 			new Text(formatProposeGoalDraftToolCall(args as ProposeGoalDraftToolInput, theme), 0, 0),
+		renderResult: (result, _options, theme) =>
+			new Text(formatGoalToolResult(result as GoalToolResult, theme), 0, 0),
+	});
+
+	pi.registerTool({
+		name: "update_goal",
+		label: "Update Goal",
+		description:
+			"Update the active goal's objective, acceptance criteria, constraints, or source docs in place, with a reason. " +
+			"Keep the user's meaning exactly: refine wording, or record detail the user already implied; never add or remove scope, deliverables, or boundaries without the user asking. " +
+			"Mirror significant acceptance-criteria changes into work items with update_goal_graph.",
+		promptSnippet:
+			"Use update_goal to keep the objective, acceptance criteria, constraints, or source docs accurate (with a reason) without changing the user's scope.",
+		parameters: updateGoalParams,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			return executeUpdateGoal(params as UpdateGoalToolInput, ctx as GoalToolContext, pi);
+		},
+		renderCall: (args, theme) =>
+			new Text(formatGoalToolCall("update_goal", (args as UpdateGoalToolInput | undefined)?.reason, theme), 0, 0),
 		renderResult: (result, _options, theme) =>
 			new Text(formatGoalToolResult(result as GoalToolResult, theme), 0, 0),
 	});
@@ -391,7 +445,11 @@ export async function executeProposeGoalDraft(
 	const normalized = normalizeGoalDraftParams(params);
 	if (!normalized.ok) throw goalToolError(normalized.message, normalized.code);
 
-	if (!ctx.hasUI || !ctx.ui?.select || !ctx.ui.editor) {
+	// Unattended /goal command drafts save and start without dialogs. The model
+	// only sets autoApprove when the command drafting prompt asked for it.
+	const autoApprove = params.autoApprove === true;
+
+	if (!autoApprove && (!ctx.hasUI || !ctx.ui?.select || !ctx.ui.editor)) {
 		return {
 			content: [
 				{
@@ -405,21 +463,29 @@ export async function executeProposeGoalDraft(
 	}
 
 	const current = loadGoalState(ctx);
-	const action = await confirmGoalReplacement(
-		ctx as GoalWorkflowContext,
-		current,
-		false,
-		normalized.proposal.objective,
-	);
-	if (!action) {
-		return {
-			content: [{ type: "text", text: "Goal draft cancelled. No goal was saved." }],
-			details: { status: "cancelled", reason: "replacement_not_confirmed", goal: current },
-			terminate: true,
-		};
+	let action: "create" | "replace";
+	if (autoApprove) {
+		action = current ? "replace" : "create";
+	} else {
+		const confirmed = await confirmGoalReplacement(
+			ctx as GoalWorkflowContext,
+			current,
+			false,
+			normalized.proposal.objective,
+		);
+		if (!confirmed) {
+			return {
+				content: [{ type: "text", text: "Goal draft cancelled. No goal was saved." }],
+				details: { status: "cancelled", reason: "replacement_not_confirmed", goal: current },
+				terminate: true,
+			};
+		}
+		action = confirmed;
 	}
 
-	const review = await reviewGoalProposal(ctx as GoalWorkflowContext, normalized.proposal);
+	const review = autoApprove
+		? { proposal: normalized.proposal, start: true }
+		: await reviewGoalProposal(ctx as GoalWorkflowContext, normalized.proposal);
 	if (!review) {
 		return {
 			content: [{ type: "text", text: "Goal draft cancelled. No goal was saved." }],
@@ -605,6 +671,64 @@ export function executeUpdateGoalProgress(
 	};
 }
 
+export function executeUpdateGoal(
+	params: UpdateGoalToolInput,
+	ctx: GoalToolContext,
+	pi: Pick<ExtensionAPI, "appendEntry">,
+): GoalToolResult {
+	const current = loadGoalState(ctx);
+	if (!current) return refusalResult("No active goal exists to update.", "no_goal");
+	if (current.status !== "active")
+		return refusalResult("Only active goals can be edited; resume the goal first.", "goal_inactive", current);
+	const reason = params.reason.trim();
+	if (!reason) return refusalResult("update_goal requires a reason.", "empty_reason", current);
+
+	const objective = params.objective === undefined ? undefined : validateObjective(params.objective);
+	const acceptanceCriteria =
+		params.acceptance_criteria === undefined ? undefined : normalizeStringList(params.acceptance_criteria);
+	if (acceptanceCriteria && acceptanceCriteria.length === 0)
+		return refusalResult(
+			"acceptance_criteria must be a non-empty list; omit it to keep the current criteria.",
+			"empty_acceptance_criteria",
+			current,
+		);
+	const constraints = params.constraints === undefined ? undefined : normalizeStringList(params.constraints);
+	const sourceDocs =
+		params.source_paths === undefined ? undefined : sourceDocsFromPaths(normalizeStringList(params.source_paths));
+
+	if (
+		objective === undefined &&
+		acceptanceCriteria === undefined &&
+		constraints === undefined &&
+		sourceDocs === undefined
+	)
+		return refusalResult(
+			"Provide at least one field to change: objective, acceptance_criteria, constraints, or source_paths.",
+			"empty_update",
+			current,
+		);
+
+	const next = saveGoalState(
+		pi,
+		{
+			action: "edit",
+			goalId: current.goalId,
+			now: Date.now(),
+			...(objective !== undefined ? { objective } : {}),
+			...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
+			...(constraints !== undefined ? { constraints } : {}),
+			...(sourceDocs !== undefined ? { sourceDocs } : {}),
+			reason: `Updated by update_goal: ${reason}`,
+		},
+		current,
+	);
+	applyGoalUi(ctx, next);
+	return {
+		content: [{ type: "text", text: `Goal updated: ${reason}` }],
+		details: { goal: next, reason },
+	};
+}
+
 export function formatGoalToolCall(toolName: string, body?: string, theme?: GoalTheme): string {
 	const title = styleTheme(theme, "toolTitle", goalToolTitle(toolName), { bold: true });
 	const normalizedBody = body?.trim();
@@ -656,7 +780,7 @@ function goalToolError(message: string, code: string): Error {
 }
 
 function isSuccessfulGoalToolText(text: string): boolean {
-	return /^(Created goal:|Saved goal draft|Goal progress updated|Goal work graph updated|Goal complete\.|Goal paused\.)/.test(
+	return /^(Created goal:|Saved goal draft|Goal updated:|Goal progress updated|Goal work graph updated|Goal complete\.|Goal paused\.)/.test(
 		text,
 	);
 }
@@ -683,6 +807,8 @@ function goalToolTitle(toolName: string): string {
 			return "✓ Complete goal";
 		case "pause_goal":
 			return "Pause goal";
+		case "update_goal":
+			return "Update goal";
 		case "update_goal_graph":
 			return "Update goal work graph";
 		case "update_goal_progress":

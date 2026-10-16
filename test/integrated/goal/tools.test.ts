@@ -9,6 +9,7 @@ import {
 	executeProposeGoalDraft,
 	executeUpdateGoalGraph,
 	executeUpdateGoalProgress,
+	executeUpdateGoal,
 	formatCompleteGoalToolResult,
 	formatGoalToolCall,
 	formatGoalToolResult,
@@ -22,6 +23,7 @@ import {
 	registerGoalTools,
 	updateGoalGraphParams,
 	updateGoalProgressParams,
+	updateGoalParams,
 } from "pi-tsien-goal/src/tools.ts";
 import { saveGoalState } from "pi-tsien-goal/src/state.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -89,6 +91,13 @@ describe("goal tool schemas and registration", () => {
 			"summary",
 		]);
 		expect(Object.keys(updateGoalGraphParams.properties)).toEqual(["workItems", "blockers", "attempt"]);
+		expect(Object.keys(updateGoalParams.properties)).toEqual([
+			"objective",
+			"acceptance_criteria",
+			"constraints",
+			"source_paths",
+			"reason",
+		]);
 
 		const { pi, tools } = createHarness();
 		registerGoalTools(pi);
@@ -98,6 +107,7 @@ describe("goal tool schemas and registration", () => {
 			"acceptanceCriteria",
 			"sourcePaths",
 			"startImmediately",
+			"autoApprove",
 			"draftId",
 			"commandId",
 		]);
@@ -105,12 +115,13 @@ describe("goal tool schemas and registration", () => {
 			"get_goal",
 			"create_goal",
 			"propose_goal_draft",
+			"update_goal",
 			"complete_goal",
 			"pause_goal",
 			"update_goal_graph",
 			"update_goal_progress",
 		]);
-		expect(pi.registerTool).toHaveBeenCalledTimes(7);
+		expect(pi.registerTool).toHaveBeenCalledTimes(8);
 	});
 
 	it("documents propose_goal_draft as the review-only drafting path separate from create_goal", () => {
@@ -403,6 +414,49 @@ describe("goal tool execution", () => {
 		expect(latestGoalEntry(stale.branch).state?.objective).toBe("Concurrent goal");
 	});
 
+	it("propose_goal_draft autoApprove saves and starts without any dialog", async () => {
+		const { pi, ctx, branch, ui } = createHarness();
+		const sendUserMessage = vi.fn();
+		const result = await executeProposeGoalDraft(
+			{
+				objective: "Unattended goal",
+				acceptanceCriteria: ["criterion"],
+				autoApprove: true,
+				startImmediately: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage },
+		);
+		expect(ui.select).not.toHaveBeenCalled();
+		expect(ui.confirm).not.toHaveBeenCalled();
+		expect(latestGoalEntry(branch).action).toBe("create");
+		expect(latestGoalEntry(branch).state?.objective).toBe("Unattended goal");
+		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Unattended goal"), {
+			deliverAs: "followUp",
+		});
+		expect(result.details).toMatchObject({ status: "saved", action: "create", started: true });
+
+		const replacing = createHarness();
+		executeCreateGoal({ objective: "Existing goal", explicit_request: true }, replacing.ctx, replacing.pi);
+		const replaced = await executeProposeGoalDraft(
+			{ objective: "Replacement goal", acceptanceCriteria: ["criterion"], autoApprove: true },
+			replacing.ctx,
+			{ ...replacing.pi, sendUserMessage: vi.fn() },
+		);
+		expect(replacing.ui.confirm).not.toHaveBeenCalled();
+		expect(replacing.ui.select).not.toHaveBeenCalled();
+		expect(latestGoalEntry(replacing.branch).action).toBe("replace");
+		expect(replaced.details).toMatchObject({ status: "saved", action: "replace", started: true });
+
+		const noUi = createHarness();
+		const noUiResult = await executeProposeGoalDraft(
+			{ objective: "Headless unattended", acceptanceCriteria: ["criterion"], autoApprove: true },
+			{ ...noUi.ctx, hasUI: false },
+			{ ...noUi.pi, sendUserMessage: vi.fn() },
+		);
+		expect(noUiResult.details).toMatchObject({ status: "saved", started: true });
+	});
+
 	it("propose_goal_draft throws for invalid model-provided draft shape before review", async () => {
 		const { pi, ctx, branch, ui } = createHarness();
 		await expect(
@@ -436,6 +490,70 @@ describe("goal tool execution", () => {
 			acceptanceCriteria: ["criterion"],
 			status: "complete",
 		});
+	});
+
+	it("update_goal edits the objective and criteria in place with an audit reason", () => {
+		const { pi, ctx, branch } = createHarness();
+		executeCreateGoal(
+			{ objective: "Original objective", explicit_request: true, acceptance_criteria: ["old criterion"] },
+			ctx,
+			pi,
+		);
+		const goalId = latestGoalEntry(branch).state?.goalId;
+
+		const result = executeUpdateGoal(
+			{
+				objective: "Refined objective",
+				acceptance_criteria: ["new criterion", "second criterion"],
+				constraints: ["No regressions"],
+				source_paths: ["docs/prd.md"],
+				reason: "Scope clarified while reading the PRD",
+			},
+			ctx,
+			pi,
+		);
+
+		expect(latestGoalEntry(branch).action).toBe("edit");
+		expect(latestGoalEntry(branch).reason).toContain("Scope clarified while reading the PRD");
+		// In-place edit: the same goal keeps its identity and history.
+		expect(latestGoalEntry(branch).state).toMatchObject({
+			goalId,
+			status: "active",
+			objective: "Refined objective",
+			acceptanceCriteria: ["new criterion", "second criterion"],
+			constraints: ["No regressions"],
+		});
+		expect(latestGoalEntry(branch).state?.sourceDocs).toMatchObject([{ path: "docs/prd.md" }]);
+		expect(result.details).toMatchObject({ reason: "Scope clarified while reading the PRD" });
+		expect(result.content[0].text).toContain("Goal updated: Scope clarified while reading the PRD");
+	});
+
+	it("update_goal refuses empty updates, empty criteria, missing reason, and inactive goals", () => {
+		const { pi, ctx, branch } = createHarness();
+		expect(executeUpdateGoal({ objective: "x", reason: "no goal yet" }, ctx, pi)).toMatchObject({
+			details: { status: "refused", reason: "no_goal" },
+		});
+
+		executeCreateGoal(
+			{ objective: "Keep me", explicit_request: true, acceptance_criteria: ["criterion"] },
+			ctx,
+			pi,
+		);
+		expect(executeUpdateGoal({ reason: "nothing to change" }, ctx, pi)).toMatchObject({
+			details: { status: "refused", reason: "empty_update" },
+		});
+		expect(
+			executeUpdateGoal({ acceptance_criteria: ["  "], reason: "blank criteria" }, ctx, pi),
+		).toMatchObject({ details: { status: "refused", reason: "empty_acceptance_criteria" } });
+		expect(executeUpdateGoal({ objective: "Renamed", reason: "   " }, ctx, pi)).toMatchObject({
+			details: { status: "refused", reason: "empty_reason" },
+		});
+
+		executePauseGoal({ reason: "user asked to stop" }, ctx, pi);
+		expect(executeUpdateGoal({ objective: "While paused", reason: "nope" }, ctx, pi)).toMatchObject({
+			details: { status: "refused", reason: "goal_inactive" },
+		});
+		expect(latestGoalEntry(branch).state?.objective).toBe("Keep me");
 	});
 
 	it("update_goal_progress only mutates progress fields", () => {

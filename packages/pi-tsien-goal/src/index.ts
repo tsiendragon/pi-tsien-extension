@@ -67,6 +67,7 @@ export {
 	executeProposeGoalDraft,
 	executeUpdateGoalGraph,
 	executeUpdateGoalProgress,
+	executeUpdateGoal,
 	formatGoalToolCall,
 	formatGoalToolResult,
 	getGoalParams,
@@ -77,6 +78,7 @@ export {
 	registerGoalTools,
 	updateGoalGraphParams,
 	updateGoalProgressParams,
+	updateGoalParams,
 } from "./tools.ts";
 export {
 	createGoalState,

@@ -151,7 +151,7 @@ export async function handleGoalCommand(
 				return;
 			case "resume": {
 				const next = mutateExistingGoal(pi, ctx, current, "resume", "Goal resumed.");
-				if (next) await offerGoalStartHandoff(pi, ctx, next.goalId, parsed.start);
+				if (next) await startActiveGoal(pi, ctx, next.goalId);
 				return;
 			}
 			case "clear":
@@ -216,7 +216,9 @@ export function parseGoalCommand(args: string): ParsedGoalCommand {
 		.filter((token) => !RECOGNIZED_FLAGS.has(token))
 		.join(" ")
 		.trim();
-	return { kind: "create", objective, confirmed, replace, start };
+	// Unattended by default: `/goal <objective>` drafts, saves, and starts in one
+	// uninterrupted flow — no replace dialog, no review select, no start confirm.
+	return { kind: "create", objective, confirmed, replace, start: true };
 }
 
 async function showBlockers(ctx: GoalCommandContext, parsed: ParsedGoalCommand): Promise<void> {
@@ -347,21 +349,20 @@ async function createOrReplaceGoal(
 	current: GoalState | null,
 ): Promise<void> {
 	const objective = validateObjective(parsed.objective ?? "");
-	const action = await confirmGoalReplacement(ctx, current, parsed.replace, objective);
-	if (!action) return;
 	if (!pi.sendUserMessage) {
 		ctx.ui.notify("Cannot draft goal: follow-up messaging API is unavailable.", "error");
 		return;
 	}
 
+	// The drafting turn is unattended: the agent saves the draft and starts the
+	// goal without user confirmation (replacing a current goal when one exists).
 	pi.sendUserMessage(
 		renderGoalAgentDraftingPrompt(objective, {
-			start: parsed.start,
-			replacingExistingGoal: action === "replace",
+			replacingExistingGoal: Boolean(current),
 			currentGoal: current ?? undefined,
 		}),
 	);
-	ctx.ui.notify("Goal draft queued for review.", "info");
+	ctx.ui.notify("Goal draft queued; it will be saved and started automatically.", "info");
 }
 
 export async function confirmGoalReplacement(
