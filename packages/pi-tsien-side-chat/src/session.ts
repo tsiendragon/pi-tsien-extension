@@ -240,6 +240,13 @@ export class BtwSessionController {
     const prompt = text.trim();
     if (!prompt || this.busy || this.disposed || this.disposing) return;
 
+    // Claude Code's `/btw` always answers from the conversation as it is right
+    // now. A side chat that snapshots the parent context only once drifts behind
+    // as soon as the main agent keeps working (its answers describe an older
+    // state), so re-adopt the parent context before every question instead of
+    // waiting for a manual refresh.
+    this.adoptParentSnapshot(false);
+
     this.busy = true;
     this.cancelRequested = false;
     this.activity = "思考中";
@@ -258,6 +265,11 @@ export class BtwSessionController {
     }
   }
 
+  /** True once the side session is gone: callers must not reuse the controller. */
+  get isDisposed(): boolean {
+    return this.disposed || this.disposing;
+  }
+
   async refreshParentSnapshot(): Promise<void> {
     if (this.busy) {
       this.conversation.push({ role: "notice", text: "生成期间不能刷新主会话快照。" });
@@ -265,16 +277,29 @@ export class BtwSessionController {
       return;
     }
 
+    this.adoptParentSnapshot(true);
+  }
+
+  /**
+   * Replace the parent-context prefix this side session was seeded with, keeping
+   * the side chat's own messages after it.
+   *
+   * `announce` adds a visible notice (manual refresh); the refresh that runs
+   * before every question stays silent, like Claude Code's `/btw`.
+   */
+  private adoptParentSnapshot(announce: boolean): void {
     const sideMessages = this.session.messages.slice(this.parentMessageCount);
     const parentMessages = snapshotParentMessages(this.ctx);
     const parentHistory = snapshotParentHistory(this.ctx);
     this.session.agent.state.messages = [...parentMessages, ...sideMessages];
     this.historySnapshot.entries = parentHistory.entries;
     this.parentMessageCount = parentMessages.length;
-    this.conversation.push({
-      role: "notice",
-      text: `已刷新主会话快照：${parentMessages.length} 条当前上下文消息，${parentHistory.entries.length} 条完整分支记录。`,
-    });
+    if (announce) {
+      this.conversation.push({
+        role: "notice",
+        text: `已刷新主会话快照：${parentMessages.length} 条当前上下文消息，${parentHistory.entries.length} 条完整分支记录。`,
+      });
+    }
     this.emitChange();
   }
 
