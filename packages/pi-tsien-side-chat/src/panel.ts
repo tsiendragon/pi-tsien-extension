@@ -4,6 +4,7 @@ import {
   type Component,
   type Focusable,
   type TUI,
+  getKeybindings,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -13,9 +14,31 @@ import { BtwSessionController, type BtwConversationItem } from "./session.ts";
 
 const PAGE_SIZE = 8;
 
+function keyLabel(key: string): string {
+  return key
+    .split("+")
+    .map((part) => (part === "enter" || part === "return" ? "Enter" : part === "esc" ? "Esc" : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join("+");
+}
+
+/**
+ * The key that sends a question is rebindable (`tui.input.submit`), and users who
+ * remap it (enter → newline) found the panel's “Enter 发送” hint plainly wrong.
+ */
+function submitHint(): string {
+  const resolved: unknown = getKeybindings().getResolvedBindings()["tui.input.submit"];
+  const keys = (Array.isArray(resolved) ? resolved : [resolved]).filter(
+    (key): key is string => typeof key === "string" && key.length > 0,
+  );
+  const labels = keys.map(keyLabel);
+  return labels.length > 0 ? labels.join("/") : "Enter";
+}
+
 type PanelCallbacks = {
   close: () => void;
   copyToMain: (text: string) => void;
+  /** Copy the raw Markdown of the last answer to the system clipboard. */
+  copyAnswer: (text: string) => void;
   notify: (message: string, level: "info" | "warning" | "error") => void;
 };
 
@@ -119,6 +142,19 @@ export class BtwPanel implements Component, Focusable {
       return;
     }
 
+    // Claude Code's `/btw` overlay copies the answer as raw Markdown with `c`.
+    // This panel also owns a text box, so `c` only means "copy" while the box is
+    // empty — otherwise it is a normal keystroke (you cannot type `c` otherwise).
+    if (data === "c" && !this.input.getValue().trim()) {
+      const answer = this.controller.lastAnswer;
+      if (!answer) {
+        this.callbacks.notify("BTW 还没有可复制的回答。", "warning");
+        return;
+      }
+      this.callbacks.copyAnswer(answer);
+      return;
+    }
+
     if (matchesKey(data, "ctrl+y")) {
       const answer = this.controller.lastAnswer;
       if (!answer) {
@@ -154,7 +190,7 @@ export class BtwPanel implements Component, Focusable {
       const compact = [
         row(` ${this.theme.fg("accent", this.theme.bold("BTW · read-only"))}`),
         ...inputLines,
-        row(` ${this.theme.fg("dim", "Enter 发送 · Esc 取消/关闭")}`),
+        row(` ${this.theme.fg("dim", `↑↓ 翻页 · ${submitHint()} 发送 · ${this.controller.busy ? "Esc 取消" : "Esc 关闭"}`)}`),
       ];
       return compact.slice(0, maxPanelRows);
     }
@@ -174,19 +210,20 @@ export class BtwPanel implements Component, Focusable {
       ? this.theme.fg("warning", `● ${this.controller.activity || "生成中"}`)
       : this.theme.fg("success", "● 空闲");
     const scroll = maxOffset > 0
-      ? this.theme.fg("dim", ` · ↑↓ 单行 · Fn+↑↓/Ctrl+↑↓ 翻页 ${this.scrollOffset}/${maxOffset}`)
+      ? this.theme.fg("dim", ` · ${this.scrollOffset}/${maxOffset}`)
       : "";
+    const contextLine = `只读 · ${this.controller.modelLabel} · 主上下文 ${this.controller.parentMessageCount} 条（每次提问前自动同步）`;
 
     const lines = [
       border(`╭${"─".repeat(innerWidth)}╮`),
-      row(` ${this.theme.fg("accent", this.theme.bold("BTW"))} ${this.theme.fg("dim", "read-only side chat")}`),
-      row(` ${this.theme.fg("dim", this.controller.modelLabel)}`),
+      row(` ${this.theme.fg("accent", this.theme.bold("BTW"))} ${this.theme.fg("dim", "只读侧聊 · 不改动主会话")}`),
+      row(` ${this.theme.fg("dim", contextLine)}`),
       row(` ${status}${scroll}`),
       border(`├${"─".repeat(innerWidth)}┤`),
       ...visibleTranscript.map((line) => row(` ${line}`)),
       border(`├${"─".repeat(innerWidth)}┤`),
       ...inputLines,
-      row(` ${this.theme.fg("dim", "↑↓ 单行 · Fn+↑↓/Ctrl+↑↓ 翻页 · Enter 发送 · Esc 取消/关闭 · F5 刷新 · Ctrl+Y 复制")}`),
+      row(` ${this.theme.fg("dim", this.footerHints())}`),
       border(`╰${"─".repeat(innerWidth)}╯`),
     ];
     return lines.slice(0, maxPanelRows);
@@ -202,12 +239,28 @@ export class BtwPanel implements Component, Focusable {
     this.controller.onChange = undefined;
   }
 
+  /**
+   * Only the keys that do something *right now*: the panel is a narrow overlay and
+   * a fixed hint line made users hunt for the one key that mattered.
+   */
+  private footerHints(): string {
+    const hints = [
+      "↑↓ 翻页",
+      `${submitHint()} 发送`,
+      this.controller.busy ? "Esc 取消" : "Esc 关闭",
+      "F5 同步主上下文",
+    ];
+    if (this.controller.lastAnswer) hints.push("c 复制回答");
+    hints.push("Ctrl+Y 送主输入");
+    return hints.join(" · ");
+  }
+
   private renderConversation(width: number): string[] {
     if (this.controller.conversation.length === 0) {
       return wrapTextWithAnsi(
         this.theme.fg(
           "dim",
-          `已读取主 Agent 的 ${this.controller.parentMessageCount} 条上下文消息。可以询问临时问题，或让 BTW 使用 read、grep、find、ls 调查文件。`,
+          `已同步主 Agent 的 ${this.controller.parentMessageCount} 条上下文消息。可以问“刚才那个配置文件叫什么”，也可以让它用 read、grep、find、ls 去查；每次提问前会自动再同步一次。`,
         ),
         width,
       );
