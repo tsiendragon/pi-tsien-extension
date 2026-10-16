@@ -1,6 +1,6 @@
 # pi-tsien-web-tools
 
-`WebSearch`（网页搜索）与 `WebFetch`（网页正文提取）两个工具，供 pi 使用。
+`WebSearch`（网页搜索）、`WebFetch`（网页正文提取），以及 `arxiv_search` / `openreview_search`（学术源结构化检索）四个工具，供 pi 使用。
 
 **这是我们自己的实现**，不是 `vendor/pi-web-tools` 的副本（后者是第三方代码、上游无许可证）。
 行为契约与我们在用的那份一致，但代码、结构、解析方式都是重写的：便于自由维护、扩功能，也避免许可证问题。
@@ -11,6 +11,15 @@
 |---|---|---|
 | `WebSearch` | `query`、`limit`（默认 10，上限 20） | 返回编号列表：标题 / URL / 摘要 |
 | `WebFetch` | `url`、`prompt`（可选提示，仅作上下文） | 抓取网页 → 提取正文 → markdown；结果按 pi 的 `truncateHead` 限额截断 |
+| `arxiv_search` | `query`、`limit`、`sort`（`relevance`/`newest`）、`category` | 打 arXiv 官方 API，返回编号/日期/作者/分类/摘要；`query` 支持 `ti:` `au:` `abs:` `cat:` `all:"..."`，或直接给一个 arXiv 编号 |
+| `openreview_search` | `query`、`limit` | 打 OpenReview API v2 的 `/notes/search`，返回标题/venue/作者/日期/摘要/forum 链接；自动过滤评审与评论、按 forum 去重 |
+
+### 学术源工具
+
+- **为什么要专用工具**：搜索结果只能给片段，官方 API 给的是可引用元数据（编号+版本、提交日期、作者、分类、摘要）。拿文献优先用这两个，不要用 WebSearch。
+- **无需凭证**；arXiv 官方建议 ≤1 请求/3 秒，因此别把它当循环里的高频调用。
+- **OpenReview 坑**：`GET /notes?limit=N` 这类裸列表会返回 403 `ChallengeRequiredError`（反爬挑战，不是网络问题），所以只走 `/notes/search`；该端点默认混入评审/评论，工具已按「有 title」过滤并按 forum 去重。
+- 两者都走全局 `fetch`，因此同样受 `HTTPS_PROXY` / `NO_PROXY` 影响（本机经跳板出网）。
 
 ## 搜索后端
 

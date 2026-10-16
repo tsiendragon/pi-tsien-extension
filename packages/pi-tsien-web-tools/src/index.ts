@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { ArxivClient, formatArxivResults, type ArxivSort } from "./academic/arxiv.ts";
+import { formatOpenReviewResults, OpenReviewClient } from "./academic/openreview.ts";
 import { fetchPage } from "./fetch/extract.ts";
 import { resolveSearchProvider, type SearchProvider } from "./search/provider.ts";
 
@@ -9,7 +11,8 @@ const MAX_LIMIT = 20;
 const STATUS_KEY = "web-tools";
 
 /**
- * WebSearch (web search) and WebFetch (page → markdown) for pi.
+ * WebSearch (web search) and WebFetch (page → markdown) for pi, plus arxiv_search /
+ * openreview_search for structured academic metadata.
  *
  * Search works without credentials: the DuckDuckGo lite provider is the fallback, and
  * `PI_WEB_SEARCH_PROVIDER` / provider API keys select something better when available.
@@ -120,6 +123,99 @@ export default function webTools(pi: ExtensionAPI): void {
 			}
 		},
 	});
+
+	const arxiv = new ArxivClient();
+	const openreview = new OpenReviewClient();
+
+	pi.registerTool({
+		name: "arxiv_search",
+		label: "arXiv Search",
+		description:
+			"Search arXiv through its official API and return structured metadata: title, arXiv id, submission date, " +
+			"authors, categories and abstract. Prefer this over WebSearch when you need arXiv papers. " +
+			"Accepts the API's field prefixes (ti:, au:, abs:, cat:, all:\"exact phrase\") or a bare arXiv id (e.g. 2603.01433).",
+		parameters: Type.Object({
+			query: Type.String({ description: "arXiv query, e.g. all:\"document forgery\" or au:Smith; a bare arXiv id also works" }),
+			limit: Type.Optional(Type.Number({ description: `Max results to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})` })),
+			sort: Type.Optional(Type.String({ description: "'newest' (submitted date, descending) or 'relevance' (default)" })),
+			category: Type.Optional(Type.String({ description: "Optional arXiv category filter, e.g. cs.CV" })),
+		}),
+
+		async execute(_toolCallId, params) {
+			try {
+				const limit = clampLimit(params.limit);
+				const sort: ArxivSort = params.sort === "newest" ? "newest" : "relevance";
+				const papers = await arxiv.search(params.query, limit, sort, params.category);
+				if (papers.length === 0) {
+					return {
+						content: [{ type: "text" as const, text: `No arXiv papers found for: "${params.query}"` }],
+						details: { count: 0, query: params.query },
+					};
+				}
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `arXiv results for "${params.query}":\n\n${formatArxivResults(papers, params.query)}`,
+						},
+					],
+					details: { count: papers.length, query: params.query },
+				};
+			} catch (error) {
+				return {
+					content: [{ type: "text" as const, text: `arXiv search error: ${messageOf(error)}` }],
+					details: { count: 0, query: params.query },
+					isError: true,
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "openreview_search",
+		label: "OpenReview Search",
+		description:
+			"Search OpenReview (conference submissions and DBLP records, e.g. ICLR/NeurIPS/ICML) and return title, venue, " +
+			"authors, date, abstract and forum link. Use it next to arxiv_search when you need peer-reviewed venue papers; " +
+			"reviews, comments and edits are filtered out.",
+		parameters: Type.Object({
+			query: Type.String({ description: "Search terms, e.g. 'document forgery detection'" }),
+			limit: Type.Optional(Type.Number({ description: `Max results to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})` })),
+		}),
+
+		async execute(_toolCallId, params) {
+			try {
+				const limit = clampLimit(params.limit);
+				const papers = await openreview.search(params.query, limit);
+				if (papers.length === 0) {
+					return {
+						content: [{ type: "text" as const, text: `No OpenReview papers found for: "${params.query}"` }],
+						details: { count: 0, query: params.query },
+					};
+				}
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `OpenReview results for "${params.query}":\n\n${formatOpenReviewResults(papers, params.query)}`,
+						},
+					],
+					details: { count: papers.length, query: params.query },
+				};
+			} catch (error) {
+				return {
+					content: [{ type: "text" as const, text: `OpenReview search error: ${messageOf(error)}` }],
+					details: { count: 0, query: params.query },
+					isError: true,
+				};
+			}
+		},
+	});
+}
+
+function clampLimit(value: unknown): number {
+	const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : DEFAULT_LIMIT;
+	return Math.min(Math.max(parsed, 1), MAX_LIMIT);
 }
 
 function messageOf(error: unknown): string {
