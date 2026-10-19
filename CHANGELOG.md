@@ -16,6 +16,7 @@
 - `pi-tsien-goal@0.1.1`：`/goal <objective>` 改为无人值守——一条命令完成「起草 → 保存 → 开始」，中间不再有「替换当前目标？」确认、「评审生成的提案」选择、以及「现在开始工作？」确认；已有目标时直接替换（旧目标条目仍保留在会话文件里可审计），`/goal resume` 恢复后直接开始执行；`propose_goal_draft` 新增 `autoApprove` 参数（仅命令流程在起草提示里要求模型传入，Agent 自主提议的草稿仍走评审 UI）。
 - `pi-tsien-goal@0.1.1` + `pi-tsien-live-session@0.1.1`（`pi-tsien-shared@0.1.1` 提供事件常量）：目标状态变更实时同步到 dashboard——goal 每次保存状态后通过扩展事件总线发出 `pi-tsien.goal.state-changed.v1`（常量在 `pi-tsien-shared`），live-session 收到后 500ms 去抖并主动重推快照；会话中途新建/更新/暂停目标不再需要等待重连、resync 或重载才会在 dashboard 出现。
 - `pi-tsien-goal@0.1.1`：外部等待不再中断持续驱动——遇到卡点先走阶梯：先尝试绕过（替代来源/方法/代理证据，不得越权或降低证据标准）、自助解决、先推进其他工作项，再把仍未解决的记录为结构化 blocker 与尝试证据并保持 goal 为 active；20 分钟自动 continuation 每轮先复核 open blocker 并记录重试 attempt，条件具备后自动接续；`pause_goal` 与 goal context 规则改为仅用于用户要求停止或继续不安全的场景。
+- `pi-tsien-web-tools`：新增 `arxiv_search` / `openreview_search` 两个工具——分别打 arXiv 官方 API 与 OpenReview API v2 的 `/notes/search`，返回可引用的结构化元数据（编号/日期/作者/分类/摘要、venue/forum 链接）。OpenReview 侧自动过滤评审与评论并按 forum 去重（裸 `/notes?limit=` 是 403 反爬挑战，故不用它）；两者都无需凭证，并沿用全局 `fetch`（受 `HTTPS_PROXY`/`NO_PROXY` 影响）。
 - `pi-tsien-auto-compact@0.1.1`：新增 Agent 可调用的 `compact_context` 工具——用户在自然语言里要求「压缩上下文」时，Agent 可以登记一次压缩请求。工具只登记不内联压缩（`ctx.compact()` 会先 abort 当前 run），真正压缩仍在同一个 run 边界（空闲）执行；请求按 session id 隔离并在 `session_shutdown` 清理；不受 `auto-compact-target.json` 的 `enabled` 影响。
 
 ## 0.1.1 — 2026-09-27（包级修订：移除内部模型代号）
