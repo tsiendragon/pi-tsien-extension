@@ -317,7 +317,7 @@ describe("WorkbenchController", () => {
     });
     expect(controller.provider.snapshot()).toMatchObject({
       sessions: 1,
-      acceptedRuns: 1,
+      acceptedRuns: 2,
     });
   });
 

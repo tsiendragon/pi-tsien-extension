@@ -129,7 +129,8 @@ describe("Conversation Workbench full-screen routes", () => {
     const plain = rendered.map(stripTerminalSequences).join("\n");
     expect(plain).toContain("Subagent · Source review");
     expect(plain).toContain("Inspecting files");
-    expect(plain).toContain("read README.md");
+    expect(plain).toContain("read");
+    expect(plain).toContain('"path": "README.md"');
     expect(plain).toContain("test-model • high");
     expect(plain).toContain("Enter send/queue");
     expect(rendered.every((line: string) => visibleWidth(line) <= 100)).toBe(
