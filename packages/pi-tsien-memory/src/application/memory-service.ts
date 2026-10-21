@@ -26,6 +26,8 @@ export interface RememberOptions {
   sourceEntryId?: string;
   createdBy?: "user" | "rule-capture" | "review" | "migration";
   kind?: MemoryAggregate["kind"];
+  /** True only when the memory content is backed by a verified tool result or an explicit user statement. */
+  sourceVerified?: boolean;
 }
 
 export interface SearchOptions {
@@ -60,7 +62,7 @@ export class MemoryService {
       sourceUri: options.sourceUri ?? "memory://explicit",
       sourceEntryId: options.sourceEntryId,
       authority: options.authority ?? (options.explicit ? "user_explicit" : "agent_inference"),
-      verified: options.explicit,
+      verified: options.sourceVerified ?? options.explicit,
     } as const;
 
     for (const current of existing) {
@@ -132,7 +134,8 @@ export class MemoryService {
     await Promise.all(fitted.items.map((item) => this.repository.markObserved(item.memory.id).catch(() => undefined)));
     const route = query.route ?? "memory";
     await this.repository.recordRecall({ runId, sessionId: query.scope.sessionId, queryHash: sha256(safeQuery), route, status: "completed", latencyMs: Math.max(0, this.now() - startedAt), injectedCount: fitted.items.length, items: fitted.items.map((item, rank) => ({ memoryId: item.memory.id, revisionId: item.memory.currentRevision?.id ?? "", rank, score: item.score, reasonCodes: item.reasonCodes })) }).catch(() => undefined);
-    await Promise.all(fitted.items.map((item) => this.repository.recordApplication({ memoryId: item.memory.id, sessionId: query.scope.sessionId, outcome: "injected" }).catch(() => undefined)));
+    // Injection is recorded by markContextInjected once the caller has built the
+    // final prompt, because context budgeting can still drop items afterwards.
     return { runId, items: fitted.items, estimatedTokens: fitted.estimatedTokens, createdAt: this.now() };
   }
 
@@ -230,6 +233,48 @@ export class MemoryService {
     return Object.assign(accepted, { undoReceiptId: receiptId });
   }
 
+  /**
+   * Records that these memories actually reached the model context. Called after
+   * the prompt, including knowledge sources, has been budgeted and serialized.
+   */
+  async markContextInjected(memoryIds: string[], sessionId: string): Promise<void> {
+    const unique = [...new Set(memoryIds.filter((id) => typeof id === "string" && id.length > 0))];
+    await Promise.all(unique.map((memoryIdValue) => this.repository.recordApplication({ memoryId: memoryIdValue, sessionId, outcome: "injected" }).catch(() => undefined)));
+  }
+
+  /** Facts a triage decision needs, gathered from the stored candidate itself. */
+  async inspectCandidate(target: string, options: { profileId: string; scopes: MemoryScope[] }): Promise<{
+    memory: MemoryAggregate;
+    authority?: import("../domain/types.ts").MemorySource["authority"];
+    verified: boolean;
+    unresolvedConflicts: number;
+  }> {
+    const memory = await this.resolveUniqueTarget(target, options.profileId, options.scopes, ["candidate"], "Candidate was not found");
+    const [sources, stats] = await Promise.all([
+      this.repository.listSources(memory.id).catch(() => []),
+      this.repository.applicationStats(memory.id).catch(() => ({ verifiedApplications: 0, distinctTasks: 0, distinctRepositories: 0, unresolvedConflicts: 0 })),
+    ]);
+    const latest = sources.at(-1);
+    return { memory, authority: latest?.authority, verified: latest?.verified === true, unresolvedConflicts: stats.unresolvedConflicts };
+  }
+
+  /** Accepts a candidate on the agent's own judgement; the user can still undo it. */
+  async autoAccept(target: string, options: { profileId: string; scopes: MemoryScope[]; reasonCode: string }): Promise<MemoryAggregate & { undoReceiptId?: string }> {
+    const candidate = await this.resolveUniqueTarget(target, options.profileId, options.scopes, ["candidate"], "Candidate was not found");
+    if (candidate.claimKey) {
+      const conflicts = await this.repository.findByClaim(options.profileId, candidate.scope, candidate.claimKey, ["active"]);
+      for (const conflict of conflicts) {
+        if (conflict.id === candidate.id) continue;
+        await this.repository.transition(conflict.id, "superseded", "system", "auto_accepted_replacement");
+        await this.repository.relate(candidate.id, conflict.id, "supersedes");
+      }
+    }
+    const accepted = await this.repository.transition(candidate.id, "active", "system", options.reasonCode);
+    await this.searchBackend.synchronize(accepted.id);
+    const receiptId = await this.createUndoReceipt("activate", accepted.id, accepted.currentRevision?.id, "candidate");
+    return Object.assign(accepted, { undoReceiptId: receiptId });
+  }
+
   async undo(receiptId: string): Promise<MemoryAggregate> {
     const receipt = await this.repository.getReceipt(receiptId);
     if (!receipt || !["create", "update", "activate", "reject"].includes(receipt.operation) || receipt.consumedAt || receipt.expiresAt <= this.now()) throw new MemoryError("Undo receipt is invalid or expired", "MEMORY_INVALID_RECEIPT");
@@ -285,15 +330,19 @@ export class MemoryService {
     return created;
   }
 
-  async captureReviewedCandidate(turn: SettledTurn, reviewed: { content: string; kind: MemoryAggregate["kind"] }): Promise<MemoryAggregate> {
+  async captureReviewedCandidate(turn: SettledTurn, reviewed: { content: string; kind: MemoryAggregate["kind"]; evidenceToolNames?: string[] }): Promise<MemoryAggregate> {
+    // The reviewer only runs when a tool result verified the turn, so the source
+    // authority stays honest: verified_tool when tools succeeded, inference otherwise.
+    const evidence = reviewed.evidenceToolNames?.filter((name) => name.trim().length > 0) ?? [];
     const result = await this.remember(reviewed.content, {
       profileId: turn.profileId,
       scope: turn.scope,
       explicit: false,
       explicitGlobal: false,
-      sourceType: "assistant_summary",
-      authority: "agent_inference",
-      sourceUri: `session:${turn.sessionId}`,
+      sourceType: evidence.length > 0 ? "tool_result" : "assistant_summary",
+      authority: evidence.length > 0 ? "verified_tool" : "agent_inference",
+      sourceVerified: evidence.length > 0,
+      sourceUri: evidence.length > 0 ? `tool:${evidence.join(",")}` : `session:${turn.sessionId}`,
       sourceEntryId: turn.userEntryId,
       createdBy: "review",
       kind: reviewed.kind,

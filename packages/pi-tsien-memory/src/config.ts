@@ -18,6 +18,11 @@ export interface MemoryConfig {
       timeoutMs: number;
       maxInputChars: number;
     };
+    autoAccept: {
+      enabled: boolean;
+      minConfidence: number;
+      allowGlobal: boolean;
+    };
   };
   recall: {
     enabled: boolean;
@@ -46,6 +51,8 @@ const defaults: Omit<MemoryConfig, "dataDir" | "warnings"> = {
     reviewPromptTimeoutMs: 15_000,
     // 候选审核是可选的 LLM 步骤；默认模型用 openai-codex 的轻量模型，可换成自己的。
     reviewer: { enabled: true, model: "openai-codex/gpt-5.4-mini", timeoutMs: 15_000, maxInputChars: 2_000 },
+    // 有来源证据、无冲突的候选由助手直接采纳；只有含糊或冲突才留给人审核。
+    autoAccept: { enabled: true, minConfidence: 0.7, allowGlobal: false },
   },
   recall: { enabled: true, maxItems: 6, maxTokens: 1000, minScore: 0.62, timeoutMs: 150 },
   privacy: { storeEvidenceSummary: false, remoteProcessing: false },
@@ -86,6 +93,12 @@ export function defaultConfig(): MemoryConfig {
         model: process.env.PI_TSIEN_MEMORY_REVIEW_MODEL?.trim() || defaults.capture.reviewer.model,
         timeoutMs: integerEnv("PI_TSIEN_MEMORY_REVIEWER_TIMEOUT_MS", defaults.capture.reviewer.timeoutMs, 1_000, 120_000),
         maxInputChars: integerEnv("PI_TSIEN_MEMORY_REVIEWER_MAX_INPUT_CHARS", defaults.capture.reviewer.maxInputChars, 200, 8_000),
+      },
+      autoAccept: {
+        ...defaults.capture.autoAccept,
+        enabled: booleanEnv("PI_TSIEN_MEMORY_AUTO_ACCEPT", defaults.capture.autoAccept.enabled),
+        minConfidence: parseScore(process.env.PI_TSIEN_MEMORY_AUTO_ACCEPT_MIN_CONFIDENCE, defaults.capture.autoAccept.minConfidence),
+        allowGlobal: booleanEnv("PI_TSIEN_MEMORY_AUTO_ACCEPT_GLOBAL", defaults.capture.autoAccept.allowGlobal),
       },
     },
     recall: {
@@ -129,6 +142,10 @@ export function loadConfig(cwd = process.cwd(), trustedProject = false): MemoryC
   merged.capture.reviewer.model = typeof merged.capture.reviewer.model === "string" && merged.capture.reviewer.model.trim() ? merged.capture.reviewer.model.trim() : base.capture.reviewer.model;
   merged.capture.reviewer.timeoutMs = clampInteger(merged.capture.reviewer.timeoutMs, 1_000, 120_000, base.capture.reviewer.timeoutMs);
   merged.capture.reviewer.maxInputChars = clampInteger(merged.capture.reviewer.maxInputChars, 200, 8_000, base.capture.reviewer.maxInputChars);
+  merged.capture.autoAccept = { ...base.capture.autoAccept, ...(isRecord(merged.capture.autoAccept) ? merged.capture.autoAccept : {}) } as MemoryConfig["capture"]["autoAccept"];
+  merged.capture.autoAccept.enabled = merged.capture.autoAccept.enabled !== false;
+  merged.capture.autoAccept.allowGlobal = merged.capture.autoAccept.allowGlobal === true;
+  merged.capture.autoAccept.minConfidence = typeof merged.capture.autoAccept.minConfidence === "number" && merged.capture.autoAccept.minConfidence >= 0 && merged.capture.autoAccept.minConfidence <= 1 ? merged.capture.autoAccept.minConfidence : base.capture.autoAccept.minConfidence;
   merged.recall.enabled = merged.recall.enabled !== false;
   merged.privacy.remoteProcessing = merged.privacy.remoteProcessing === true;
   return merged;

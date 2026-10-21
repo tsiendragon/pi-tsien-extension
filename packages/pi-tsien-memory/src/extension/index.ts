@@ -4,6 +4,7 @@ import { errorText } from "../domain/errors.ts";
 import { normalizeText } from "../domain/normalize.ts";
 import { sha256 } from "../shared/hash.ts";
 import { RuleCaptureStrategy } from "../application/capture-rules.ts";
+import { triageCandidate, type TriageResult } from "../application/auto-triage.ts";
 import type { PiExtensionAPI, ExtensionContext, ContextEvent, BeforeAgentStartEvent, InputEvent, AgentEndEvent, ToolResultEvent, SessionBeforeCompactEvent, ExtensionCommandContext } from "./pi-types.ts";
 import { Type, textResult } from "./schema.ts";
 import { closeRuntime, createRuntime, currentScopes, currentVisibleScopes, turnFromState, type RuntimeDependencies, type RuntimeState } from "./runtime.ts";
@@ -113,7 +114,13 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
   pi.on("context", async (event: ContextEvent, _ctx) => {
     if (!runtime?.enabled || !runtime.recall || (runtime.recall.items.length === 0 && runtime.knowledgeResults.length === 0)) return undefined;
     if (event.messages.some((message) => message.customType === "pi-tsien-memory.context.v1")) return undefined;
-    return { messages: [combinedRecallAsMessage(runtime.recall, runtime.knowledgeResults, runtime.config.knowledge.combinedContextBudget), ...event.messages] };
+    const message = combinedRecallAsMessage(runtime.recall, runtime.knowledgeResults, runtime.config.knowledge.combinedContextBudget);
+    // Record what the model actually receives: budgeting may have dropped recalled items.
+    const details = (message.details ?? {}) as { memoryIds?: unknown };
+    const injectedIds = Array.isArray(details.memoryIds) ? (details.memoryIds as string[]).filter((id): id is string => typeof id === "string") : [];
+    const current = runtime;
+    void current.service.markContextInjected(injectedIds, current.scope.sessionId).catch(() => undefined);
+    return { messages: [message, ...event.messages] };
   });
 
   pi.on("agent_end", (event: AgentEndEvent, _ctx) => {
@@ -194,9 +201,7 @@ async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: 
       limit: 5,
     });
     if (existing.some((memory) => normalizeText(memory.currentRevision?.content ?? "") === reviewed.content)) return;
-    const candidate = await runtime.service.captureReviewedCandidate(turn, reviewed);
-    ctx.ui.setStatus("tsien-memory", "on · candidate 1");
-    ctx.ui.notify("已发现可复用的候选记忆，可用 /memory review 审核。", "info");
+    const candidate = await runtime.service.captureReviewedCandidate(turn, { ...reviewed, evidenceToolNames: turn.verifiedToolNames });
     await reviewCapturedCandidates(runtime, [candidate], ctx);
     pi.appendEntry("tsien-memory.model-review.v1", { turnKey: turn.turnKey, decision: "candidate", memoryId: candidate.id, model: runtime.config.capture.reviewer.model });
   } catch {
@@ -205,12 +210,38 @@ async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: 
 }
 
 async function reviewCapturedCandidates(runtime: RuntimeState, candidates: MemoryAggregate[], ctx: ExtensionContext): Promise<void> {
-  if (!ctx.hasUI || !runtime.config.capture.reviewCandidates) return;
+  const accepted: string[] = [];
+  const queued: MemoryAggregate[] = [];
   for (const candidate of candidates) {
+    const triage = await triageFor(runtime, candidate);
+    if (triage.decision === "hold") continue;
+    if (triage.decision === "needs_review") {
+      queued.push(candidate);
+      continue;
+    }
+    try {
+      await runtime.service.autoAccept(candidate.id, { profileId: runtime.scope.profileId, scopes: currentVisibleScopes(runtime), reasonCode: triage.reasonCode });
+      accepted.push(normalizeText(candidate.currentRevision?.content ?? "").slice(0, 80));
+    } catch (error) {
+      ctx.ui.notify(`自动采纳失败，已转入待审核：${errorText(error)}`, "warning");
+      queued.push(candidate);
+    }
+  }
+  if (accepted.length > 0) {
+    ctx.ui.setStatus("tsien-memory", "on");
+    ctx.ui.notify(`已自动记住 ${accepted.length} 条（可用 /memory undo 撤销）：${accepted.join("；")}`, "info");
+  }
+  if (queued.length === 0) return;
+  if (!ctx.hasUI || !runtime.config.capture.reviewCandidates) {
+    ctx.ui.setStatus("tsien-memory", `on · 待审核 ${queued.length}`);
+    return;
+  }
+  for (const candidate of queued) {
     const content = normalizeText(candidate.currentRevision?.content ?? "(empty candidate)").slice(0, 300);
+    const reviewTriage = await triageFor(runtime, candidate);
     let choice: string | undefined;
     try {
-      choice = await ctx.ui.select(`Memory candidate: ${content}`, ["Accept", "Reject", "Later"], { timeout: runtime.config.capture.reviewPromptTimeoutMs });
+      choice = await ctx.ui.select(`Memory candidate (${reviewTriage.explanation}): ${content}`, ["Accept", "Reject", "Later"], { timeout: runtime.config.capture.reviewPromptTimeoutMs });
     } catch {
       ctx.ui.notify("候选记忆审核已跳过，可稍后使用 /memory review。", "warning");
       continue;
@@ -224,6 +255,24 @@ async function reviewCapturedCandidates(runtime: RuntimeState, candidates: Memor
       ctx.ui.notify(`候选记忆审核失败：${errorText(error)}`, "warning");
     }
   }
+}
+
+async function triageFor(runtime: RuntimeState, candidate: MemoryAggregate): Promise<TriageResult> {
+  const inspected = await runtime.service
+    .inspectCandidate(candidate.id, { profileId: runtime.scope.profileId, scopes: currentVisibleScopes(runtime) })
+    .catch(() => undefined);
+  const memory = inspected?.memory ?? candidate;
+  return triageCandidate(
+    {
+      status: memory.status,
+      scopeType: memory.scope.type,
+      confidence: memory.confidence,
+      authority: inspected?.authority,
+      verified: inspected?.verified === true,
+      unresolvedConflicts: inspected?.unresolvedConflicts ?? 0,
+    },
+    runtime.config.capture.autoAccept,
+  );
 }
 
 function registerTools(pi: PiExtensionAPI, ensure: (ctx: ExtensionContext) => Promise<RuntimeState>, getRuntime: () => RuntimeState | undefined): void {
