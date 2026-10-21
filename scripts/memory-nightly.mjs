@@ -87,7 +87,7 @@ function reasonFor(row) {
   if (Number(row.conflicts) > 0) return `与 ${row.conflicts} 条记忆冲突`
   if (row.scope_type === 'global') return '想升级为全局记忆'
   if (Number(row.verified) !== 1) return '没有可核验来源'
-  return '来源已验证，可自动采纳'
+  return '来源已验证，建议直接保留为长期记忆'
 }
 
 const reusablePlan = reusable.map((row) => ({
