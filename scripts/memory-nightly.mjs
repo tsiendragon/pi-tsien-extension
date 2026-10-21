@@ -193,6 +193,105 @@ try {
   process.stdout.write(`nightly review: report written, proposals skipped (${error.message})\n`)
 }
 
+// ── Drafts ────────────────────────────────────────────────────────────────────────────────────
+// Nightly work stops at a reviewable draft. Nothing is published until a human approves it the
+// next day, and publishing is done by the dashboard, not by this job.
+const DRAFT_DIR = join(dataDir, 'drafts')
+const MANIFEST = join(DRAFT_DIR, 'manifest.json')
+
+function slugify(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 40) || 'memory'
+}
+
+function loadManifest() {
+  try {
+    const parsed = JSON.parse(readFileSync(MANIFEST, 'utf8'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function skillDraft(item) {
+  const title = item.content.split(/[。.\n]/u)[0].slice(0, 60)
+  return `---
+name: learned-${item.slug}
+description: ${title}。从实际使用中总结的可复用做法；触发词：${item.slug.replace(/-/gu, ' ')}。不适用于与该项目无关的场景。
+---
+# ${title}
+
+## 什么时候用
+
+${item.content}
+
+## 步骤
+
+1. 确认当前场景与这条经验的适用范围一致（记忆 ID: ${item.id}）。
+2. 按上面的做法执行；若与当前仓库/任务的实际约定冲突，以当前约定为准并停止套用。
+3. 执行后用可观察的结果验证：测试通过、命令输出符合预期，或用户明确确认。
+
+## 边界
+
+- 证据强度：${item.strength}（被检索 ${item.signals.observed} 次 · 被采用 ${item.signals.applied} 次 · 经验证 ${item.signals.verified} 次）。
+- 这是草稿：步骤需要人工补全为可执行动作后才能发布。
+`
+}
+
+function ruleDraft(item) {
+  return `<!-- pi-memory-rule:${item.slug}:begin -->
+### ${item.content.split(/[。.\n]/u)[0].slice(0, 60)}
+
+${item.content}
+
+证据强度：${item.strength}。来源记忆：${item.id}
+<!-- pi-memory-rule:${item.slug}:end -->
+`
+}
+
+function knowledgeDraft(item) {
+  return `# ${item.content.split(/[。.\n]/u)[0].slice(0, 60)}
+
+${item.content}
+
+- 类型：${item.suggestedType}
+- 证据强度：${item.strength}（被检索 ${item.signals.observed} 次 · 被采用 ${item.signals.applied} 次 · 经验证 ${item.signals.verified} 次）
+- 来源记忆：${item.id}
+- 由夜间总结生成，需人工确认后发布。
+`
+}
+
+mkdirSync(DRAFT_DIR, { recursive: true, mode: 0o700 })
+const manifest = loadManifest()
+const known = new Set(manifest.map((entry) => `${entry.memoryId}:${entry.type}`))
+let drafted = 0
+for (const item of reusablePlan.slice(0, 8)) {
+  const key = `${item.id}:${item.suggestedType}`
+  if (known.has(key)) continue
+  const slug = slugify(item.content)
+  const render = item.suggestedType === 'skill' ? skillDraft : item.suggestedType === 'rule' ? ruleDraft : knowledgeDraft
+  const path = join(DRAFT_DIR, `${item.suggestedType}-${slug}.md`)
+  writeFileSync(path, render({ ...item, slug }), { mode: 0o600 })
+  manifest.push({
+    slug: `${item.suggestedType}-${slug}`,
+    memoryId: item.id,
+    type: item.suggestedType,
+    title: item.content.split(/[。.\n]/u)[0].slice(0, 60),
+    strength: item.strength,
+    signals: item.signals,
+    draftPath: path,
+    status: 'draft',
+    createdAt: now,
+  })
+  known.add(key)
+  drafted += 1
+}
+writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
+process.stdout.write(`drafts: ${drafted} new, ${manifest.filter((entry) => entry.status === 'draft').length} waiting for approval\n`)
+
 db.close()
 process.stdout.write(`report: ${join(outDir, 'latest.md')}\n`)
 void readFileSync
