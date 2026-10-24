@@ -48,7 +48,8 @@ export type PiRpcProviderErrorCode =
   | "run_timeout"
   | "run_idle_timeout"
   | "run_wall_timeout"
-  | "model_call_budget";
+  | "model_call_budget"
+  | "tool_not_allowed";
 
 export class PiRpcProviderError extends Error {
   readonly name = "PiRpcProviderError";
@@ -834,6 +835,10 @@ export class PiRpcProcessProvider implements SubagentProvider {
       ...(this.loadContextFiles ? [] : ["--no-context-files"]),
       "--no-approve",
       ...(this.allowTools ? [] : ["--no-tools"]),
+      // Expose only the role's tools so the child never picks a tool it will be stopped for.
+      ...(this.allowTools && request.allowedTools?.length
+        ? ["--tools", request.allowedTools.join(",")]
+        : []),
       ...(model ? ["--model", model] : []),
       ...(thinking ? ["--thinking", thinking] : []),
       ...this.cliArgs,
@@ -1060,7 +1065,12 @@ export class PiRpcProcessProvider implements SubagentProvider {
               },
               isError: true,
             });
-            void session.client.abort().catch(() => undefined);
+            beginTimeout(
+              new PiRpcProviderError(
+                "tool_not_allowed",
+                `Subagent called tool "${event.toolName}", which this role does not allow (allowed: ${request.allowedTools.join(", ")}). The run was stopped.`,
+              ),
+            );
           } else {
             request.emit({
               type: "tool-start",

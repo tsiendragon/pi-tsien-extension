@@ -91,6 +91,22 @@ describe("PiRpcProcessProvider", () => {
     }
   });
 
+  it("exposes only the role's tools to the child process", async () => {
+    const test = harness();
+    try {
+      const result = await test.service.start({
+        task: "report-argv",
+        isolation: "process",
+        cwd: process.cwd(),
+        allowedTools: ["read", "bash"],
+      });
+      const args = JSON.parse(result.output) as string[];
+      expect(args[args.indexOf("--tools") + 1]).toBe("read,bash");
+    } finally {
+      await test.dispose();
+    }
+  });
+
   it("loads tools, extensions, skills, templates, and context by default", async () => {
     const test = harness();
     try {
