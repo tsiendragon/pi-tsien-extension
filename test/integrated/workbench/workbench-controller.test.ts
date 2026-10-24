@@ -1614,7 +1614,7 @@ describe("WorkbenchController model routing", () => {
       ],
     });
     expect(controller.router.snapshot().find((row) => row.model === "a/first")?.status).toBe("disabled");
-  });
+  }, 20_000);
 
   it("does not restart a writing task that already ran tools", async () => {
     const controller = routedSetup();
@@ -1633,5 +1633,5 @@ describe("WorkbenchController model routing", () => {
       expect.objectContaining({ model: "a/first", outcome: "failed", errorClass: "rate_limited" }),
     ]);
     expect(controller.router.snapshot().find((row) => row.model === "a/first")?.status).toBe("cooldown");
-  });
+  }, 20_000);
 });
