@@ -1,63 +1,11 @@
 import type { AgentThinkingLevel } from "./subagent-service.ts";
 
-export const DEFAULT_EXECUTION_MODEL = "azure-gateway/gpt-5.6-luna";
 export const DEFAULT_EXECUTION_THINKING: AgentThinkingLevel = "medium";
 export const DEFAULT_MAX_INPUT_BUDGET_BYTES = 9 * 1024 * 1024;
 export const DEFAULT_MAX_RESULT_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_RESULT_PREVIEW_CHARS = 2_000;
 
 export type ExecutionRole = "read_only" | "code" | "research";
-
-export interface ExecutionSelectionInput {
-  readonly taskModel?: string;
-  readonly workflowModel?: string;
-  readonly defaultModel?: string;
-  readonly parentModel?: string;
-  readonly inheritModel?: boolean;
-  readonly taskThinking?: AgentThinkingLevel;
-  readonly workflowThinking?: AgentThinkingLevel;
-  readonly role?: ExecutionRole;
-}
-
-export interface ExecutionSelection {
-  readonly model: string;
-  readonly modelSource: "task" | "workflow" | "default" | "inherited";
-  readonly thinking: AgentThinkingLevel;
-  readonly role: ExecutionRole;
-}
-
-export function executionDefaultModel(
-  environment: NodeJS.ProcessEnv = process.env,
-): string {
-  const configured = environment.PI_SUBAGENT_EXECUTION_MODEL?.trim();
-  return configured || DEFAULT_EXECUTION_MODEL;
-}
-
-export function selectExecution(
-  input: ExecutionSelectionInput,
-  environment: NodeJS.ProcessEnv = process.env,
-): ExecutionSelection {
-  const taskModel = input.taskModel?.trim();
-  const workflowModel = input.workflowModel?.trim();
-  const parentModel = input.parentModel?.trim();
-  const defaultModel = input.defaultModel?.trim() || executionDefaultModel(environment);
-  if (!defaultModel) throw new Error("No subagent execution model is configured.");
-  const model = taskModel ?? workflowModel ??
-    (input.inheritModel && parentModel ? parentModel : defaultModel);
-  const modelSource = taskModel
-    ? "task"
-    : workflowModel
-      ? "workflow"
-      : input.inheritModel && parentModel
-        ? "inherited"
-        : "default";
-  return Object.freeze({
-    model,
-    modelSource,
-    thinking: input.taskThinking ?? input.workflowThinking ?? DEFAULT_EXECUTION_THINKING,
-    role: input.role ?? "code",
-  });
-}
 
 export function assertExactModelReference(model: string, field = "model"): void {
   if (!/^[^/\s]+\/\S+$/.test(model)) {

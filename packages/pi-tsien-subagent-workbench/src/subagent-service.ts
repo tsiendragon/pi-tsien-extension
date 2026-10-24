@@ -57,6 +57,26 @@ export interface AgentResult {
   readonly model?: string;
   readonly isError: boolean;
   readonly errorMessage?: string;
+  /** Tool executions started during the run (used to decide whether a restart is safe). */
+  readonly toolCalls?: number;
+  /** Assistant messages completed during the run. */
+  readonly modelCalls?: number;
+  /** Model routing attempts recorded by the Workbench. */
+  readonly routing?: AgentRouting;
+}
+
+export interface AgentRoutingAttempt {
+  readonly model: string;
+  readonly outcome: "succeeded" | "failed" | "switched";
+  readonly errorClass?: string;
+  readonly error?: string;
+  readonly durationMs: number;
+}
+
+export interface AgentRouting {
+  readonly tier: string;
+  readonly finalModel?: string;
+  readonly attempts: readonly AgentRoutingAttempt[];
 }
 
 export interface ProviderAssistantBlock {
@@ -161,6 +181,10 @@ export interface ProviderRunRequest {
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
   readonly allowedTools?: readonly string[];
+  /** Per-run hard wall time; overrides the provider default when set. */
+  readonly hardWallTimeMs?: number;
+  /** Stop the run after this many assistant messages. */
+  readonly maxModelCalls?: number;
   readonly signal: AbortSignal;
   readonly emit: (event: ProviderEvent) => void;
 }
@@ -192,6 +216,8 @@ export interface StartAgentRequest {
   readonly nested?: boolean;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  readonly hardWallTimeMs?: number;
+  readonly maxModelCalls?: number;
 }
 
 export interface ChildSessionSnapshot {
@@ -634,6 +660,8 @@ export class SubagentService {
         model: request.model,
         thinking: request.thinking,
         allowedTools: request.allowedTools,
+        ...(request.hardWallTimeMs === undefined ? {} : { hardWallTimeMs: request.hardWallTimeMs }),
+        ...(request.maxModelCalls === undefined ? {} : { maxModelCalls: request.maxModelCalls }),
         signal: abort.signal,
         emit: (event) =>
           this.onProviderEvent(session, run, event, request.workflowId),

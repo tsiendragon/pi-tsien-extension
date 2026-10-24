@@ -11,6 +11,9 @@ export interface SavedWorkflowTask {
   readonly label?: string;
   readonly cwd?: string;
   readonly model?: string;
+  readonly tier?: "light" | "medium" | "heavy" | "ultra";
+  readonly role?: "read_only" | "code" | "research";
+  readonly timeoutMs?: number;
   readonly thinking?: AgentThinkingLevel;
   readonly context?: string;
   readonly inputs?: readonly string[];
@@ -137,6 +140,18 @@ function assertTask(value: unknown, location: string): asserts value is SavedWor
       !THINKING_LEVELS.has(value.thinking as AgentThinkingLevel))
   ) {
     throw new TypeError(`${location}.thinking is invalid.`);
+  }
+  if (value.tier !== undefined && !["light", "medium", "heavy", "ultra"].includes(String(value.tier))) {
+    throw new TypeError(`${location}.tier is invalid.`);
+  }
+  if (value.role !== undefined && !["read_only", "code", "research"].includes(String(value.role))) {
+    throw new TypeError(`${location}.role is invalid.`);
+  }
+  if (
+    value.timeoutMs !== undefined &&
+    (typeof value.timeoutMs !== "number" || !Number.isSafeInteger(value.timeoutMs) || value.timeoutMs <= 0)
+  ) {
+    throw new TypeError(`${location}.timeoutMs must be a positive integer.`);
   }
   if (
     value.inputs !== undefined &&

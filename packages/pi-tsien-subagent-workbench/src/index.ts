@@ -51,7 +51,8 @@ import {
 } from "./workflow-run-store.ts";
 import { compileWorkflowJavaScript } from "./workflow-javascript.ts";
 import { resultPreview } from "./runner-stage.ts";
-import type { SubagentTraceContext } from "./subagent-service.ts";
+import { ModelRouter, formatRouterSnapshot, type ModelCatalog } from "./model-router.ts";
+import type { AgentRouting, SubagentTraceContext } from "./subagent-service.ts";
 import { parseTraceContext } from "pi-tsien-trajectory-recorder/src/index.ts";
 const WORKBENCH_API_VERSION = 1 as const;
 const VIEW_ROWS = 18;
@@ -152,11 +153,25 @@ const AgentToolParams = Type.Object({
       description: "Working directory. Defaults to the main Agent cwd.",
     }),
   ),
+  tier: Type.Optional(
+    Type.Union([Type.Literal("light"), Type.Literal("medium"), Type.Literal("heavy"), Type.Literal("ultra")], {
+      description:
+        "Model tier from subagent-models.json: light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
+    }),
+  ),
   model: Type.Optional(
     Type.String({
       pattern: "^[^/\\s]+/\\S+$",
       description:
-        "Optional exact provider/model override. Short or fuzzy model names are rejected.",
+        "Optional exact provider/model from subagent-models.json, for pinning/debugging only. A pinned model does not fall back unless allowFallback=true. Prefer tier.",
+    }),
+  ),
+  allowFallback: Type.Optional(Type.Boolean()),
+  timeoutMs: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "Hard wall time for model work in ms. Defaults to config (72h) and is capped by timeouts.workHardMaxMs (14d). Long training should be waited on outside the model loop.",
     }),
   ),
   inheritModel: Type.Optional(Type.Boolean()),
@@ -227,11 +242,25 @@ const WorkflowTaskParams = Type.Object({
   ),
   label: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
+  tier: Type.Optional(
+    Type.Union([Type.Literal("light"), Type.Literal("medium"), Type.Literal("heavy"), Type.Literal("ultra")], {
+      description:
+        "Model tier from subagent-models.json: light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
+    }),
+  ),
+  role: Type.Optional(Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")])),
   model: Type.Optional(
     Type.String({
       pattern: "^[^/\\s]+/\\S+$",
       description:
-        "Optional exact provider/model override. Short or fuzzy model names are rejected.",
+        "Optional exact provider/model from subagent-models.json, for pinning/debugging only. A pinned model does not fall back unless allowFallback=true. Prefer tier.",
+    }),
+  ),
+  timeoutMs: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "Hard wall time for model work in ms. Defaults to config (72h) and is capped by timeouts.workHardMaxMs (14d). Long training should be waited on outside the model loop.",
     }),
   ),
   thinking: Type.Optional(ThinkingLevelParam),
@@ -737,6 +766,17 @@ async function openStatusWorkbench(
   }
 }
 
+/** Known and authenticated models from the Pi registry, used to skip unusable candidates early. */
+function modelCatalog(ctx: ExtensionContext | undefined): ModelCatalog | undefined {
+  const registry = ctx?.modelRegistry;
+  if (!registry) return undefined;
+  const ref = (model: { provider: string; id: string }): string => `${model.provider}/${model.id}`;
+  return {
+    known: new Set(registry.getAll().map(ref)),
+    available: new Set(registry.getAvailable().map(ref)),
+  };
+}
+
 function currentModel(ctx: ExtensionContext): string | undefined {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
@@ -785,7 +825,6 @@ function workflowRequestFromDefinition(
     label: definition.label,
     parameters: definition.parameters,
     cwd: ctx.cwd,
-    thinking: currentThinking(ctx),
     signal,
     traceContext,
     stages: definition.stages.map((stage) => ({
@@ -797,7 +836,10 @@ function workflowRequestFromDefinition(
         label: task.label,
         cwd: task.cwd || ctx.cwd,
         model: task.model,
-        thinking: task.thinking ?? currentThinking(ctx),
+        ...(task.tier ? { tier: task.tier } : {}),
+        ...(task.role ? { role: task.role } : {}),
+        ...(task.timeoutMs ? { timeoutMs: task.timeoutMs } : {}),
+        thinking: task.thinking,
         context: task.context,
         outputSchema: task.outputSchema,
         when: task.when,
@@ -870,6 +912,21 @@ function workflowToolOutput(result: WorkbenchWorkflowResult): string {
   return boundedToolOutput(lines.join("\n"));
 }
 
+/** One line naming the model that actually ran and any automatic switches, e.g. for /subagent-models audits. */
+function routingLine(result: unknown): string | undefined {
+  const routing = (result as { routing?: AgentRouting } | undefined)?.routing;
+  if (!routing) return undefined;
+  const switched = routing.attempts
+    .filter((attempt) => attempt.outcome === "switched")
+    .map((attempt) => `${attempt.model} (${attempt.errorClass ?? "error"})`);
+  return `[model ${routing.finalModel ?? "none"} · tier ${routing.tier}${switched.length ? ` · switched from ${switched.join(", ")}` : ""}]`;
+}
+
+function withRouting(result: unknown, text: string): string {
+  const line = routingLine(result);
+  return line ? `${line}\n${text}` : text;
+}
+
 function jobOutput(job: WorkbenchJobSnapshot): string | undefined {
   const result = job.result;
   if (!result || typeof result !== "object") return undefined;
@@ -880,7 +937,7 @@ function jobOutput(job: WorkbenchJobSnapshot): string | undefined {
   ) {
     return workflowToolOutput(result as WorkbenchWorkflowResult);
   }
-  return typeof record.output === "string" ? record.output : undefined;
+  return typeof record.output === "string" ? withRouting(result, record.output) : undefined;
 }
 
 function formatJobQuery(
@@ -956,6 +1013,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
   if (isChildProcess) registerChildMultiTool(pi);
   let controller: WorkbenchController | undefined;
   let activeContext: ExtensionContext | undefined;
+  const modelRouter = new ModelRouter({ catalog: () => modelCatalog(activeContext) });
   const deliverPendingRunWarnings = (): void => {
     const current = controller;
     if (!activeContext || !current || typeof pi.sendMessage !== "function") return;
@@ -1015,6 +1073,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     controller ??= new WorkbenchController(installedRuntime, {
       onJobSettled: () => deliverPendingCompletions(),
       onRunWarning: () => deliverPendingRunWarnings(),
+      router: modelRouter,
     });
     return controller;
   };
@@ -1085,7 +1144,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_start",
       label: "Subagent Workbench",
       description:
-        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Model precedence is task override, workflow model, then PI_SUBAGENT_EXECUTION_MODEL or azure-gateway/gpt-5.6-luna; inheritModel must be explicit. Thinking defaults to medium.",
+        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Choose a tier (light/medium/heavy/ultra) by task difficulty; the Workbench picks the first usable model of that tier from subagent-models.json and switches to the next candidate on rate-limit, quota, overload, or availability errors. Omit tier to use the role default. Pass model only to pin a configured model. Use /subagent-models to inspect tiers.",
       promptSnippet:
         "Delegate bounded independent work to a full-capability process subagent, normally in background.",
       executionMode: "parallel",
@@ -1105,7 +1164,11 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               label: params.label,
               cwd: params.cwd || ctx.cwd,
               model: params.model,
+              ...(params.tier ? { tier: params.tier } : {}),
+              ...(params.allowFallback ? { allowFallback: true } : {}),
+              ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
               inheritModel: params.inheritModel,
+              ...(currentModel(ctx) ? { parentModel: currentModel(ctx) } : {}),
               role: params.role,
               retainSession: params.retainSession,
               thinking: params.thinking,
@@ -1140,9 +1203,12 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               {
                 type: "text",
                 text: boundedToolOutput(
-                  result.isError
-                    ? `Subagent failed: ${result.errorMessage || result.output}`
-                    : result.output,
+                  withRouting(
+                    result,
+                    result.isError
+                      ? `Subagent failed: ${result.errorMessage || result.output}`
+                      : result.output,
+                  ),
                 ),
               },
             ],
@@ -1151,6 +1217,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               sessionId: result.sessionId,
               runId: result.runId,
               model: result.model,
+              ...(result.routing ? { routing: result.routing } : {}),
               usage: result.usage,
               ...resultPreview(result.output),
             },
@@ -1173,7 +1240,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow",
       label: "Subagent Workflow",
       description:
-        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs. Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow. Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach. Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates. Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded. Use exact provider/model task overrides; omit model to use PI_SUBAGENT_EXECUTION_MODEL or azure-gateway/gpt-5.6-luna. Set inheritModel only when parent-model inheritance is intended; never pass fuzzy short names. Use dryRun to preview dynamic or saved definitions without creating work. Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed. Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful. Prefer background; wait only when correctness or delivery depends on the result.",
+        "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs. Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow. Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach. Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates. Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded. Give each task a tier (light/medium/heavy/ultra) and role; the Workbench routes it to the first usable model of that tier from subagent-models.json and switches candidates on rate-limit/quota/availability errors. Pass model only to pin a configured model. Use dryRun to preview dynamic or saved definitions without creating work. Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed. Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful. Prefer background; wait only when correctness or delivery depends on the result.",
       promptSnippet:
         "Run recoverable single-task or staged subagent workflows with explicit prior-task handoffs.",
       executionMode: "parallel",
@@ -1652,6 +1719,27 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     if (isDashboard) installedRuntime.dispose();
   });
 
+  pi.registerCommand("subagent-models", {
+    description: "Show subagent model tiers and candidate status; subcommands: reload, enable <provider/model>",
+    handler: async (args, ctx) => {
+      activeContext ??= ctx;
+      const [action = "", target] = args.trim().split(/\s+/);
+      try {
+        if (action === "enable" && target) {
+          ctx.ui.notify(modelRouter.enable(target) ? `Re-enabled ${target}.` : `${target} has no recorded state.`, "info");
+        } else if (action === "reload") {
+          modelRouter.config();
+        } else if (action) {
+          ctx.ui.notify("Usage: /subagent-models [reload|enable <provider/model>]", "warning");
+          return;
+        }
+        ctx.ui.notify(formatRouterSnapshot(modelRouter), modelRouter.warning() ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("subagent-workbench", {
     description: "Open or control the Subagent Conversation Workbench",
     handler: async (args, ctx) => {
@@ -1675,15 +1763,11 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
           ctx.ui.notify("Usage: /subagent-workbench start <task>", "warning");
           return;
         }
-        const model = ctx.model
-          ? `${ctx.model.provider}/${ctx.model.id}`
-          : undefined;
         const result = await runtime.dispatch({
           type: "start-agent",
           task,
           label: task.slice(0, 48),
           cwd: ctx.cwd,
-          ...(model ? { model } : {}),
         });
         ctx.ui.notify(
           result.ok

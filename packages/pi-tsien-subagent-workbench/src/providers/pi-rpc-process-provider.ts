@@ -47,7 +47,8 @@ export type PiRpcProviderErrorCode =
   | "rpc_command_failed"
   | "run_timeout"
   | "run_idle_timeout"
-  | "run_wall_timeout";
+  | "run_wall_timeout"
+  | "model_call_budget";
 
 export class PiRpcProviderError extends Error {
   readonly name = "PiRpcProviderError";
@@ -668,7 +669,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
         ? undefined
         : positiveInteger(
             "hardRunWallTimeMs",
-            options.hardRunWallTimeMs ?? 24 * 60 * 60_000,
+            options.hardRunWallTimeMs ?? 72 * 60 * 60_000,
           );
     this.timeoutAbortGraceMs = positiveInteger(
       "timeoutAbortGraceMs",
@@ -900,6 +901,8 @@ export class PiRpcProcessProvider implements SubagentProvider {
     readonly model?: string;
     readonly isError: boolean;
     readonly errorMessage?: string;
+    readonly toolCalls: number;
+    readonly modelCalls: number;
   }> {
     const prompt =
       request.contextMode === "explicit" && request.context
@@ -915,6 +918,8 @@ export class PiRpcProcessProvider implements SubagentProvider {
       let usage = EMPTY_USAGE;
       let stopReason = "stop";
       let providerError: string | undefined;
+      let toolCalls = 0;
+      let modelCalls = 0;
       let abortSent = false;
       const runStartedAt = Date.now();
       let lastProgressAt = runStartedAt;
@@ -1043,6 +1048,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
             });
           }
         } else if (event.type === "tool_execution_start" && event.toolName) {
+          toolCalls += 1;
           const toolCallId = event.toolCallId ?? `${request.runId}:${event.toolName}`;
           if (request.allowedTools && !request.allowedTools.includes(event.toolName)) {
             request.emit({
@@ -1087,6 +1093,15 @@ export class PiRpcProcessProvider implements SubagentProvider {
         ) {
           output = assistantText(event.message);
           usage = addUsage(usage, event.message);
+          modelCalls += 1;
+          if (request.maxModelCalls !== undefined && modelCalls >= request.maxModelCalls) {
+            beginTimeout(
+              new PiRpcProviderError(
+                "model_call_budget",
+                `Pi RPC Run ${request.runId} reached its model call budget (${request.maxModelCalls} calls); stopped so the main agent can decide whether to continue.`,
+              ),
+            );
+          }
           stopReason = event.message.stopReason ?? stopReason;
           providerError = event.message.errorMessage;
           request.emit({
@@ -1139,6 +1154,8 @@ export class PiRpcProcessProvider implements SubagentProvider {
               output,
               usage,
               ...(model ? { model } : {}),
+              toolCalls,
+              modelCalls,
               isError:
                 stopReason === "error" ||
                 stopReason === "aborted" ||
@@ -1180,8 +1197,8 @@ export class PiRpcProcessProvider implements SubagentProvider {
       heartbeatTimer.unref?.();
       armIdleWarning();
       armWallWarning();
-      if (this.hardRunWallTimeMs !== undefined) {
-        const hardRunWallTimeMs = this.hardRunWallTimeMs;
+      const hardRunWallTimeMs = request.hardWallTimeMs ?? this.hardRunWallTimeMs;
+      if (hardRunWallTimeMs !== undefined) {
         hardWallTimer = setTimeout(
           () =>
             beginTimeout(

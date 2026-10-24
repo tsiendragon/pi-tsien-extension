@@ -17,6 +17,8 @@ import {
   SubagentExecutionError,
   SubagentService,
   type AgentResult,
+  type AgentRoutingAttempt,
+  type StartAgentRequest,
   type AgentThinkingLevel,
   type AgentUsage,
   type ProviderEvent,
@@ -24,12 +26,20 @@ import {
   type SubagentTraceContext,
 } from "./subagent-service.ts";
 import {
+  DEFAULT_EXECUTION_THINKING,
   assertExecutionBudget,
-  executionDefaultModel,
   roleToolNames,
-  selectExecution,
   type ExecutionRole,
 } from "./runner-stage.ts";
+import {
+  MAX_SWITCHES_PER_TASK,
+  ModelRouter,
+  RouterExhaustedError,
+  STARTUP_CLASSES,
+  classifyError,
+  isSwitchable,
+  type Tier,
+} from "./model-router.ts";
 import {
   evaluateWorkflowWhen,
   resolveWorkflowForeach,
@@ -138,6 +148,8 @@ export interface WorkbenchControllerOptions {
   readonly onJobSettled?: (job: WorkbenchJobSnapshot) => void;
   /** Invoked when a Run crosses a soft idle or wall-time threshold. */
   readonly onRunWarning?: (warning: WorkbenchRunWarning) => void;
+  /** Model routing from subagent-models.json; defaults to the global config file. */
+  readonly router?: ModelRouter;
 }
 
 export interface WorkbenchSubmission<T> {
@@ -160,6 +172,14 @@ export interface WorkbenchAgentRequest {
   readonly thinking?: AgentThinkingLevel;
   readonly workflowModel?: string;
   readonly inheritModel?: boolean;
+  /** Model of the calling session; only used when inheritModel is allowed by config. */
+  readonly parentModel?: string;
+  readonly tier?: Tier;
+  readonly workflowTier?: Tier;
+  /** Allow switching away from an explicit model to the rest of its tier. */
+  readonly allowFallback?: boolean;
+  /** Per-task hard wall time for model work, capped by config timeouts.workHardMaxMs. */
+  readonly timeoutMs?: number;
   readonly role?: ExecutionRole;
   readonly workflowInputs?: readonly string[];
   readonly retainSession?: boolean;
@@ -197,6 +217,7 @@ export interface WorkbenchWorkflowRequest {
   readonly stages: readonly WorkbenchWorkflowStageRequest[];
   readonly cwd: string;
   readonly model?: string;
+  readonly tier?: Tier;
   readonly thinking?: AgentThinkingLevel;
   readonly parameters?: Readonly<Record<string, unknown>>;
   readonly signal?: AbortSignal;
@@ -388,6 +409,7 @@ function reusableWorkflowRequest(
       ? { ...request.traceContext }
       : undefined,
     model: request.model,
+    tier: request.tier,
     thinking: request.thinking,
     parameters: request.parameters
       ? structuredClone(request.parameters)
@@ -399,6 +421,9 @@ function reusableWorkflowRequest(
         label: task.label,
         cwd: task.cwd,
         model: task.model,
+        tier: task.tier,
+        role: task.role,
+        timeoutMs: task.timeoutMs,
         thinking: task.thinking,
         context: task.context,
         key: task.key,
@@ -682,6 +707,7 @@ function tailWithinBytes(text: string, limit: number): string {
 
 export class WorkbenchController {
   readonly provider: PiRpcProcessProvider;
+  readonly router: ModelRouter;
   readonly service: SubagentService;
 
   private readonly conversations = new Map<string, MutableConversation>();
@@ -728,6 +754,7 @@ export class WorkbenchController {
     this.onRunWarning = options.onRunWarning;
     this.provider =
       options.provider ?? new PiRpcProcessProvider(options.providerOptions);
+    this.router = options.router ?? new ModelRouter();
     this.service = new SubagentService(runtime);
     this.service.providers.register(this.provider);
     this.unsubscribeService = this.service.subscribe((event) =>
@@ -738,28 +765,114 @@ export class WorkbenchController {
     );
   }
 
+  /**
+   * Start one subagent run through the model router: pick the first usable candidate of the tier,
+   * and on rate/quota/availability errors switch to the next candidate when a restart is safe.
+   */
+  private async startRouted(
+    base: Omit<StartAgentRequest, "model" | "thinking" | "allowedTools">,
+    request: WorkbenchAgentRequest,
+  ): Promise<AgentResult> {
+    const role = request.role ?? "code";
+    const config = this.router.config();
+    const explicitModel = request.model ?? request.workflowModel;
+    const plan = this.router.plan({
+      role,
+      ...(request.tier ?? request.workflowTier ? { tier: request.tier ?? request.workflowTier } : {}),
+      ...(explicitModel ? { model: explicitModel } : {}),
+      ...(request.allowFallback ? { allowFallback: true } : {}),
+      ...(request.inheritModel ? { inheritModel: true } : {}),
+      ...(request.parentModel ? { parentModel: request.parentModel } : {}),
+      ...(request.thinking ? { thinking: request.thinking } : {}),
+    });
+    if (request.timeoutMs !== undefined && (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs <= 0)) {
+      throw new TypeError("timeoutMs must be a positive integer.");
+    }
+    const hardWallTimeMs = Math.min(request.timeoutMs ?? config.workHardMs, config.workHardMaxMs);
+    const excluded = new Set<string>();
+    const attempts: AgentRoutingAttempt[] = [];
+    const describe = (): string =>
+      attempts.map((attempt) => `${attempt.model}:${attempt.errorClass ?? attempt.outcome}`).join(" -> ");
+    const withRouting = (result: AgentResult, finalModel: string): AgentResult =>
+      Object.freeze({
+        ...result,
+        routing: Object.freeze({ tier: plan.tier, finalModel, attempts: Object.freeze([...attempts]) }),
+      });
+    for (let switches = 0; ; switches++) {
+      let lease;
+      try {
+        lease = await this.router.acquire(plan, excluded, base.signal);
+      } catch (error) {
+        if (error instanceof RouterExhaustedError && attempts.length > 0) {
+          throw new RouterExhaustedError(`${error.message} Attempts: ${describe()}.`);
+        }
+        throw error;
+      }
+      const startedAt = Date.now();
+      try {
+        let result: AgentResult;
+        try {
+          result = await this.service.start({
+            ...base,
+            model: lease.model,
+            thinking: lease.thinking ?? DEFAULT_EXECUTION_THINKING,
+            allowedTools: roleToolNames(role),
+            hardWallTimeMs,
+            maxModelCalls: config.maxModelCallsPerTask,
+          });
+        } catch (error) {
+          if (base.signal?.aborted) throw error;
+          const message = errorMessage(error);
+          const { errorClass, retryAfterMs } = classifyError(message);
+          const canSwitch =
+            isSwitchable(errorClass) &&
+            (role !== "code" || STARTUP_CLASSES.has(errorClass)) &&
+            switches < MAX_SWITCHES_PER_TASK;
+          attempts.push({ model: lease.model, outcome: canSwitch ? "switched" : "failed", errorClass, error: message.slice(0, 300), durationMs: Date.now() - startedAt });
+          if (isSwitchable(errorClass)) this.router.reportFailure(lease.model, errorClass, message, retryAfterMs);
+          if (!canSwitch) {
+            if (attempts.length === 1) throw error;
+            throw new Error(`${message} [model attempts: ${describe()}]`, { cause: error });
+          }
+          excluded.add(lease.model);
+          continue;
+        }
+        if (!result.isError) {
+          this.router.reportSuccess(lease.model);
+          attempts.push({ model: lease.model, outcome: "succeeded", durationMs: Date.now() - startedAt });
+          return withRouting(result, lease.model);
+        }
+        const message = result.errorMessage ?? "Subagent run failed.";
+        const { errorClass, retryAfterMs } = classifyError(message);
+        const canSwitch =
+          !base.signal?.aborted &&
+          isSwitchable(errorClass) &&
+          (role !== "code" || (result.toolCalls ?? 0) === 0) &&
+          switches < MAX_SWITCHES_PER_TASK;
+        attempts.push({ model: lease.model, outcome: canSwitch ? "switched" : "failed", errorClass, error: message.slice(0, 300), durationMs: Date.now() - startedAt });
+        if (isSwitchable(errorClass)) this.router.reportFailure(lease.model, errorClass, message, retryAfterMs);
+        if (!canSwitch) return withRouting(result, lease.model);
+        excluded.add(lease.model);
+        await this.provider
+          .closeSession(result.sessionId, `Switching subagent model after ${errorClass}.`)
+          .catch(() => undefined);
+      } finally {
+        lease.release();
+      }
+    }
+  }
+
   async runAgent(request: WorkbenchAgentRequest): Promise<AgentResult> {
     if (this.disposed) throw new Error("Workbench controller is disposed.");
-    const selection = selectExecution({
-      taskModel: request.model,
-      workflowModel: request.workflowModel,
-      inheritModel: request.inheritModel,
-      parentModel: undefined,
-      taskThinking: request.thinking,
-      role: request.role,
-    });
-    assertCanonicalModelReference(selection.model, "Agent model");
+    assertCanonicalModelReference(request.model, "Agent model");
     assertExecutionBudget(request.task, request.context, request.workflowInputs);
     await this.ensureProviderCapacity(1);
-    return this.service.start({
+    return this.startRouted({
       task: request.task,
       label: request.label,
       isolation: "process",
       foreground: request.foreground ?? true,
       cwd: request.cwd,
-      model: selection.model,
-      thinking: selection.thinking,
-      allowedTools: roleToolNames(selection.role),
       parentId: request.parentId,
       traceContext: request.traceContext,
       signal: request.signal
@@ -768,7 +881,7 @@ export class WorkbenchController {
       ...(request.context
         ? { contextMode: "explicit" as const, context: request.context }
         : {}),
-    });
+    }, request);
   }
 
   submitAgent(
@@ -1681,18 +1794,12 @@ export class WorkbenchController {
                   outputs,
                 );
                 try {
-                  const selection = selectExecution({
-                    taskModel: task.model,
-                    workflowModel: request.model,
-                    taskThinking: task.thinking,
-                    workflowThinking: request.thinking,
-                  });
                   assertExecutionBudget(
                     resolvedTask,
                     explicitContext,
                     task.inputs?.map((key) => outputs.get(key)?.summary ?? "") ?? [],
                   );
-                  const result = await this.service.start({
+                  const result = await this.startRouted({
                     task: resolvedTask,
                     label: task.foreach
                       ? `${resolvedLabel} [${index + 1}]`
@@ -1700,9 +1807,6 @@ export class WorkbenchController {
                     isolation: "process",
                     foreground: false,
                     cwd: task.cwd || request.cwd,
-                    model: selection.model,
-                    thinking: selection.thinking,
-                    allowedTools: roleToolNames(selection.role),
                     parentId: task.foreach
                       ? `${taskResult.id}:iteration:${index + 1}`
                       : taskResult.id,
@@ -1725,6 +1829,12 @@ export class WorkbenchController {
                           context: explicitContext,
                         }
                       : {}),
+                  }, {
+                    ...task,
+                    cwd: task.cwd || request.cwd,
+                    workflowModel: request.model,
+                    workflowTier: request.tier,
+                    thinking: task.thinking ?? request.thinking,
                   });
                   let json: unknown;
                   try {
@@ -2169,16 +2279,22 @@ export class WorkbenchController {
     const invalidTask = this.invalidTask(command.task);
     if (invalidTask) return { ok: false, error: invalidTask };
     if (!command.cwd?.trim()) return { ok: false, error: "invalid_cwd" };
-    this.launch({
-      task: command.task,
-      label: command.label,
-      isolation: "process",
-      foreground: true,
-      cwd: command.cwd,
-      model: command.model,
-      thinking: command.thinking,
-      signal: this.lifetimeAbort.signal,
-    });
+    this.launch(
+      {
+        task: command.task,
+        label: command.label,
+        isolation: "process",
+        foreground: true,
+        cwd: command.cwd,
+        signal: this.lifetimeAbort.signal,
+      },
+      {
+        task: command.task,
+        cwd: command.cwd,
+        ...(command.model ? { model: command.model } : {}),
+        ...(command.thinking ? { thinking: command.thinking } : {}),
+      },
+    );
     return { ok: true, accepted: "volatile" };
   }
 
@@ -2219,9 +2335,12 @@ export class WorkbenchController {
     return undefined;
   }
 
-  private launch(request: Parameters<SubagentService["start"]>[0]): void {
+  private launch(
+    request: Parameters<SubagentService["start"]>[0],
+    routing?: WorkbenchAgentRequest,
+  ): void {
     void this.ensureProviderCapacity(1)
-      .then(() => this.service.start(request))
+      .then(() => (routing ? this.startRouted(request, routing) : this.service.start(request)))
       .catch((error: unknown) => {
         if (this.disposed) return;
         const conversation =
