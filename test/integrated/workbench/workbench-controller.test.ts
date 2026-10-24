@@ -1,3 +1,5 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +12,14 @@ import {
   WorkbenchController,
   type WorkbenchRunWarning,
 } from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
+import { ModelRouter } from "pi-tsien-subagent-workbench/src/model-router.ts";
+
+/** Hermetic router: no config file, one legacy model, explicit models allowed as-is. */
+const testRouter = (): ModelRouter =>
+  new ModelRouter({
+    configPath: path.join(path.dirname(fileURLToPath(import.meta.url)), "missing-subagent-models.json"),
+    environment: { PI_SUBAGENT_EXECUTION_MODEL: "fake/fake-rpc" },
+  });
 
 const fixture = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -43,6 +53,7 @@ function setup(
   });
   const controller = new WorkbenchController(runtime, {
     provider,
+    router: testRouter(),
     maxTranscriptBytes,
     ...(stalledAfterMs === undefined ? {} : { stalledAfterMs }),
     ...(onRunWarning === undefined ? {} : { onRunWarning }),
@@ -408,6 +419,7 @@ describe("WorkbenchController", () => {
     expect(controller.provider.snapshot().sessions).toBe(0);
 
     const replacement = new WorkbenchController(runtime, {
+      router: testRouter(),
       provider: new PiRpcProcessProvider({
         executable: process.execPath,
         baseArgs: [fixture],
@@ -1561,5 +1573,65 @@ describe("WorkbenchController", () => {
       status: "cancelled",
     });
     expect(runtime.getSnapshot().workflows.items[0]?.status).toBe("cancelled");
+  });
+});
+
+describe("WorkbenchController model routing", () => {
+  function routedSetup(): WorkbenchController {
+    const configPath = path.join(mkdtempSync(path.join(os.tmpdir(), "routing-")), "subagent-models.json");
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      roles: { read_only: "light", research: "medium", code: "light" },
+      tiers: { light: { candidates: [{ model: "a/first" }, { model: "b/second" }] } },
+    }));
+    const controller = new WorkbenchController(new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 }), {
+      provider: new PiRpcProcessProvider({ executable: process.execPath, baseArgs: [fixture], shutdownTimeoutMs: 500 }),
+      router: new ModelRouter({ configPath }),
+    });
+    controllers.push(controller);
+    return controller;
+  }
+
+  it("switches to the next candidate when the first model is missing at startup", async () => {
+    const controller = routedSetup();
+    const models: (string | undefined)[] = [];
+    const originalStart = controller.service.start.bind(controller.service);
+    vi.spyOn(controller.service, "start").mockImplementation((request) => {
+      models.push(request.model);
+      if (request.model === "a/first") {
+        return Promise.reject(new Error('Pi RPC process exited; stderr: Error: Model "a/first" not found.'));
+      }
+      return originalStart(request);
+    });
+    const result = await controller.runAgent({ task: "hello", cwd: process.cwd(), role: "read_only" });
+    expect(models).toEqual(["a/first", "b/second"]);
+    expect(result.routing).toMatchObject({
+      tier: "light",
+      finalModel: "b/second",
+      attempts: [
+        { model: "a/first", outcome: "switched", errorClass: "not_found" },
+        { model: "b/second", outcome: "succeeded" },
+      ],
+    });
+    expect(controller.router.snapshot().find((row) => row.model === "a/first")?.status).toBe("disabled");
+  });
+
+  it("does not restart a writing task that already ran tools", async () => {
+    const controller = routedSetup();
+    const models: (string | undefined)[] = [];
+    vi.spyOn(controller.service, "start").mockImplementation(async (request) => {
+      models.push(request.model);
+      return {
+        sessionId: "s", runId: "r", output: "",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        isError: true, errorMessage: "429 Too Many Requests", toolCalls: 2,
+      };
+    });
+    const result = await controller.runAgent({ task: "edit", cwd: process.cwd(), role: "code" });
+    expect(models).toEqual(["a/first"]);
+    expect(result.routing?.attempts).toEqual([
+      expect.objectContaining({ model: "a/first", outcome: "failed", errorClass: "rate_limited" }),
+    ]);
+    expect(controller.router.snapshot().find((row) => row.model === "a/first")?.status).toBe("cooldown");
   });
 });
