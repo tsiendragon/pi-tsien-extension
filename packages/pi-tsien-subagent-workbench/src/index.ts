@@ -175,7 +175,12 @@ const AgentToolParams = Type.Object({
     }),
   ),
   inheritModel: Type.Optional(Type.Boolean()),
-  role: Type.Optional(Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")])),
+  role: Type.Optional(
+    Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")], {
+      description:
+        "What the child may touch. read_only: read + knowledge search, no writes, no shell, no web. code: read/write/edit/bash/run_code, but no web search and no knowledge base. research: read + knowledge search + web, no writes and no shell. Omit for a writing task only; the default is code, which grants write access.",
+    }),
+  ),
   retainSession: Type.Optional(Type.Boolean()),
   thinking: Type.Optional(ThinkingLevelParam),
   context: Type.Optional(
@@ -248,7 +253,12 @@ const WorkflowTaskParams = Type.Object({
         "Model tier from subagent-models.json: light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
     }),
   ),
-  role: Type.Optional(Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")])),
+  role: Type.Optional(
+    Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")], {
+      description:
+        "What this task may touch. read_only: read + knowledge search, no writes, no shell, no web. code: read/write/edit/bash/run_code, but no web search and no knowledge base. research: read + knowledge search + web, no writes and no shell. Omit only when the task must write; the default is code.",
+    }),
+  ),
   model: Type.Optional(
     Type.String({
       pattern: "^[^/\\s]+/\\S+$",
@@ -1144,7 +1154,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_start",
       label: "Subagent Workbench",
       description:
-        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Choose a tier (light/medium/heavy/ultra) by task difficulty; the Workbench picks the first usable model of that tier from subagent-models.json and switches to the next candidate on rate-limit, quota, overload, or availability errors. Omit tier to use the role default. Pass model only to pin a configured model. Use /subagent-models to inspect tiers.",
+        "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Use it for one independently verifiable surface; call it several times in one message for independent parallel work, or use subagent_workflow when later stages depend on earlier results. Choose a tier (light/medium/heavy/ultra) by task difficulty; the Workbench picks the first usable model of that tier from subagent-models.json and switches to the next candidate on rate-limit, quota, overload, or availability errors. Set role so the child only gets the tools it needs: read_only for analysis, code for edits and commands, research for web and knowledge search; omitting role grants write access. Omit tier to use the role default. Pass model only to pin a configured model. Use /subagent-models to inspect tiers.",
       promptSnippet:
         "Delegate bounded independent work to a full-capability process subagent, normally in background.",
       executionMode: "parallel",
