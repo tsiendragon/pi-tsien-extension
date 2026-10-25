@@ -485,6 +485,46 @@ test("a plain 确认 typed in the chat approves the asked request without a popu
   assert.equal((executed[0].body as { confirmed?: boolean }).confirmed, true);
 });
 
+test("a typed 确认 still approves the request after the model re-words it", async (t) => {
+  const f = await fixture(t);
+  const h = harness(f.filePath);
+  await h.emit("session_start");
+  // A record whose text the model re-writes between attempts; only the payload shown to the user may run.
+  const shown = { objectRef: "task-journal:eu-fake-id-service", title: "EU Fake-ID 项目起点", type: "progress", description: "原样内容，用户看到的版本", attachmentIds: ["5432a199-1c5e-4802-9850-10d5ebd5b4a7"] };
+  // The gateway refuses an unconfirmed write exactly like the real one does.
+  const gateway = (_req: IncomingMessage, res: ServerResponse, received: Received) => {
+    if ((received.body as { confirmed?: boolean })?.confirmed === true) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, result: "gateway-result" }));
+      return;
+    }
+    res.writeHead(403).end(JSON.stringify({ error: "explicit_operation_confirmation_required" }));
+  };
+  f.respondWith(gateway);
+  await h.emit("before_agent_start", { prompt: "帮我为 EuFakeID 的时间先加一个截图" });
+  h.confirm(false);
+  await assert.rejects(h.execute("event_append", shown), /操作确认未通过/);
+  assert.equal(h.confirmations, 1);
+  // Turn 2: user types 确认 and the model retries with re-worded text — no second popup, and the write
+  // that runs still carries the description the user actually approved.
+  f.received.length = 0;
+  f.respondWith(gateway);
+  await h.emit("before_agent_start", { prompt: "确认" });
+  await h.execute("event_append", { ...shown, description: "重述后的内容，措辞不同" });
+  assert.equal(h.confirmations, 1);
+  // Two requests reach the gateway: the refused unconfirmed one, then the confirmed retry.
+  const executed = f.received.filter(item => (item.body as { request?: { operation?: string }; confirmed?: boolean })?.request?.operation === "record" && (item.body as { confirmed?: boolean }).confirmed === true);
+  assert.equal(executed.length, 1);
+  const sent = executed[0].body as { request: { args: Record<string, unknown> }; confirmed?: boolean };
+  assert.equal(sent.confirmed, true);
+  assert.equal(sent.request.args.description, shown.description);
+  assert.deepEqual(sent.request.args.attachmentIds, shown.attachmentIds);
+  // One confirmation authorizes one write: the next record needs a fresh popup.
+  h.confirm(false);
+  await assert.rejects(h.execute("event_append", { ...shown, title: "另一条记录" }), /操作确认未通过/);
+  assert.equal(h.confirmations, 2);
+});
+
 test("a typed 确认 never authorizes a different or ambiguous operation", async (t) => {
   const f = await fixture(t);
   const h = harness(f.filePath);
@@ -521,6 +561,30 @@ test("confirmation text is specific and never exposes credentials", async (t) =>
   assert.match(h.confirmationTexts[0], /redacted/);
   assert.equal(h.confirmationTexts[0].includes(f.credentials.token), false);
   assert.equal(h.confirmationTexts[0].includes(f.filePath), false);
+});
+
+test("a confirmation carries a machine-readable target trailer the dashboard can pin to a page", async (t) => {
+  const f = await fixture(t);
+  const h = harness(f.filePath);
+  await h.emit("session_start");
+  f.respondWith((_req, res) => res.writeHead(403).end(JSON.stringify({ error: "explicit_operation_confirmation_required" })));
+  await h.emit("before_agent_start", { prompt: "帮我为 EuFakeID 的时间先加一个截图" });
+  h.confirm(false);
+  await assert.rejects(
+    h.execute("event_append", { objectRef: "task-journal:eu-fake-id-service", title: "EU Fake-ID 项目起点", type: "progress", description: "记录一次", attachmentIds: ["5432a199-1c5e-4802-9850-10d5ebd5b4a7"] }),
+    /操作确认未通过/,
+  );
+  const lines = h.confirmationTexts[0].split("\n");
+  const trailer = lines.at(-1) ?? "";
+  assert.ok(trailer.startsWith("[supervisor-confirm]"), `missing trailer: ${trailer}`);
+  const marker = JSON.parse(trailer.slice("[supervisor-confirm]".length)) as { op?: string; ref?: string; sum?: string };
+  assert.equal(marker.op, "record");
+  assert.equal(marker.ref, "task-journal:eu-fake-id-service");
+  // The headline names the write, not the boilerplate question.
+  assert.equal(marker.sum, "EU Fake-ID 项目起点");
+  // The trailer must never carry credentials, and it is the only machine line in the message.
+  assert.equal(h.confirmationTexts[0].includes(f.credentials.token), false);
+  assert.equal(lines.filter(line => line.startsWith("[supervisor-confirm]")).length, 1);
 });
 
 test("automatic patrol cannot open completion or destructive correction confirmations", async (t) => {
