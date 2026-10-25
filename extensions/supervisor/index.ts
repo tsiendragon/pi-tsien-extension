@@ -235,10 +235,56 @@ export function isPlainRefusal(prompt: string): boolean {
   return shortReply(userWords(prompt), REFUSAL_PATTERN);
 }
 
-/** Identity of a confirmation request: same operation and same payload (ignoring the per-call requestId). */
-export function confirmationKey(operation: string, args: Record<string, unknown>): string {
+/**
+ * Identity of the object a confirmation is about.
+ *
+ * A bare 「确认」 must answer the request the user actually saw. Matching the whole payload failed in
+ * practice: the model re-words a record's description between attempts, so the same write came back
+ * as a brand new request and the confirmation was silently lost. Operation + target stays stable
+ * across re-wording, and the write that finally runs is the payload the user was shown.
+ */
+export function confirmationTarget(operation: string, args: Record<string, unknown>): string {
+  const parts = [operation];
+  for (const field of ["objectRef", "uid", "id", "path", "type"] as const) {
+    const value = args[field];
+    if (typeof value === "string" && value) parts.push(`${field}=${value}`);
+  }
+  // Creating a task IS creating that title, so a different task is a different request.
+  if (operation === "task_create") parts.push(`title=${String(args.title ?? "")}`);
+  return parts.join("|");
+}
+
+/**
+ * Compact machine-readable trailer so a dashboard page can show a pending write next to the object it
+ * targets, instead of covering the whole screen with a modal. pi's UI request only carries text, so the
+ * target rides along in the message; the dashboard strips this line before showing it to the user.
+ */
+export function confirmationMarker(operation: string, args: Record<string, unknown>, question: string): string {
+  const ref = [args.objectRef, args.uid, args.id].find((value): value is string => typeof value === "string" && value.length > 0);
+  return `\n[supervisor-confirm]${JSON.stringify({ op: operation, ...(ref ? { ref } : {}), sum: confirmationSummary(operation, args, question) })}`;
+}
+
+/**
+ * One line a dashboard page can show as the headline of the pending write.
+ *
+ * It must name the thing being written (the record's title, the task, the event) — the confirmation
+ * question's own first line is boilerplate and tells the reader nothing.
+ */
+export function confirmationSummary(operation: string, args: Record<string, unknown>, question: string): string {
+  const text = (value: unknown): string => typeof value === "string" ? value.trim() : "";
+  const title = text(args.title);
+  if (operation === "record") return title || text(args.description).slice(0, 140) || "记录一条事件";
+  if (operation === "correct") return `更正事件 ${text(args.id)}`.trim();
+  if (operation === "task_update") return `任务 ${text(args.uid)} → ${text(args.status) || "更新"}`.replace(/\s+/g, " ").trim();
+  if (operation === "task_create") return title ? `新建任务「${title}」` : "新建任务";
+  if (operation === "action") return `待办 ${text(args.id)} → ${text(args.state) || "更新"}`.replace(/\s+/g, " ").trim();
+  return question.split("\n").map(line => line.trim()).filter(Boolean)[0]?.slice(0, 140) || operation;
+}
+
+/** The per-call requestId is transport bookkeeping; it never identifies which write was confirmed. */
+function withoutRequestId(args: Record<string, unknown>): Record<string, unknown> {
   const { requestId: _requestId, ...rest } = args;
-  return `${operation}:${createHash("sha256").update(JSON.stringify(Object.entries(rest).sort(([a], [b]) => a < b ? -1 : 1))).digest("hex").slice(0, 16)}`;
+  return rest;
 }
 
 /** Only a single UUID marker in this turn is eligible; never inherit a prior grant. */
@@ -383,8 +429,11 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
   /** Attachment ids archived for this turn's pasted screenshots, told to the model so records can reference them. */
   let archivedAttachments: string[] = [];
   let turn = 0;
-  /** The one operation the agent asked the user to confirm, so a later plain "确认" answers that request only. */
-  let pendingConfirmation: { key: string; turn: number } | undefined;
+  /**
+   * The one write the agent asked the user to confirm, kept with the exact payload they were shown,
+   * so a later bare "确认" answers that request (and runs that payload) and nothing else.
+   */
+  let pendingConfirmation: { turn: number; operation: string; target: string; args: Record<string, unknown> } | undefined;
   /** True while the current turn's text is a bare confirmation for whatever is pending. */
   let confirmedByText = false;
 
@@ -428,24 +477,31 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
         const activeUserTurn = userTurn;
         const activeUserPrompt = userPrompt;
         let confirmed = false;
+        // The payload that actually runs. When a typed "确认" settles the request, this becomes the
+        // payload the user was shown, never a re-worded version the model produced afterwards.
+        let callArgs = args;
         const question = confirmationFor(operation, args);
         if (question) {
           if (!activeGrant && !activeUserTurn) throw new Error("Supervisor mutation requires a current user turn; automatic patrol cannot open formal confirmations.");
           if (!ctx.hasUI) throw new Error("Supervisor operation requires UI confirmation.");
-          confirmed = await askConfirmation(ctx, signal, confirmationKey(operation, args), question,
-            [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""]);
+          const typed = takeTextConfirmation(operation, args);
+          if (typed) { callArgs = { ...typed, requestId: args.requestId }; confirmed = true; }
+          else confirmed = await askConfirmation(ctx, signal, question,
+            [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""], operation, args);
         }
         if (signal?.aborted) throw new Error("Supervisor gateway request cancelled.");
         if (turn !== activeTurn || gateway !== activeGateway) throw new Error("Supervisor turn changed; request cancelled.");
-        const payload = () => ({ request: { operation, args }, ...(activeGrant ? { grantRef: activeGrant } : {}), ...(activeUserTurn ? { userTurn: true, ...(activeUserPrompt ? { userPrompt: activeUserPrompt } : {}) } : {}), ...(confirmed ? { confirmed: true } : {}) });
+        const payload = () => ({ request: { operation, args: callArgs }, ...(activeGrant ? { grantRef: activeGrant } : {}), ...(activeUserTurn ? { userTurn: true, ...(activeUserPrompt ? { userPrompt: activeUserPrompt } : {}) } : {}), ...(confirmed ? { confirmed: true } : {}) });
         let result: unknown;
         try { result = await activeGateway.call("/execute", payload(), { signal, includeImages: name === "event_get" && args.includeImages === true }); }
         catch (error) {
           const needsConfirmation = error instanceof Error && /HTTP 403: explicit_operation_confirmation_required$/.test(error.message);
           if (!needsConfirmation || confirmed || (!activeGrant && !activeUserTurn) || !["record", "correct", "task_create", "task_update", "working_state", "action"].includes(operation)) throw error;
-          confirmed = await askConfirmation(ctx, signal, confirmationKey(operation, args),
-            `当前消息未明确授权这项操作，请核对目标与内容：\n${redact(JSON.stringify({ operation, args }, null, 2), [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""])}`,
-            [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""]);
+          const typed = takeTextConfirmation(operation, args);
+          if (typed) { callArgs = { ...typed, requestId: args.requestId }; confirmed = true; }
+          else confirmed = await askConfirmation(ctx, signal,
+            `当前消息未明确授权这项操作，请核对目标与内容：\n${redact(JSON.stringify({ operation, args: withoutRequestId(args) }, null, 2), [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""])}`,
+            [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""], operation, args);
           if (signal?.aborted || turn !== activeTurn || gateway !== activeGateway) throw new Error("Supervisor turn changed; request cancelled.");
           result = await activeGateway.call("/execute", payload(), { signal });
         }
@@ -460,21 +516,32 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
   }
 
   /**
+   * Spend the user's typed "确认" on the pending request: same operation and same target is enough.
+   * The returned payload is the one the user was shown, so a re-worded retry cannot smuggle new text
+   * into a confirmation the user already gave. One confirmation authorizes one write.
+   */
+  function takeTextConfirmation(operation: string, args: Record<string, unknown>): Record<string, unknown> | undefined {
+    const pending = pendingConfirmation;
+    if (!confirmedByText || !pending || pending.turn >= turn) return undefined;
+    if (pending.operation !== operation || pending.target !== confirmationTarget(operation, args)) return undefined;
+    pendingConfirmation = undefined;
+    confirmedByText = false;
+    return pending.args;
+  }
+
+  /**
    * Ask for one write's confirmation. A chat reply such as "确认" that directly follows the agent's own
    * question answers exactly that pending request, so the popup is skipped; otherwise the popup is the
    * fallback and its dismissal keeps the request armed for a later typed confirmation.
    */
-  async function askConfirmation(ctx: ExtensionContext, signal: AbortSignal | undefined, key: string, question: string, secrets: string[]): Promise<boolean> {
-    if (confirmedByText && pendingConfirmation?.key === key && pendingConfirmation.turn < turn) {
-      pendingConfirmation = undefined;
-      return true;
-    }
+  async function askConfirmation(ctx: ExtensionContext, signal: AbortSignal | undefined, question: string, secrets: string[], operation: string, args: Record<string, unknown>): Promise<boolean> {
     if (!ctx.hasUI) throw new Error("Supervisor operation requires UI confirmation.");
     const safeQuestion = redact(question, secrets);
-    const answer = await ctx.ui.confirm("主 Agent 操作确认", `${safeQuestion}\n\n也可以直接在对话里回复「确认」来允许这次操作。`, { signal });
+    const answer = await ctx.ui.confirm("主 Agent 操作确认", `${safeQuestion}\n\n也可以直接在对话里回复「确认」来允许这次操作。${confirmationMarker(operation, args, safeQuestion)}`, { signal });
     if (answer === true) { pendingConfirmation = undefined; return true; }
     // pi 只回一个布尔值，区分不了「点了不允许」和「弹窗被关掉」，所以不要写成用户取消。
-    pendingConfirmation = { key, turn };
+    // The request stays armed with the payload the user was shown, so a later 「确认」 runs exactly it.
+    pendingConfirmation = { turn, operation, target: confirmationTarget(operation, args), args: withoutRequestId(args) };
     throw new Error("主 Agent 操作确认未通过（确认窗口被关掉或选择了不允许），本次没有做任何修改。可以重发同一操作并附一句「确认」；只回复「确认」也有效。");
   }
 
