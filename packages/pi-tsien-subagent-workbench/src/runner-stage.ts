@@ -52,7 +52,25 @@ export function assertResultBudget(
 
 const ROLE_TOOLS: Readonly<Record<ExecutionRole, readonly string[]>> = {
   read_only: ["read", "multi_tool_use_parallel", "knowledge_search", "knowledge_symbol_search"],
-  code: ["read", "write", "edit", "bash", "multi_tool_use_parallel", "run_code"],
+  // `code` keeps background commands so a child can start a long build or test
+  // run and keep working; those jobs still die with the child process, so they
+  // are for overlap within one task, not for supervising training after it ends.
+  // `schedule`, `task_pilot`, and `memory_remember` stay out of every role: they
+  // write state that belongs to the main Agent (timers, task status, memory).
+  code: [
+    "read",
+    "write",
+    "edit",
+    "bash",
+    "multi_tool_use_parallel",
+    "run_code",
+    "knowledge_search",
+    "knowledge_symbol_search",
+    "background_command_start",
+    "background_command_status",
+    "background_command_output",
+    "background_command_cancel",
+  ],
   research: ["read", "multi_tool_use_parallel", "knowledge_search", "knowledge_symbol_search", "WebSearch", "WebFetch"],
 };
 
