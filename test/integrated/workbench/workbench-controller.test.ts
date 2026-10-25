@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   type WorkbenchRunWarning,
 } from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
 import { ModelRouter } from "pi-tsien-subagent-workbench/src/model-router.ts";
+import { JobLedger } from "pi-tsien-subagent-workbench/src/job-ledger.ts";
 
 /** Hermetic router: no config file, one legacy model, explicit models allowed as-is. */
 const testRouter = (): ModelRouter =>
@@ -55,6 +56,8 @@ function setup(
     provider,
     router: testRouter(),
     maxTranscriptBytes,
+    // Tests must never append to the real ~/.pi/agent/subagent-jobs.jsonl.
+    jobLedger: null,
     ...(stalledAfterMs === undefined ? {} : { stalledAfterMs }),
     ...(onRunWarning === undefined ? {} : { onRunWarning }),
   });
@@ -420,6 +423,7 @@ describe("WorkbenchController", () => {
 
     const replacement = new WorkbenchController(runtime, {
       router: testRouter(),
+      jobLedger: null,
       provider: new PiRpcProcessProvider({
         executable: process.execPath,
         baseArgs: [fixture],
@@ -1587,6 +1591,7 @@ describe("WorkbenchController model routing", () => {
     const controller = new WorkbenchController(new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 }), {
       provider: new PiRpcProcessProvider({ executable: process.execPath, baseArgs: [fixture], shutdownTimeoutMs: 500 }),
       router: new ModelRouter({ configPath }),
+      jobLedger: null,
     });
     controllers.push(controller);
     return controller;
@@ -1633,5 +1638,64 @@ describe("WorkbenchController model routing", () => {
       expect.objectContaining({ model: "a/first", outcome: "failed", errorClass: "rate_limited" }),
     ]);
     expect(controller.router.snapshot().find((row) => row.model === "a/first")?.status).toBe("cooldown");
+  }, 20_000);
+});
+
+describe("WorkbenchController job ledger", () => {
+  it("records a foreground run and a background launch with its settlement", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "pi-ledger-run-"));
+    const file = path.join(dir, "jobs.jsonl");
+    const controller = new WorkbenchController(
+      new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 }),
+      {
+        provider: new PiRpcProcessProvider({
+          executable: process.execPath,
+          baseArgs: [fixture],
+          shutdownTimeoutMs: 500,
+        }),
+        router: testRouter(),
+        jobLedger: new JobLedger(file),
+      },
+    );
+    controllers.push(controller);
+
+    await controller.runAgent({
+      task: "say hi",
+      cwd: "/tmp",
+      role: "code",
+      tier: "light",
+    });
+    const submission = controller.submitAgent(
+      { task: "say hi again", cwd: "/tmp", role: "read_only" },
+      true,
+    );
+    await submission.completion;
+
+    await controller.ledger?.flush();
+    const lines = readFileSync(file, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    const foreground = lines.filter((line) => line.label === "say hi");
+    expect(foreground).toHaveLength(1);
+    expect(foreground[0]).toMatchObject({
+      kind: "agent",
+      status: "completed",
+      role: "code",
+      tier: "light",
+      model: "fake/fake-rpc",
+      background: false,
+    });
+
+    const background = lines.filter((line) => line.label === "say hi again");
+    expect(background.map((line) => line.status)).toEqual(["queued", "completed"]);
+    expect(background[1]).toMatchObject({
+      workId: background[0].workId,
+      role: "read_only",
+      background: true,
+      model: "fake/fake-rpc",
+    });
+    expect(typeof background[1].completedAt).toBe("number");
   }, 20_000);
 });

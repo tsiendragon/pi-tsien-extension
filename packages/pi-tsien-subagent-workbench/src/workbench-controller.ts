@@ -31,6 +31,7 @@ import {
   roleToolNames,
   type ExecutionRole,
 } from "./runner-stage.ts";
+import { JobLedger, type JobLedgerStatus } from "./job-ledger.ts";
 import {
   MAX_SWITCHES_PER_TASK,
   ModelRouter,
@@ -150,6 +151,11 @@ export interface WorkbenchControllerOptions {
   readonly onRunWarning?: (warning: WorkbenchRunWarning) => void;
   /** Model routing from subagent-models.json; defaults to the global config file. */
   readonly router?: ModelRouter;
+  /**
+   * Durable launch/settlement history read by the dashboard. Defaults to
+   * `<agent dir>/subagent-jobs.jsonl`; pass `null` to keep it in memory only.
+   */
+  readonly jobLedger?: JobLedger | null;
 }
 
 export interface WorkbenchSubmission<T> {
@@ -649,6 +655,25 @@ function positiveInteger(name: string, value: number): number {
   return value;
 }
 
+/** Counts workflow child tasks so the dashboard can express launch volume. */
+function workflowTaskCounts(
+  result: unknown,
+): { readonly total: number; readonly failed: number } | undefined {
+  const stages = (result as { stages?: unknown } | undefined)?.stages;
+  if (!Array.isArray(stages)) return undefined;
+  let total = 0;
+  let failed = 0;
+  for (const stage of stages) {
+    const tasks = (stage as { tasks?: unknown } | undefined)?.tasks;
+    if (!Array.isArray(tasks)) continue;
+    for (const task of tasks) {
+      total += 1;
+      if ((task as { status?: unknown } | undefined)?.status === "failed") failed += 1;
+    }
+  }
+  return total > 0 ? { total, failed } : undefined;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -722,6 +747,11 @@ export class WorkbenchController {
   >();
   private readonly workflowSessionReservations = new Map<string, number>();
   readonly jobs = new WorkbenchJobRegistry();
+  readonly ledger: JobLedger | undefined;
+  private readonly launches = new Map<
+    string,
+    { readonly role?: string; readonly tier?: string }
+  >();
 
   private readonly pendingWarnings: WorkbenchRunWarning[] = [];
   private warningSequence = 0;
@@ -755,6 +785,10 @@ export class WorkbenchController {
     this.provider =
       options.provider ?? new PiRpcProcessProvider(options.providerOptions);
     this.router = options.router ?? new ModelRouter();
+    this.ledger =
+      options.jobLedger === null
+        ? undefined
+        : (options.jobLedger ?? new JobLedger());
     this.service = new SubagentService(runtime);
     this.service.providers.register(this.provider);
     this.unsubscribeService = this.service.subscribe((event) =>
@@ -866,22 +900,72 @@ export class WorkbenchController {
     if (this.disposed) throw new Error("Workbench controller is disposed.");
     assertCanonicalModelReference(request.model, "Agent model");
     assertExecutionBudget(request.task, request.context, request.workflowInputs);
+    // Foreground runs never enter the job registry, so they are recorded here.
+    const workId = `work_${randomBytes(8).toString("hex")}`;
+    const createdAt = Date.now();
+    const startedAt = Date.now();
+    const label = request.label?.trim() || request.task.slice(0, 48);
+    const background = request.foreground === false;
+    try {
+      const result = await this.executeAgent(request);
+      this.recordLedger({
+        workId,
+        kind: "agent",
+        label,
+        status: result.isError ? "failed" : "completed",
+        background,
+        createdAt,
+        startedAt,
+        completedAt: Date.now(),
+        ...(request.role ? { role: request.role } : {}),
+        ...(request.tier ? { tier: request.tier } : {}),
+        ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+        ...(result.errorMessage ? { error: result.errorMessage.slice(0, 500) } : {}),
+        result,
+      });
+      return result;
+    } catch (error) {
+      this.recordLedger({
+        workId,
+        kind: "agent",
+        label,
+        status: this.terminalStatusForAbort(this.lifetimeAbort.signal),
+        background,
+        createdAt,
+        startedAt,
+        completedAt: Date.now(),
+        ...(request.role ? { role: request.role } : {}),
+        ...(request.tier ? { tier: request.tier } : {}),
+        error: errorMessage(error).slice(0, 500),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Runs one agent without writing its own ledger line; callers that own a
+   * job (background submissions, workflow tasks) record it there instead.
+   */
+  private async executeAgent(request: WorkbenchAgentRequest): Promise<AgentResult> {
     await this.ensureProviderCapacity(1);
-    return this.startRouted({
-      task: request.task,
-      label: request.label,
-      isolation: "process",
-      foreground: request.foreground ?? true,
-      cwd: request.cwd,
-      parentId: request.parentId,
-      traceContext: request.traceContext,
-      signal: request.signal
-        ? AbortSignal.any([request.signal, this.lifetimeAbort.signal])
-        : this.lifetimeAbort.signal,
-      ...(request.context
-        ? { contextMode: "explicit" as const, context: request.context }
-        : {}),
-    }, request);
+    return this.startRouted(
+      {
+        task: request.task,
+        label: request.label,
+        isolation: "process",
+        foreground: request.foreground ?? true,
+        cwd: request.cwd,
+        parentId: request.parentId,
+        traceContext: request.traceContext,
+        signal: request.signal
+          ? AbortSignal.any([request.signal, this.lifetimeAbort.signal])
+          : this.lifetimeAbort.signal,
+        ...(request.context
+          ? { contextMode: "explicit" as const, context: request.context }
+          : {}),
+      },
+      request,
+    );
   }
 
   submitAgent(
@@ -894,6 +978,10 @@ export class WorkbenchController {
       kind: "agent",
       label: request.label?.trim() || request.task.slice(0, 48),
       background,
+    });
+    this.recordLaunch(this.jobs.get(created.handle.workId), {
+      ...(request.role ? { role: request.role } : {}),
+      ...(request.tier ? { tier: request.tier } : {}),
     });
     const traceContext: SubagentTraceContext = {
       ...request.traceContext,
@@ -910,7 +998,7 @@ export class WorkbenchController {
     };
     const completion = Promise.resolve().then(async () => {
       try {
-        const result = await this.runAgent({
+        const result = await this.executeAgent({
           ...request,
           traceContext,
           foreground: !background,
@@ -990,6 +1078,8 @@ export class WorkbenchController {
     };
     this.workflowSessionReservations.set(workflowId, reservedSessionSlots);
     this.jobs.associate(created.handle.workId, { workflowId });
+    // A workflow has one role/tier per task, so the job line stays unlabelled.
+    this.recordLaunch(this.jobs.get(created.handle.workId), {});
     this.workflowRequests.set(
       created.handle.workId,
       reusableWorkflowRequest(workflowRequest),
@@ -2308,7 +2398,123 @@ export class WorkbenchController {
       queueCompletion: before?.background ?? false,
     });
     const job = this.jobs.get(workId);
+    if (job) this.recordSettlement(job, options.result);
     if (job?.background) this.onJobSettled?.(job);
+  }
+
+  /** Records a launch so the dashboard can count attempts that never finish. */
+  private recordLaunch(
+    job: WorkbenchJobSnapshot | undefined,
+    launch: { readonly role?: string; readonly tier?: string },
+  ): void {
+    if (!this.ledger || !job) return;
+    this.launches.set(job.workId, launch);
+    this.recordLedger({
+      workId: job.workId,
+      kind: job.kind,
+      label: job.label,
+      status: job.status,
+      background: job.background,
+      createdAt: job.createdAt,
+      ...(launch.role ? { role: launch.role } : {}),
+      ...(launch.tier ? { tier: launch.tier } : {}),
+      ...(job.attempt === undefined ? {} : { attempt: job.attempt }),
+      ...(job.sourceWorkId ? { sourceWorkId: job.sourceWorkId } : {}),
+      ...(job.workflowId ? { workflowId: job.workflowId } : {}),
+    });
+  }
+
+  /** Records the terminal state, including which model actually ran the task. */
+  private recordSettlement(
+    job: WorkbenchJobSnapshot,
+    result: unknown,
+  ): void {
+    if (!this.ledger) return;
+    const launch = this.launches.get(job.workId);
+    this.launches.delete(job.workId);
+    this.recordLedger({
+      workId: job.workId,
+      kind: job.kind,
+      label: job.label,
+      status: job.status,
+      background: job.background,
+      createdAt: job.createdAt,
+      ...(launch?.role ? { role: launch.role } : {}),
+      ...(launch?.tier ? { tier: launch.tier } : {}),
+      ...(job.sessionId ? { sessionId: job.sessionId } : {}),
+      ...(job.workflowId ? { workflowId: job.workflowId } : {}),
+      ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
+      ...(job.completedAt === undefined ? {} : { completedAt: job.completedAt }),
+      ...(job.attempt === undefined ? {} : { attempt: job.attempt }),
+      ...(job.sourceWorkId ? { sourceWorkId: job.sourceWorkId } : {}),
+      ...(job.error ? { error: job.error.slice(0, 500) } : {}),
+      ...(result === undefined ? {} : { result }),
+    });
+  }
+
+  /** Shared writer: derives the model that actually ran from the routing result. */
+  private recordLedger(entry: {
+    readonly workId: string;
+    readonly kind: "agent" | "workflow";
+    readonly label: string;
+    readonly status: JobLedgerStatus;
+    readonly background: boolean;
+    readonly createdAt: number;
+    readonly role?: string;
+    readonly tier?: string;
+    readonly startedAt?: number;
+    readonly completedAt?: number;
+    readonly attempt?: number;
+    readonly sourceWorkId?: string;
+    readonly sessionId?: string;
+    readonly workflowId?: string;
+    readonly error?: string;
+    readonly result?: unknown;
+  }): void {
+    if (!this.ledger) return;
+    const routing = (
+      entry.result as
+        | { routing?: { finalModel?: unknown; attempts?: readonly { model?: unknown }[] } }
+        | undefined
+    )?.routing;
+    const finalModel =
+      typeof routing?.finalModel === "string" ? routing.finalModel : undefined;
+    const models = Array.isArray(routing?.attempts)
+      ? routing.attempts
+          .map((attempt) =>
+            typeof attempt?.model === "string" ? attempt.model : undefined,
+          )
+          .filter((model): model is string => model !== undefined)
+      : [];
+    const switchedFrom =
+      finalModel && models.length > 1 && models[0] !== finalModel
+        ? models[0]
+        : undefined;
+    const taskCounts = workflowTaskCounts(entry.result);
+    this.ledger.record({
+      v: 1,
+      at: Date.now(),
+      workId: entry.workId,
+      kind: entry.kind,
+      status: entry.status,
+      label: entry.label,
+      background: entry.background,
+      createdAt: entry.createdAt,
+      ...(entry.role ? { role: entry.role } : {}),
+      ...(entry.tier ? { tier: entry.tier } : {}),
+      ...(finalModel ? { model: finalModel } : {}),
+      ...(switchedFrom ? { switchedFrom } : {}),
+      ...(entry.attempt === undefined ? {} : { attempt: entry.attempt }),
+      ...(entry.sourceWorkId ? { sourceWorkId: entry.sourceWorkId } : {}),
+      ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+      ...(entry.workflowId ? { workflowId: entry.workflowId } : {}),
+      ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
+      ...(entry.completedAt === undefined ? {} : { completedAt: entry.completedAt }),
+      ...(entry.error ? { error: entry.error.slice(0, 500) } : {}),
+      ...(taskCounts
+        ? { tasks: taskCounts.total, tasksFailed: taskCounts.failed }
+        : {}),
+    });
   }
 
   private terminalStatusForAbort(signal: AbortSignal): "cancelled" | "interrupted" | "failed" {
