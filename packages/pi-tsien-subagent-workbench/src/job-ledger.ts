@@ -39,6 +39,18 @@ export interface JobLedgerRecord {
   /** Workflow jobs only: number of child tasks and how many of them failed. */
   readonly tasks?: number;
   readonly tasksFailed?: number;
+  /** Token and cost the child burned, so the dashboard can compare it with the main agent. */
+  readonly usage?: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+    readonly cost: number;
+  };
+  /** Tool executions the child performed (it runs `--no-session`, so nothing else records them). */
+  readonly toolCalls?: number;
+  /** Assistant turns the child took. */
+  readonly modelCalls?: number;
 }
 
 export function defaultJobLedgerPath(
