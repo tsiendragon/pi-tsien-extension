@@ -1697,5 +1697,8 @@ describe("WorkbenchController job ledger", () => {
       model: "fake/fake-rpc",
     });
     expect(typeof background[1].completedAt).toBe("number");
+    // The child runs --no-session, so its token usage has to travel through the ledger.
+    expect(foreground[0].usage).toMatchObject({ input: expect.any(Number), output: expect.any(Number) });
+    expect(typeof foreground[0].toolCalls).toBe("number");
   }, 20_000);
 });

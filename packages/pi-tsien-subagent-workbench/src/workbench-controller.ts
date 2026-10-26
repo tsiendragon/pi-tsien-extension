@@ -2472,6 +2472,30 @@ export class WorkbenchController {
     readonly result?: unknown;
   }): void {
     if (!this.ledger) return;
+    const outcome = entry.result as
+      | {
+          usage?: {
+            input?: unknown;
+            output?: unknown;
+            cacheRead?: unknown;
+            cacheWrite?: unknown;
+            cost?: unknown;
+          };
+          toolCalls?: unknown;
+          modelCalls?: unknown;
+        }
+      | undefined;
+    const usageNumber = (value: unknown): number =>
+      typeof value === "number" && Number.isFinite(value) ? value : 0;
+    const usage = outcome?.usage
+      ? {
+          input: usageNumber(outcome.usage.input),
+          output: usageNumber(outcome.usage.output),
+          cacheRead: usageNumber(outcome.usage.cacheRead),
+          cacheWrite: usageNumber(outcome.usage.cacheWrite),
+          cost: usageNumber(outcome.usage.cost),
+        }
+      : undefined;
     const routing = (
       entry.result as
         | { routing?: { finalModel?: unknown; attempts?: readonly { model?: unknown }[] } }
@@ -2514,6 +2538,9 @@ export class WorkbenchController {
       ...(taskCounts
         ? { tasks: taskCounts.total, tasksFailed: taskCounts.failed }
         : {}),
+      ...(usage ? { usage } : {}),
+      ...(typeof outcome?.toolCalls === "number" ? { toolCalls: outcome.toolCalls } : {}),
+      ...(typeof outcome?.modelCalls === "number" ? { modelCalls: outcome.modelCalls } : {}),
     });
   }
 
