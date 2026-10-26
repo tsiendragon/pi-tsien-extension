@@ -1,8 +1,11 @@
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+
 import {
   PiRpcProcessProvider,
   PiRpcProviderError,
+  defaultSubagentSessionDir,
   type PiRpcProcessProviderOptions,
 } from "pi-tsien-subagent-workbench/src/providers/pi-rpc-process-provider.ts";
 import {
@@ -10,6 +13,9 @@ import {
   SubagentService,
 } from "pi-tsien-subagent-workbench/src/subagent-service.ts";
 import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
+
+// Never write child sessions to the real agent dir during tests.
+process.env.PI_SUBAGENT_SESSION_DIR = "off";
 
 const fakeRpcPath = fileURLToPath(
   new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url),
@@ -102,6 +108,56 @@ describe("PiRpcProcessProvider", () => {
       });
       const args = JSON.parse(result.output) as string[];
       expect(args[args.indexOf("--tools") + 1]).toBe("read,bash");
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("persists child sessions under the agent dir unless told otherwise", () => {
+    expect(
+      defaultSubagentSessionDir({ PI_CODING_AGENT_DIR: "/tmp/agent" }),
+    ).toBe(path.join("/tmp/agent", "subagent-sessions"));
+    expect(
+      defaultSubagentSessionDir({
+        PI_CODING_AGENT_DIR: "/tmp/agent",
+        PI_SUBAGENT_SESSION_DIR: "off",
+      }),
+    ).toBeUndefined();
+    expect(
+      defaultSubagentSessionDir({
+        PI_CODING_AGENT_DIR: "/tmp/agent",
+        PI_SUBAGENT_SESSION_DIR: "/mnt/workspace/subs",
+      }),
+    ).toBe("/mnt/workspace/subs");
+  });
+
+  it("passes --session-dir so child tool calls stay readable", async () => {
+    const test = harness({ sessionDir: "/tmp/child-sessions" });
+    try {
+      const result = await test.service.start({
+        task: "report-argv",
+        isolation: "process",
+        cwd: process.cwd(),
+      });
+      const args = JSON.parse(result.output) as string[];
+      expect(args).not.toContain("--no-session");
+      expect(args[args.indexOf("--session-dir") + 1]).toBe("/tmp/child-sessions");
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("stays ephemeral when sessionDir is null", async () => {
+    const test = harness({ sessionDir: null });
+    try {
+      const result = await test.service.start({
+        task: "report-argv",
+        isolation: "process",
+        cwd: process.cwd(),
+      });
+      const args = JSON.parse(result.output) as string[];
+      expect(args).toContain("--no-session");
+      expect(args).not.toContain("--session-dir");
     } finally {
       await test.dispose();
     }

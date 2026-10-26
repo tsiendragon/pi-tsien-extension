@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type {
   AgentThinkingLevel,
@@ -7,6 +9,25 @@ import type {
   SubagentProvider,
   SubagentTraceContext,
 } from "../subagent-service.ts";
+
+/**
+ * Child sessions live next to the main agent dir but in their own folder, so a
+ * subagent never shows up in the normal session list. Set
+ * `PI_SUBAGENT_SESSION_DIR` to move them (for example onto a NAS mount) or to
+ * `off` to keep children fully ephemeral.
+ */
+export function defaultSubagentSessionDir(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  const explicit = environment.PI_SUBAGENT_SESSION_DIR?.trim();
+  if (explicit === "off" || explicit === "0" || explicit === "false") {
+    return undefined;
+  }
+  if (explicit) return explicit;
+  const agentDir =
+    environment.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
+  return join(agentDir, "subagent-sessions");
+}
 
 export function serializeTraceContext(
   traceContext: SubagentTraceContext | undefined,
@@ -71,6 +92,14 @@ export interface PiRpcProcessProviderOptions {
   readonly thinking?:
     "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   readonly allowTools?: boolean;
+  /**
+   * Where child sessions are written. Defaults to `<agent dir>/subagent-sessions`
+   * so the dashboard can read the child's tool calls and token usage; pass
+   * `null` to run ephemeral (`--no-session`), or a path (possibly on a network
+   * mount) to keep the files elsewhere. `PI_SUBAGENT_SESSION_DIR=off` disables
+   * persistence without code changes.
+   */
+  readonly sessionDir?: string | null;
   readonly loadExtensions?: boolean;
   readonly loadSkills?: boolean;
   readonly loadPromptTemplates?: boolean;
@@ -606,6 +635,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
   private readonly defaultModel?: string;
   private readonly thinking?: PiRpcProcessProviderOptions["thinking"];
   private readonly allowTools: boolean;
+  private readonly sessionDir: string | undefined;
   private readonly loadExtensions: boolean;
   private readonly loadSkills: boolean;
   private readonly loadPromptTemplates: boolean;
@@ -635,6 +665,10 @@ export class PiRpcProcessProvider implements SubagentProvider {
     this.defaultModel = options.defaultModel;
     this.thinking = options.thinking;
     this.allowTools = options.allowTools ?? true;
+    this.sessionDir =
+      options.sessionDir === null
+        ? undefined
+        : (options.sessionDir ?? defaultSubagentSessionDir());
     this.loadExtensions = options.loadExtensions ?? true;
     this.loadSkills = options.loadSkills ?? true;
     this.loadPromptTemplates = options.loadPromptTemplates ?? true;
@@ -828,7 +862,11 @@ export class PiRpcProcessProvider implements SubagentProvider {
       ...this.baseArgs,
       "--mode",
       "rpc",
-      "--no-session",
+      // Persisting child sessions is what makes their tool calls and token usage
+      // visible to the dashboard; `--session-dir` keeps them out of the main list.
+      ...(this.sessionDir
+        ? ["--session-dir", this.sessionDir]
+        : ["--no-session"]),
       ...(this.loadExtensions ? [] : ["--no-extensions"]),
       ...(this.loadSkills ? [] : ["--no-skills"]),
       ...(this.loadPromptTemplates ? [] : ["--no-prompt-templates"]),

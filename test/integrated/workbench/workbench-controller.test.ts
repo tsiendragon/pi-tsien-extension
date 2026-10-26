@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
 import {
   PiRpcProcessProvider,
   type PiRpcProcessProviderOptions,
@@ -14,6 +15,9 @@ import {
 } from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
 import { ModelRouter } from "pi-tsien-subagent-workbench/src/model-router.ts";
 import { JobLedger } from "pi-tsien-subagent-workbench/src/job-ledger.ts";
+
+// Never write child sessions to the real agent dir during tests.
+process.env.PI_SUBAGENT_SESSION_DIR = "off";
 
 /** Hermetic router: no config file, one legacy model, explicit models allowed as-is. */
 const testRouter = (): ModelRouter =>
