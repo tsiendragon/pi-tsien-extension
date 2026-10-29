@@ -4,7 +4,7 @@ import { request } from "node:http";
 import { isAbsolute } from "node:path";
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const RPC_TIMEOUT_MS = 15_000;
 export const MAX_RESULT_BYTES = 2 * 1024 * 1024;
@@ -204,13 +204,8 @@ export const AUTO_PATROL_TAG = "[supervisor-auto-patrol]";
 export const MAX_TURN_IMAGES = 4;
 
 /**
- * Bare "go ahead" replies. A user typing one of these in the chat answers the question the agent just
- * asked, so the pending write does not need the popup — but it must match that exact pending request.
+ * Drop the envelopes the dashboard adds around a forwarded turn before reading the user's own words.
  */
-const CONFIRM_PATTERN = /^(?:确认|确认一下|确认执行|确认继续|确认提交|同意|允许|可以|没问题|好|好的|行|是|对|继续|执行吧|就这样|ok|okay|yes|y)$/i;
-const REFUSAL_PATTERN = /^(?:不|不要|不用|别|取消|算了|停止|先不|no|nope|cancel)$/i;
-
-/** Drop the envelopes the dashboard adds around a forwarded turn before reading the user's own words. */
 export function userWords(prompt: string): string {
   return prompt
     .split("\n")
@@ -218,73 +213,6 @@ export function userWords(prompt: string): string {
     .filter(line => !/^\s*浏览上下文（仅供参考）：/.test(line))
     .filter(line => !/^\s*用户提交的已保存截图 attachmentIds：/.test(line))
     .join("\n").trim();
-}
-
-function shortReply(text: string, pattern: RegExp): boolean {
-  const value = text.trim().replace(/[。！!~，,、\s]+$/g, "");
-  return value.length > 0 && value.length <= 12 && pattern.test(value);
-}
-
-/** True when the turn is just "确认/可以/同意" — authorization for the pending request, nothing more. */
-export function isPlainConfirmation(prompt: string): boolean {
-  return shortReply(userWords(prompt), CONFIRM_PATTERN);
-}
-
-/** True when the turn clearly says no, so a previously asked question must not stay armed. */
-export function isPlainRefusal(prompt: string): boolean {
-  return shortReply(userWords(prompt), REFUSAL_PATTERN);
-}
-
-/**
- * Identity of the object a confirmation is about.
- *
- * A bare 「确认」 must answer the request the user actually saw. Matching the whole payload failed in
- * practice: the model re-words a record's description between attempts, so the same write came back
- * as a brand new request and the confirmation was silently lost. Operation + target stays stable
- * across re-wording, and the write that finally runs is the payload the user was shown.
- */
-export function confirmationTarget(operation: string, args: Record<string, unknown>): string {
-  const parts = [operation];
-  for (const field of ["objectRef", "uid", "id", "path", "type"] as const) {
-    const value = args[field];
-    if (typeof value === "string" && value) parts.push(`${field}=${value}`);
-  }
-  // Creating a task IS creating that title, so a different task is a different request.
-  if (operation === "task_create") parts.push(`title=${String(args.title ?? "")}`);
-  return parts.join("|");
-}
-
-/**
- * Compact machine-readable trailer so a dashboard page can show a pending write next to the object it
- * targets, instead of covering the whole screen with a modal. pi's UI request only carries text, so the
- * target rides along in the message; the dashboard strips this line before showing it to the user.
- */
-export function confirmationMarker(operation: string, args: Record<string, unknown>, question: string): string {
-  const ref = [args.objectRef, args.uid, args.id].find((value): value is string => typeof value === "string" && value.length > 0);
-  return `\n[supervisor-confirm]${JSON.stringify({ op: operation, ...(ref ? { ref } : {}), sum: confirmationSummary(operation, args, question) })}`;
-}
-
-/**
- * One line a dashboard page can show as the headline of the pending write.
- *
- * It must name the thing being written (the record's title, the task, the event) — the confirmation
- * question's own first line is boilerplate and tells the reader nothing.
- */
-export function confirmationSummary(operation: string, args: Record<string, unknown>, question: string): string {
-  const text = (value: unknown): string => typeof value === "string" ? value.trim() : "";
-  const title = text(args.title);
-  if (operation === "record") return title || text(args.description).slice(0, 140) || "记录一条事件";
-  if (operation === "correct") return `更正事件 ${text(args.id)}`.trim();
-  if (operation === "task_update") return `任务 ${text(args.uid)} → ${text(args.status) || "更新"}`.replace(/\s+/g, " ").trim();
-  if (operation === "task_create") return title ? `新建任务「${title}」` : "新建任务";
-  if (operation === "action") return `待办 ${text(args.id)} → ${text(args.state) || "更新"}`.replace(/\s+/g, " ").trim();
-  return question.split("\n").map(line => line.trim()).filter(Boolean)[0]?.slice(0, 140) || operation;
-}
-
-/** The per-call requestId is transport bookkeeping; it never identifies which write was confirmed. */
-function withoutRequestId(args: Record<string, unknown>): Record<string, unknown> {
-  const { requestId: _requestId, ...rest } = args;
-  return rest;
 }
 
 /** Only a single UUID marker in this turn is eligible; never inherit a prior grant. */
@@ -354,7 +282,7 @@ const tools = [
   },
   {
     name: "event_correct", operation: "correct",
-    description: "Correct an event after UI confirmation; the gateway enforces authorization.",
+    description: "Correct an event and keep the revision history; the gateway enforces authorization.",
     parameters: object({ id: text("Event ID to correct."), expectedVersion: Type.Integer({ minimum: 1 }), patch: object(eventFields), reason: text("Reason for correction.") }),
   },
   {
@@ -364,7 +292,7 @@ const tools = [
   },
   {
     name: "supervisor_task_update", operation: "task_update",
-    description: "Change the task itself (title, description, status) when the user explicitly asks, and say so in the reply; it is a user-visible change. Records belong in event_append instead. Status changes require UI confirmation and completion evidence.",
+    description: "Change the task itself (title, description, status) when the user explicitly asks, and say so in the reply; it is a user-visible change. Records belong in event_append instead. Status changes require completion evidence.",
     parameters: object({ uid: text("Stable Task UID."), status: Type.Optional(Type.String({ enum: ["todo", "doing", "paused", "done"] })), title: optionalText("Updated title."), description: optionalText("Updated description."), evidence: optionalText("Observable evidence required for done.") }),
   },
   {
@@ -394,24 +322,12 @@ const tools = [
   },
   {
     name: "supervisor_coordinate", operation: "coordinate",
-    description: "Send an assistant coordination message. Interactive mode requires UI confirmation; automatic mode is limited and backend-gated, never user impersonation.",
+    description: "Send an assistant coordination message to an explicitly authorized target. Automatic mode is limited and backend-gated, never user impersonation.",
     parameters: object({ sessionId: text("Explicitly authorized target session ID."), text: Type.String({ description: "Assistant suggestion, not new user authorization.", minLength: 1, maxLength: 1024 }), kind: Type.String({ enum: ["clarification", "continue", "correction"] }), sourceRefs: Type.Array(text("Accessible event ID or approved file inspection sourceRef."), { minItems: 1 }) }),
   },
 ] as const;
 
 export const SUPERVISOR_TOOL_NAMES = tools.map((tool) => tool.name);
-
-function confirmationFor(operation: string, args: Record<string, unknown>): string | undefined {
-  // Conservatively treat all corrections as destructive and gate all task status changes.
-  if (operation === "correct" && Object.keys(isObject(args.patch) ? args.patch : {}).some(field => !["occurredAt", "participants", "nextStep", "stage"].includes(field))) {
-    return `更正事件 ${args.id}？将保留修订历史。\n修改内容：${JSON.stringify(args.patch)}\n原因：${args.reason}`;
-  }
-  if (operation === "task_update" && args.status === "done") {
-    return `将任务 ${args.uid} 标记为已完成？请核对验收标准。\n证据：${args.evidence ?? "尚未提供"}`;
-  }
-  if (operation === "action" && args.state === "done") return `确认待办 ${args.id} 已处理完成？`;
-  return undefined;
-}
 
 export default function supervisorExtension(pi: ExtensionAPI): void {
   pi.registerFlag("supervisor-credentials", {
@@ -429,13 +345,6 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
   /** Attachment ids archived for this turn's pasted screenshots, told to the model so records can reference them. */
   let archivedAttachments: string[] = [];
   let turn = 0;
-  /**
-   * The one write the agent asked the user to confirm, kept with the exact payload they were shown,
-   * so a later bare "确认" answers that request (and runs that payload) and nothing else.
-   */
-  let pendingConfirmation: { turn: number; operation: string; target: string; args: Record<string, unknown> } | undefined;
-  /** True while the current turn's text is a bare confirmation for whatever is pending. */
-  let confirmedByText = false;
 
   pi.registerCommand("supervisor-clear", {
     description: "清空主助手聊天上下文并自动重新加载，保留任务、事件与截图",
@@ -476,35 +385,12 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
         const activeGrant = grantRef;
         const activeUserTurn = userTurn;
         const activeUserPrompt = userPrompt;
-        let confirmed = false;
-        // The payload that actually runs. When a typed "确认" settles the request, this becomes the
-        // payload the user was shown, never a re-worded version the model produced afterwards.
-        let callArgs = args;
-        const question = confirmationFor(operation, args);
-        if (question) {
-          if (!activeGrant && !activeUserTurn) throw new Error("Supervisor mutation requires a current user turn; automatic patrol cannot open formal confirmations.");
-          if (!ctx.hasUI) throw new Error("Supervisor operation requires UI confirmation.");
-          const typed = takeTextConfirmation(operation, args);
-          if (typed) { callArgs = { ...typed, requestId: args.requestId }; confirmed = true; }
-          else confirmed = await askConfirmation(ctx, signal, question,
-            [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""], operation, args);
-        }
+        // No confirmation step: the gateway decides whether this turn may write, and the user asked for
+        // zero popups. A user turn writes directly; an automatic patrol turn is refused by the backend.
         if (signal?.aborted) throw new Error("Supervisor gateway request cancelled.");
         if (turn !== activeTurn || gateway !== activeGateway) throw new Error("Supervisor turn changed; request cancelled.");
-        const payload = () => ({ request: { operation, args: callArgs }, ...(activeGrant ? { grantRef: activeGrant } : {}), ...(activeUserTurn ? { userTurn: true, ...(activeUserPrompt ? { userPrompt: activeUserPrompt } : {}) } : {}), ...(confirmed ? { confirmed: true } : {}) });
-        let result: unknown;
-        try { result = await activeGateway.call("/execute", payload(), { signal, includeImages: name === "event_get" && args.includeImages === true }); }
-        catch (error) {
-          const needsConfirmation = error instanceof Error && /HTTP 403: explicit_operation_confirmation_required$/.test(error.message);
-          if (!needsConfirmation || confirmed || (!activeGrant && !activeUserTurn) || !["record", "correct", "task_create", "task_update", "working_state", "action"].includes(operation)) throw error;
-          const typed = takeTextConfirmation(operation, args);
-          if (typed) { callArgs = { ...typed, requestId: args.requestId }; confirmed = true; }
-          else confirmed = await askConfirmation(ctx, signal,
-            `当前消息未明确授权这项操作，请核对目标与内容：\n${redact(JSON.stringify({ operation, args: withoutRequestId(args) }, null, 2), [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""])}`,
-            [activeCredentials.token, activeCredentials.socketPath, credentialPath ?? ""], operation, args);
-          if (signal?.aborted || turn !== activeTurn || gateway !== activeGateway) throw new Error("Supervisor turn changed; request cancelled.");
-          result = await activeGateway.call("/execute", payload(), { signal });
-        }
+        const payload = () => ({ request: { operation, args }, ...(activeGrant ? { grantRef: activeGrant } : {}), ...(activeUserTurn ? { userTurn: true, ...(activeUserPrompt ? { userPrompt: activeUserPrompt } : {}) } : {}) });
+        const result: unknown = await activeGateway.call("/execute", payload(), { signal, includeImages: name === "event_get" && args.includeImages === true });
         if (name === "event_get" && args.includeImages === true && result && typeof result === "object") {
           const envelope = result as { ok: boolean; result: { event: unknown; images: { attachmentId: string; mimeType: string; data: string }[] } };
           if (!envelope.ok || !Array.isArray(envelope.result?.images)) throw new Error("Supervisor screenshot response is invalid.");
@@ -513,36 +399,6 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
       },
     });
-  }
-
-  /**
-   * Spend the user's typed "确认" on the pending request: same operation and same target is enough.
-   * The returned payload is the one the user was shown, so a re-worded retry cannot smuggle new text
-   * into a confirmation the user already gave. One confirmation authorizes one write.
-   */
-  function takeTextConfirmation(operation: string, args: Record<string, unknown>): Record<string, unknown> | undefined {
-    const pending = pendingConfirmation;
-    if (!confirmedByText || !pending || pending.turn >= turn) return undefined;
-    if (pending.operation !== operation || pending.target !== confirmationTarget(operation, args)) return undefined;
-    pendingConfirmation = undefined;
-    confirmedByText = false;
-    return pending.args;
-  }
-
-  /**
-   * Ask for one write's confirmation. A chat reply such as "确认" that directly follows the agent's own
-   * question answers exactly that pending request, so the popup is skipped; otherwise the popup is the
-   * fallback and its dismissal keeps the request armed for a later typed confirmation.
-   */
-  async function askConfirmation(ctx: ExtensionContext, signal: AbortSignal | undefined, question: string, secrets: string[], operation: string, args: Record<string, unknown>): Promise<boolean> {
-    if (!ctx.hasUI) throw new Error("Supervisor operation requires UI confirmation.");
-    const safeQuestion = redact(question, secrets);
-    const answer = await ctx.ui.confirm("主 Agent 操作确认", `${safeQuestion}\n\n也可以直接在对话里回复「确认」来允许这次操作。${confirmationMarker(operation, args, safeQuestion)}`, { signal });
-    if (answer === true) { pendingConfirmation = undefined; return true; }
-    // pi 只回一个布尔值，区分不了「点了不允许」和「弹窗被关掉」，所以不要写成用户取消。
-    // The request stays armed with the payload the user was shown, so a later 「确认」 runs exactly it.
-    pendingConfirmation = { turn, operation, target: confirmationTarget(operation, args), args: withoutRequestId(args) };
-    throw new Error("主 Agent 操作确认未通过（确认窗口被关掉或选择了不允许），本次没有做任何修改。可以重发同一操作并附一句「确认」；只回复「确认」也有效。");
   }
 
   /**
@@ -581,8 +437,6 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
     grantRef = undefined;
     userTurn = false;
     userPrompt = "";
-    pendingConfirmation = undefined;
-    confirmedByText = false;
     turn++;
     pi.setActiveTools([]);
     const filePath = pi.getFlag("supervisor-credentials");
@@ -612,10 +466,6 @@ export default function supervisorExtension(pi: ExtensionAPI): void {
     userTurn = !event.prompt.includes(AUTO_PATROL_TAG);
     userPrompt = userTurn ? event.prompt.slice(0, 4000) : "";
     turn++;
-    // A bare "确认" answers the question the agent just asked; an explicit no disarms it. Neither one
-    // creates new authority: only the exact pending request can be confirmed this way.
-    confirmedByText = userTurn && isPlainConfirmation(userPrompt);
-    if (userTurn && isPlainRefusal(userPrompt)) pendingConfirmation = undefined;
     pi.setActiveTools(credentials && gateway ? allowedTools(credentials) : []);
     archivedAttachments = [];
     if (!userTurn || !event.images?.length || !gateway || !credentials?.allowedTools.includes("event_append")) return;

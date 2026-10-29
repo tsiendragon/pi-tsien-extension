@@ -348,9 +348,8 @@ test("all fifteen tools map to actual gateway operations without shell or arbitr
     assert.equal("confirmed" in schema.properties, false);
     assert.equal("grantRef" in schema.properties, false);
   }
-  assert.equal(h.confirmations, 1);
-  assert.match(h.confirmationTexts[0], /event-1/);
-  assert.match(h.confirmationTexts[0], /corrected/);
+  // No confirmation popup: writes go straight through, including corrections.
+  assert.equal(h.confirmations, 0);
   await assert.rejects(h.execute("supervisor_action", { action: "x", command: "sh" }), /arguments are invalid/);
   await assert.rejects(h.execute("supervisor_inspect", { path: "relative.md" }), /approved absolute path/);
 });
@@ -420,192 +419,55 @@ test("an untagged prompt is a real user turn, so writes need no marker", async (
   assert.equal((f.received.at(-1)?.body as { userPrompt?: string }).userPrompt, undefined);
 });
 
-test("task completion, corrections and action completion require real UI confirmation", async (t) => {
+test("writes need no UI confirmation: completion, destructive correction and action completion go straight through", async (t) => {
   const f = await fixture(t);
   const h = harness(f.filePath);
   await h.emit("session_start");
-  await h.emit("before_agent_start", { prompt: `[supervisor-user-grant:${GRANT}]` });
+  await h.emit("before_agent_start", { prompt: `[supervisor-user-grant:${GRANT}]\n把这几件事都收尾` });
   const cases: [string, Record<string, unknown>][] = [
     ["supervisor_task_update", { uid: "local:task-1", status: "done", evidence: "tests passed" }],
     ["event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "corrected" }, reason: "verified" }],
     ["supervisor_action", { id: "action-1", expectedVersion: 1, state: "done" }],
   ];
   for (const [name, args] of cases) {
-    h.confirm(false);
-    const before = f.received.length;
-    await assert.rejects(h.execute(name, args), /操作确认未通过/);
-    assert.equal(f.received.length, before);
-    h.confirm(true);
     await h.execute(name, args);
-    assert.equal((f.received.at(-1)?.body as { confirmed: boolean }).confirmed, true);
+    const sent = f.received.at(-1)?.body as { confirmed?: boolean; userTurn?: boolean };
+    assert.equal(sent.confirmed, undefined);
+    assert.equal(sent.userTurn, true);
   }
+  // The user is never asked, even with no UI at all: the gateway owns authorization now.
+  assert.equal(h.confirmations, 0);
+  h.ctx.hasUI = false;
+  await h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "x" }, reason: "x" });
+  // Cheap validations that never needed the user stay in place.
   await assert.rejects(h.execute("supervisor_task_update", { uid: "local:task-1", status: "done" }), /requires observable evidence/);
   await assert.rejects(h.execute("supervisor_task_update", { uid: "local:task-1", status: "done", evidence: "  " }), /requires observable evidence/);
   await assert.rejects(h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "x" }, reason: "x", confirmed: true }), /arguments are invalid/);
   await assert.rejects(h.execute("event_get", { id: "event-1", grantRef: GRANT }), /arguments are invalid/);
-  h.ctx.hasUI = false;
-  await assert.rejects(h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "x" }, reason: "x" }), /requires UI confirmation/);
 });
 
-test("automatic coordination is limited, does not claim user identity and relies on backend authorization", async (t) => {
-  const f = await fixture(t);
-  const h = harness(f.filePath);
-  await h.emit("session_start");
-  h.ctx.hasUI = false;
-  const args = { sessionId: "s-2", text: "Assistant patrol: please report progress.", kind: "continue", sourceRefs: ["event-1"] };
-  await h.execute("supervisor_coordinate", args);
-  const sent = (f.received.at(-1)?.body as { request: { operation: string; args: Record<string, unknown> } }).request;
-  assert.equal(sent.operation, "coordinate");
-  assert.equal(sent.args.text, args.text);
-  assert.equal(h.confirmations, 0);
-  f.respondWith((_req, res) => res.writeHead(403).end('{"error":"automatic coordination not authorized"}'));
-  await assert.rejects(h.execute("supervisor_coordinate", args), /not authorized/);
-  await assert.rejects(h.execute("supervisor_coordinate", { ...args, text: "x".repeat(1025) }), /arguments are invalid/);
-  await assert.rejects(h.execute("supervisor_coordinate", { ...args, actor: "user" }), /arguments are invalid/);
-});
-
-test("a plain 确认 typed in the chat approves the asked request without a popup", async (t) => {
-  const f = await fixture(t);
-  const h = harness(f.filePath);
-  await h.emit("session_start");
-  const args = { uid: "local:t-1", status: "done", evidence: "验收 1 通过" };
-  // Turn 1: the user only said what to do, so the popup asks. Dismissing it must not approve anything.
-  await h.emit("before_agent_start", { prompt: "[supervisor-user-grant:11111111-2222-3333-4444-555555555555]\n把任务标成完成" });
-  h.confirm(false);
-  await assert.rejects(h.execute("supervisor_task_update", args), /操作确认未通过/);
-  assert.equal(h.confirmations, 1);
-  assert.equal(f.received.some(item => (item.body as { confirmed?: boolean })?.confirmed === true), false);
-  // Turn 2: the same operation after the user types "确认" needs no popup and carries confirmed:true.
-  f.received.length = 0;
-  await h.emit("before_agent_start", { prompt: "确认" });
-  await h.execute("supervisor_task_update", args);
-  assert.equal(h.confirmations, 1);
-  const executed = f.received.filter(item => (item.body as { request?: { operation?: string } })?.request?.operation === "task_update");
-  assert.equal(executed.length, 1);
-  assert.equal((executed[0].body as { confirmed?: boolean }).confirmed, true);
-});
-
-test("a typed 确认 still approves the request after the model re-words it", async (t) => {
-  const f = await fixture(t);
-  const h = harness(f.filePath);
-  await h.emit("session_start");
-  // A record whose text the model re-writes between attempts; only the payload shown to the user may run.
-  const shown = { objectRef: "task-journal:eu-fake-id-service", title: "EU Fake-ID 项目起点", type: "progress", description: "原样内容，用户看到的版本", attachmentIds: ["5432a199-1c5e-4802-9850-10d5ebd5b4a7"] };
-  // The gateway refuses an unconfirmed write exactly like the real one does.
-  const gateway = (_req: IncomingMessage, res: ServerResponse, received: Received) => {
-    if ((received.body as { confirmed?: boolean })?.confirmed === true) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, result: "gateway-result" }));
-      return;
-    }
-    res.writeHead(403).end(JSON.stringify({ error: "explicit_operation_confirmation_required" }));
-  };
-  f.respondWith(gateway);
-  await h.emit("before_agent_start", { prompt: "帮我为 EuFakeID 的时间先加一个截图" });
-  h.confirm(false);
-  await assert.rejects(h.execute("event_append", shown), /操作确认未通过/);
-  assert.equal(h.confirmations, 1);
-  // Turn 2: user types 确认 and the model retries with re-worded text — no second popup, and the write
-  // that runs still carries the description the user actually approved.
-  f.received.length = 0;
-  f.respondWith(gateway);
-  await h.emit("before_agent_start", { prompt: "确认" });
-  await h.execute("event_append", { ...shown, description: "重述后的内容，措辞不同" });
-  assert.equal(h.confirmations, 1);
-  // Two requests reach the gateway: the refused unconfirmed one, then the confirmed retry.
-  const executed = f.received.filter(item => (item.body as { request?: { operation?: string }; confirmed?: boolean })?.request?.operation === "record" && (item.body as { confirmed?: boolean }).confirmed === true);
-  assert.equal(executed.length, 1);
-  const sent = executed[0].body as { request: { args: Record<string, unknown> }; confirmed?: boolean };
-  assert.equal(sent.confirmed, true);
-  assert.equal(sent.request.args.description, shown.description);
-  assert.deepEqual(sent.request.args.attachmentIds, shown.attachmentIds);
-  // One confirmation authorizes one write: the next record needs a fresh popup.
-  h.confirm(false);
-  await assert.rejects(h.execute("event_append", { ...shown, title: "另一条记录" }), /操作确认未通过/);
-  assert.equal(h.confirmations, 2);
-});
-
-test("a typed 确认 never authorizes a different or ambiguous operation", async (t) => {
-  const f = await fixture(t);
-  const h = harness(f.filePath);
-  await h.emit("session_start");
-  const args = { uid: "local:t-1", status: "done", evidence: "验收 1 通过" };
-  await h.emit("before_agent_start", { prompt: "把任务标成完成" });
-  h.confirm(false);
-  await assert.rejects(h.execute("supervisor_task_update", args), /操作确认未通过/);
-  // Same word, different target: still a popup, never a silent approval.
-  await h.emit("before_agent_start", { prompt: "确认" });
-  h.confirm(false);
-  await assert.rejects(h.execute("supervisor_task_update", { ...args, uid: "local:t-2" }), /操作确认未通过/);
-  assert.equal(h.confirmations, 2);
-  // A sentence that merely contains 确认 is not a bare confirmation either.
-  await h.emit("before_agent_start", { prompt: "确认一下顺便把别的也改了吧" });
-  h.confirm(false);
-  await assert.rejects(h.execute("supervisor_task_update", args), /操作确认未通过/);
-  assert.equal(h.confirmations, 3);
-  // An explicit refusal disarms the pending request.
-  await h.emit("before_agent_start", { prompt: "不要" });
-  await h.emit("before_agent_start", { prompt: "确认" });
-  h.confirm(false);
-  await assert.rejects(h.execute("supervisor_task_update", args), /操作确认未通过/);
-  assert.equal(h.confirmations, 4);
-});
-
-test("confirmation text is specific and never exposes credentials", async (t) => {
-  const f = await fixture(t);
-  const h = harness(f.filePath);
-  await h.emit("session_start");
-  await h.emit("before_agent_start", { prompt: `[supervisor-user-grant:${GRANT}]` });
-  await h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: f.credentials.token }, reason: f.filePath });
-  assert.match(h.confirmationTexts[0], /event-1/);
-  assert.match(h.confirmationTexts[0], /redacted/);
-  assert.equal(h.confirmationTexts[0].includes(f.credentials.token), false);
-  assert.equal(h.confirmationTexts[0].includes(f.filePath), false);
-});
-
-test("a confirmation carries a machine-readable target trailer the dashboard can pin to a page", async (t) => {
-  const f = await fixture(t);
-  const h = harness(f.filePath);
-  await h.emit("session_start");
-  f.respondWith((_req, res) => res.writeHead(403).end(JSON.stringify({ error: "explicit_operation_confirmation_required" })));
-  await h.emit("before_agent_start", { prompt: "帮我为 EuFakeID 的时间先加一个截图" });
-  h.confirm(false);
-  await assert.rejects(
-    h.execute("event_append", { objectRef: "task-journal:eu-fake-id-service", title: "EU Fake-ID 项目起点", type: "progress", description: "记录一次", attachmentIds: ["5432a199-1c5e-4802-9850-10d5ebd5b4a7"] }),
-    /操作确认未通过/,
-  );
-  const lines = h.confirmationTexts[0].split("\n");
-  const trailer = lines.at(-1) ?? "";
-  assert.ok(trailer.startsWith("[supervisor-confirm]"), `missing trailer: ${trailer}`);
-  const marker = JSON.parse(trailer.slice("[supervisor-confirm]".length)) as { op?: string; ref?: string; sum?: string };
-  assert.equal(marker.op, "record");
-  assert.equal(marker.ref, "task-journal:eu-fake-id-service");
-  // The headline names the write, not the boilerplate question.
-  assert.equal(marker.sum, "EU Fake-ID 项目起点");
-  // The trailer must never carry credentials, and it is the only machine line in the message.
-  assert.equal(h.confirmationTexts[0].includes(f.credentials.token), false);
-  assert.equal(lines.filter(line => line.startsWith("[supervisor-confirm]")).length, 1);
-});
-
-test("automatic patrol cannot open completion or destructive correction confirmations", async (t) => {
+test("automatic patrol writes carry no user turn, so the gateway refuses them", async (t) => {
   const f = await fixture(t); const h = harness(f.filePath);
   await h.emit("session_start"); await h.emit("before_agent_start", { prompt: `${AUTO_PATROL_TAG}automatic patrol` });
-  await assert.rejects(h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "wrong" }, reason: "Unrequested automatic correction" }), /current user turn/);
-  await assert.rejects(h.execute("supervisor_task_update", { uid: "local:task-1", status: "done", evidence: "tests" }), /current user turn/);
+  await h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "wrong" }, reason: "Unrequested automatic correction" });
+  const sent = f.received.at(-1)?.body as { userTurn?: boolean; confirmed?: boolean };
+  assert.equal(sent.userTurn, undefined);
+  assert.equal(sent.confirmed, undefined);
+  // The refusal is the gateway's, so its error surfaces unchanged.
+  f.respondWith((_req, res) => res.writeHead(403).end(JSON.stringify({ error: "not a user turn" })));
+  await assert.rejects(h.execute("supervisor_task_update", { uid: "local:task-1", status: "done", evidence: "tests" }), /not a user turn/);
   assert.equal(h.confirmations, 0);
 });
 
-test("confirmation cannot carry a stale grant into another turn and shutdown clears readiness", async (t) => {
+test("an aborted turn writes nothing and shutdown clears readiness", async (t) => {
   const f = await fixture(t);
   const h = harness(f.filePath);
   await h.emit("session_start");
   await h.emit("before_agent_start", { prompt: `[supervisor-user-grant:${GRANT}]` });
-  h.confirmWith(async () => {
-    await h.emit("before_agent_start", { prompt: `${AUTO_PATROL_TAG}patrol` });
-    return true;
-  });
   const before = f.received.length;
-  await assert.rejects(h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "x" }, reason: "x" }), /turn changed/);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(h.execute("event_correct", { id: "event-1", expectedVersion: 1, patch: { title: "x" }, reason: "x" }, controller.signal), /cancelled/);
   assert.equal(f.received.length, before);
   await h.emit("session_shutdown");
   await assert.rejects(h.execute("supervisor_context"), /not ready/);

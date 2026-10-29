@@ -21,7 +21,7 @@
 HTTP over Unix socket，不支持 TCP 回退、代理或重定向。POST /execute：
 
 ```text
-{request: {operation, args}, grantRef?, confirmed?}
+{request: {operation, args}, grantRef?, userTurn?, userPrompt?}
 ```
 
 工具参数为严格 Type.Object，不接受额外权限字段。Extension 自动以 sessionId、operation、toolCallId 生成稳定 requestId，重试不会重复写同一事件或任务。
@@ -46,21 +46,21 @@ sourceKind=user 表示用户本人提供，relay 表示用户转述合作方、�
 
 ## 授权和确认
 
-写入授权按“回合来源”判定：**自动巡查轮**由 Dashboard 在提示前加机器标签 `[supervisor-auto-patrol]`，扩展据此把该轮标为 `userTurn: false`，后端拒绝其中的一切写入；**任何没有该标签的提示都算真实用户轮**（在面板、会话页或弹窗里直接说话都行），扩展随请求带 `userTurn: true`，无需任何用户可见标记即可记录。该轮原话（截断 4000 字符）随请求以 `userPrompt` 发送，服务据此解析本轮授权哪些操作，否定与提问仍然不授权。弹窗发出的消息另外带单个 `[supervisor-user-grant:<uuid>]` 标记，用于把用户原话作为审计引用（缺失或多个标记则不带引用）。自动巡查不会继承写授权，也不能弹出正式完成/破坏性更正确认。否定、提问或不明确的语言不会因关键词获得权限；当前真实用户轮内可通过展示具体目标与内容的 UI 确认授权该项操作。模型不能自己传 grantRef、confirmed 或用户身份。
+写入授权按“回合来源”判定：**自动巡查轮**由 Dashboard 在提示前加机器标签 `[supervisor-auto-patrol]`，扩展据此把该轮标为 `userTurn: false`，后端拒绝其中的一切写入；**任何没有该标签的提示都算真实用户轮**（在面板、会话页或弹窗里直接说话都行），扩展随请求带 `userTurn: true`，无需任何用户可见标记即可记录。该轮原话（截断 4000 字符）随请求以 `userPrompt` 发送，仅用于审计与上文核对；服务不再据此判断“这一轮要做什么”。弹窗发出的消息另外带单个 `[supervisor-user-grant:<uuid>]` 标记，用于把用户原话作为审计引用（缺失或多个标记则不带引用）。自动巡查不会继承写授权。**扩展不做任何写入确认**：真实用户轮里直接发送写请求，不弹 `ctx.ui.confirm`、不需要用户在对话里回「确认」。模型不能自己传 grantRef、confirmed 或用户身份。
 
-- 明确的普通任务状态更新不重复确认；完成状态还需 evidence，并由 ctx.ui.confirm 获得真实确认。
-- 普通时间、参与者、下一步和阶段更正不重复确认；覆盖标题/原话/事实等其他字段以及待办完成使用真实 UI 确认，取消不发送写请求。
-- 普通澄清/继续/纠偏协调由后端 mode 和目标会话授权控制，不冒充用户决策；敏感扩展确认不能自动回答。
-- 确认等待期间切换轮次或关闭会话，旧操作失效。没有 UI 则拒绝受确认保护的操作。
+- 明确的任务状态更新直接写入；完成状态仍需非空 `evidence`（数据质量校验，不是人工确认）。
+- 事件更正（含覆盖标题/原话/事实）直接写入并保留修订历史；待办完成同样直接写入。
+- 普通澄清/继续/纠偏协调由后端 mode 和目标会话授权控制，不冒充用户决策；其他扩展的敏感确认不能自动回答。
+- 请求发出后切换轮次或关闭会话，旧请求按取消处理，不重试。没有 UI 也能正常写入（不再需要界面确认）。
 
-请求绝对超时 15 秒，普通响应最多 2 MiB；仅 event_get(includeImages=true) 允许最多 9 MiB 传输，后端限定 4 张、图像原始字节共 6 MiB，文本结果不嵌入 base64。可通过 AbortSignal 取消。HTTP 错误、后端拒绝、无效 JSON、空执行结果、超限、断流或超时明确抛错，不伪造成功。凭证值在返回结果、错误和确认提示中遮盖。后端部分成功结果原样呈现，主 Agent 必须说明。
+请求绝对超时 15 秒，普通响应最多 2 MiB；仅 event_get(includeImages=true) 允许最多 9 MiB 传输，后端限定 4 张、图像原始字节共 6 MiB，文本结果不嵌入 base64。可通过 AbortSignal 取消。HTTP 错误、后端拒绝、无效 JSON、空执行结果、超限、断流或超时明确抛错，不伪造成功。凭证值在返回结果和错误中遮盖。后端部分成功结果原样呈现，主 Agent 必须说明。
 
 ## 验证边界
 
-测试文件：`~/repos/pi-tsien-extension/test/supervisor.test.ts`，覆盖本地 Unix 网关、15 个工具、错误/超时/取消、初始化和白名单、按轮授权清除及真实确认（最终结果见 Dashboard 实施记录）；工作区 TypeScript 检查通过。
+测试文件：`~/repos/pi-tsien-extension/test/supervisor.test.ts`，覆盖本地 Unix 网关、15 个工具、错误/超时/取消、初始化和白名单、按轮授权清除及免确认写入（最终结果见 Dashboard 实施记录）；工作区 TypeScript 检查通过。
 
 `supervisor_context` 内嵌的事件列表已改为摘要并按默认 50 条截断（返回 `eventsTotal`/`eventsTruncated`）；需要过滤、分页或正文时用 `event_query` / `event_get`。
 
-Dashboard 的 `backend/__tests__/supervisor-integration.test.ts` 另外把实际 Extension、后端网关、事件 Store 与本地 Task Provider 贯通，检查创建 Epic/子 Task、状态更新、回复记录、更正、完成确认及自动巡查拒写。
+Dashboard 的 `backend/__tests__/supervisor-integration.test.ts` 另外把实际 Extension、后端网关、事件 Store 与本地 Task Provider 贯通，检查创建 Epic/子 Task、状态更新、回复记录、更正、免确认完成写入及自动巡查拒写。
 
 上述不替代真实模型/浏览器与运行中服务的部署验收，当前没有代用户启动或重启服务。
