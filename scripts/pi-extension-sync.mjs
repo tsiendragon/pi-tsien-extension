@@ -261,11 +261,19 @@ export function buildSyncPlan({
 	const loadOrderChanged = !sameEntry(normalizedCurrentExtensions, effectiveExtensions);
 
 	const autoExtensionsDir = join(absoluteAgentDir, "extensions");
+	// 外部安装器（例如 marketplace 的插件安装流程）也会往这个目录写扩展。
+	// 这些文件不归本同步器管，列进保留名单即可，否则会把安装器装好的扩展
+	// 当“未托管”隔离掉。
+	const autoExtensionKeep = new Set(
+		(Array.isArray(config.prune?.autoExtensionKeep) ? config.prune.autoExtensionKeep : [])
+			.filter((name) => typeof name === "string"),
+	);
 	const autoExtensionRemovals = existsSync(autoExtensionsDir)
 		? readdirSync(autoExtensionsDir, { withFileTypes: true })
 			.filter((entry) => entry.isFile() && /\.(?:[cm]?[jt]s)(?:\.disabled)?$/.test(entry.name))
 			.map((entry) => ({ name: entry.name, path: join(autoExtensionsDir, entry.name) }))
 			.filter((entry) => !desiredSet.has(resolve(entry.path)))
+			.filter((entry) => !autoExtensionKeep.has(entry.name))
 			.sort((left, right) => left.name.localeCompare(right.name))
 		: [];
 

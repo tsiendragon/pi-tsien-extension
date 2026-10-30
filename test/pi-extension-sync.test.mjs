@@ -73,6 +73,48 @@ test("sync preserves configured package install order and extension load order",
 	assert.equal(existsSync(join(result.backupDir, "settings.json")), true);
 });
 
+test("autoExtensionKeep 里的扩展不会被隔离（marketplace 安装器装的文件靠它保住）", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-keep-"));
+	const repoRoot = join(root, "pi-tsien-extension");
+	const agentDir = join(root, ".pi", "agent");
+	const configPath = join(agentDir, "extensions.config.json");
+	const marketplaceRoot = join(root, "marketplace");
+	mkdirSync(join(repoRoot, "extensions"), { recursive: true });
+	mkdirSync(marketplaceRoot, { recursive: true });
+	mkdirSync(join(agentDir, "extensions"), { recursive: true });
+
+	writeFileSync(join(agentDir, "extensions", "installer-owned.ts"), "export default {};");
+	writeFileSync(join(agentDir, "extensions", "installer-dep.mjs"), "export const x = 1;");
+	writeFileSync(join(agentDir, "extensions", "legacy.ts"), "legacy");
+	writeFileSync(join(agentDir, "extensions", "roles.json"), "{}");
+	writeFileSync(join(repoRoot, "extensions", "goal.ts"), "export default {};");
+	writeJson(join(agentDir, "settings.json"), { packages: [], extensions: [] });
+	writeJson(configPath, {
+		version: 1,
+		packages: [{ id: "tsien", source: "${PI_TSIEN_EXTENSION_ROOT}" }],
+		loadOrder: [{ package: "tsien", path: "extensions/goal.ts" }],
+		prune: {
+			packages: true,
+			extensions: true,
+			autoDiscoveredExtensions: "quarantine",
+			autoExtensionKeep: ["installer-owned.ts", "installer-dep.mjs"],
+		},
+	});
+
+	const plan = buildSyncPlan({
+		configPath,
+		agentDir,
+		repoRoot,
+		env: { HOME: root, PI_MARKETPLACE_ROOT: marketplaceRoot },
+	});
+	assert.deepEqual(plan.autoExtensionRemovals.map((entry) => entry.name), ["legacy.ts"]);
+	applySyncPlan(plan, { now: new Date("2026-08-22T00:00:00.000Z") });
+	assert.equal(existsSync(join(agentDir, "extensions", "installer-owned.ts")), true);
+	assert.equal(existsSync(join(agentDir, "extensions", "installer-dep.mjs")), true);
+	assert.equal(existsSync(join(agentDir, "extensions", "roles.json")), true, "非脚本的支撑文件本来就不该动");
+	assert.equal(existsSync(join(agentDir, "extensions", "legacy.ts")), false);
+});
+
 test("sync keeps Pi override entries instead of pruning user disable flags", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-extension-sync-override-"));
 	const repoRoot = join(root, "pi-tsien-extension");
