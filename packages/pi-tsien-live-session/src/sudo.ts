@@ -7,10 +7,13 @@ import { createServer } from "node:net";
 import { spawn } from "node:child_process";
 
 export interface SudoRequest {
-  id: string; method: "sudo"; title: string; command: string; cwd: string; host: string; expiresAt: number;
+  id: string; method: "sudo"; title: string; message: string; command: string; cwd: string; host: string; expiresAt: number;
 }
-export interface SudoSpec { executable: string; args: string[]; cwd: string }
+export interface SudoSpec { executable: string; args: string[]; cwd: string; reason: string }
 export function validateSudoSpec(spec: SudoSpec): void {
+  if (typeof spec.reason !== "string" || !spec.reason.trim() || spec.reason.length > 800) {
+    throw new Error("sudo_exec requires a concise reason explaining what this command does, why it needs root, and what it affects (max 800 characters)");
+  }
   if (!isAbsolute(spec.executable) || !isAbsolute(spec.cwd) || [spec.executable, spec.cwd, ...spec.args].some(s => s.includes("\0")) || JSON.stringify(spec).length > 16000) {
     throw new Error("sudo_exec requires absolute executable/cwd, bounded arguments, and no NUL characters");
   }
@@ -34,7 +37,7 @@ export class SudoApprovals {
       const timer = setTimeout(abort, this.timeout);
       this.pending.set(id, { finish, expiresAt });
       signal?.addEventListener("abort", abort, { once: true });
-      this.publish({ id, method: "sudo", title: "管理员授权 · 仅本次命令", command: JSON.stringify([spec.executable, ...spec.args]), cwd: spec.cwd, host: hostname(), expiresAt });
+      this.publish({ id, method: "sudo", title: "管理员授权 · 仅本次命令", message: spec.reason.trim(), command: JSON.stringify([spec.executable, ...spec.args]), cwd: spec.cwd, host: hostname(), expiresAt });
     });
   }
   answer(id: string, password?: string, cancelled = false): boolean {

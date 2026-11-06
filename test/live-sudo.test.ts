@@ -6,12 +6,13 @@ import { join } from "node:path";
 import { SudoApprovals, runSudo, validateSudoSpec } from "../packages/pi-tsien-live-session/src/sudo.ts";
 import { parseBrokerMessage } from "../packages/pi-tsien-live-session/src/protocol.ts";
 
-const spec = { executable: "/usr/bin/id", args: ["-u"], cwd: "/tmp" };
+const spec = { executable: "/usr/bin/id", args: ["-u"], cwd: "/tmp", reason: "检查管理员身份是否生效：打印当前执行用户的 UID，不修改文件。" };
 test("sudo authorization is bound to a random request, one-shot and secret-free", async () => {
   const events: any[] = [];
   const gate = new SudoApprovals(event => events.push(event));
   const wait = gate.request(spec);
   assert.equal(events[0].method, "sudo");
+  assert.equal(events[0].message, spec.reason);
   assert.deepEqual(JSON.parse(events[0].command), [spec.executable, ...spec.args]);
   assert.equal(gate.answer("wrong-id", "test-secret"), false);
   assert.equal(gate.answer(events[0].id, "test-secret"), true);
@@ -38,6 +39,8 @@ test("rejects multiline password and ambiguous paths", async () => {
   gate.cancelAll(); await wait;
   assert.throws(() => validateSudoSpec({ ...spec, executable: "id" }));
   assert.throws(() => validateSudoSpec({ ...spec, args: ["a\0b"] }));
+  assert.throws(() => validateSudoSpec({ ...spec, reason: "  " }));
+  assert.throws(() => validateSudoSpec({ ...spec, reason: "x".repeat(801) }));
 });
 test("aborted execution never starts sudo", async () => {
   const controller = new AbortController(); controller.abort();

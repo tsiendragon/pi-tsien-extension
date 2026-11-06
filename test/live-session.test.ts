@@ -1275,10 +1275,11 @@ test("sudo tool cancels on bridge disconnect and rejects late credentials", asyn
   await harness.handlers.get("session_start")?.[0]({}, ctx);
   const tool = harness.tools.get("sudo_exec");
   assert.ok(tool);
-  const pending = tool.execute("t", { executable: "/usr/bin/id", args: ["-u"] }, undefined, undefined, ctx);
+  const pending = tool.execute("t", { executable: "/usr/bin/id", args: ["-u"], reason: "检查管理员身份，打印 UID。" }, undefined, undefined, ctx);
   const rejected = assert.rejects(pending, /cancelled/);
   const request = published.find(e => e.event.type === "extension_ui")!.event.data as any;
   assert.equal(request.method, "sudo");
+  assert.equal(request.message, "检查管理员身份，打印 UID。");
   const generic = await options!.executeCommand(envelope({ type: "answer_ui", id: request.id, value: "unsafe" }, "ordinary"));
   assert.ok(!generic.ok || (generic as any).result.accepted === false);
   options!.onDisconnected!();
