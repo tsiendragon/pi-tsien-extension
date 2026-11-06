@@ -220,6 +220,7 @@ export type LiveSessionCommand =
       readonly feature: "background-commands";
       readonly command: { readonly type: "background"; readonly toolCallId: string };
     }
+  | { readonly type: "answer_sudo"; readonly id: string; readonly password?: string; readonly cancelled?: boolean }
   | {
       readonly type: "answer_ui";
       readonly id: string;
@@ -447,6 +448,12 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
     };
   }
 
+  if (value.type === "answer_sudo" && hasOnlyKeys(value, ["type", "id"], ["password", "cancelled"])) {
+    if (typeof value.id !== "string" || !value.id || value.id.length > 256) return undefined;
+    if (value.cancelled !== undefined && typeof value.cancelled !== "boolean") return undefined;
+    if (value.cancelled === true ? value.password !== undefined : typeof value.password !== "string" || value.password.length > 4096 || /[\r\n\0]/.test(value.password)) return undefined;
+    return { type: "answer_sudo", id: value.id, ...(typeof value.password === "string" ? { password: value.password } : {}), ...(value.cancelled === true ? { cancelled: true } : {}) };
+  }
   if (value.type === "answer_ui" && hasOnlyKeys(value, ["type", "id"], ["value", "cancelled"])) {
     if (!isBoundedString(value.id, 256)) return undefined;
     if (value.value !== undefined && typeof value.value !== "string") return undefined;

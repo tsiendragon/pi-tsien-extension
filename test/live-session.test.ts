@@ -28,6 +28,7 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
 function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
   const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
   const sent: Array<{ content: unknown; options: unknown }> = [];
   const pendingSends: Array<() => void> = [];
   const busHandlers = new Map<string, Array<(data: unknown) => void>>();
@@ -38,7 +39,7 @@ function extensionHarness() {
       handlers.set(name, list);
     },
     registerCommand(name: string, command: unknown) { commands.set(name, command); },
-    registerTool() {},
+    registerTool(tool: any) { tools.set(tool.name, tool); },
     sendUserMessage(content: unknown, options: unknown) {
       sent.push({ content, options });
       return new Promise<void>(resolve => { pendingSends.push(resolve); });
@@ -61,7 +62,7 @@ function extensionHarness() {
       },
     },
   } as unknown as ExtensionAPI;
-  return { pi, handlers, commands, sent, pendingSends, busHandlers };
+  return { pi, handlers, commands, tools, sent, pendingSends, busHandlers };
 }
 
 function context(state: { idle: boolean; aborted: boolean; shutdown?: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[]; scopedModels?: unknown }): ExtensionContext {
@@ -859,7 +860,7 @@ test("Live Session advertises the session_tree capability and re-snapshots on tr
   });
   await harness.handlers.get("session_start")?.[0]({}, ctx);
 
-  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "session_shutdown"]);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "sudo_approval", "session_shutdown"]);
 
   // Terminal `/tree` (or our own command) must push a fresh snapshot: the
   // snapshot only carries the ACTIVE branch, so an event alone would leave the
@@ -883,7 +884,7 @@ test("Live Session advertises session_clear only while /clear is really register
   });
   const ctx = context({ idle: true, aborted: false, notifications: [] });
   await harness.handlers.get("session_start")?.[0]({}, ctx);
-  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "session_shutdown", "session_clear"]);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "sudo_approval", "session_shutdown", "session_clear"]);
 
   // The dashboard's 「清空」rides the input channel as `/clear`, and `/clear` comes from
   // the session-aliases EXTENSION, not from pi. pi skips an extension whose file is
@@ -891,7 +892,7 @@ test("Live Session advertises session_clear only while /clear is really register
   // click that burns a turn and clears nothing. So the flag is checked, not assumed.
   (harness.pi as unknown as { getCommands: () => unknown[] }).getCommands = () => [];
   await harness.handlers.get("session_start")?.[0]({}, ctx);
-  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "session_shutdown"]);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "sudo_approval", "session_shutdown"]);
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
@@ -1261,4 +1262,30 @@ test("every snapshot re-announces the feature state it does not carry", async ()
   assert.ok(features.includes("btw"), `re-announced btw, got ${JSON.stringify(features)}`);
   const btw = published.find(message => message.event.type === "live_feature_snapshot" && (message.event.data as { feature?: string }).feature === "btw");
   assert.deepEqual((btw!.event.data as { snapshot?: unknown }).snapshot, { status: "ready", conversation: [] });
+});
+
+test("sudo tool cancels on bridge disconnect and rejects late credentials", async () => {
+  const harness = extensionHarness(), published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "sudo-process", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, stop() {}, sendSnapshot() {}, isReady: () => true, publish: e => published.push(e) }; },
+  });
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const tool = harness.tools.get("sudo_exec");
+  assert.ok(tool);
+  const pending = tool.execute("t", { executable: "/usr/bin/id", args: ["-u"] }, undefined, undefined, ctx);
+  const rejected = assert.rejects(pending, /cancelled/);
+  const request = published.find(e => e.event.type === "extension_ui")!.event.data as any;
+  assert.equal(request.method, "sudo");
+  const generic = await options!.executeCommand(envelope({ type: "answer_ui", id: request.id, value: "unsafe" }, "ordinary"));
+  assert.ok(!generic.ok || (generic as any).result.accepted === false);
+  options!.onDisconnected!();
+  await rejected;
+  const late = await options!.executeCommand(envelope({ type: "answer_sudo", id: request.id, password: "test-only" }, "late"));
+  assert.equal((late as any).result.accepted, false);
+  assert.equal(JSON.stringify(published).includes("test-only"), false);
+  assert.ok(published.find(e => e.event.type === "extension_ui_closed"));
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
