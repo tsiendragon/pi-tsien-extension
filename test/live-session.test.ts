@@ -1275,8 +1275,9 @@ test("sudo tool cancels on bridge disconnect and rejects late credentials", asyn
   await harness.handlers.get("session_start")?.[0]({}, ctx);
   const tool = harness.tools.get("sudo_exec");
   assert.ok(tool);
-  const pending = tool.execute("t", { executable: "/usr/bin/id", args: ["-u"], reason: "检查管理员身份，打印 UID。" }, undefined, undefined, ctx);
+  const pending = tool.execute("t", { executable: "/usr/bin/id", args: ["-u"], cwd: "/tmp", reason: "检查管理员身份，打印 UID。" }, undefined, undefined, ctx);
   const rejected = assert.rejects(pending, /cancelled/);
+  for (let i = 0; i < 100 && !published.some(e => e.event.type === "extension_ui"); i++) await new Promise(resolve => setTimeout(resolve, 5));
   const request = published.find(e => e.event.type === "extension_ui")!.event.data as any;
   assert.equal(request.method, "sudo");
   assert.equal(request.message, "检查管理员身份，打印 UID。");
@@ -1288,5 +1289,48 @@ test("sudo tool cancels on bridge disconnect and rejects late credentials", asyn
   assert.equal((late as any).result.accepted, false);
   assert.equal(JSON.stringify(published).includes("test-only"), false);
   assert.ok(published.find(e => e.event.type === "extension_ui_closed"));
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("sudo tool rejects invalid fields and nonexistent targets before publishing UI", async () => {
+  const harness = extensionHarness(), published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "invalid-sudo", startedAt: 1 },
+    createClient: () => ({ start() {}, stop() {}, sendSnapshot() {}, isReady: () => true, publish: e => published.push(e) }),
+  });
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const tool = harness.tools.get("sudo_exec")!;
+  assert.ok(tool.parameters.required.includes("reason"));
+  assert.equal(tool.parameters.additionalProperties, false);
+  const valid = { executable: "/usr/bin/id", args: [], cwd: "/tmp", reason: "检查 UID，不修改文件。" };
+  for (const [params, field] of [
+    [{ ...valid, reason: undefined }, "reason"],
+    [{ ...valid, args: "-u" }, "args"],
+    [{ ...valid, executable: "/nonexistent/pi-sudo-validation-target" }, "executable"],
+  ] as const) {
+    await assert.rejects(tool.execute("invalid", params, undefined, undefined, ctx), new RegExp(`invalid_sudo_parameters:.*${field}`));
+  }
+  assert.equal(published.filter(e => e.event.type === "extension_ui").length, 0);
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("sudo filesystem preflight cannot outlive a disconnect even if the bridge reconnects", async () => {
+  const harness = extensionHarness(), published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "sudo-preflight-lifecycle", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, stop() {}, sendSnapshot() {}, isReady: () => true, publish: e => published.push(e) }; },
+  });
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const pending = harness.tools.get("sudo_exec")!.execute("preflight", {
+    executable: "/usr/bin/id", args: [], cwd: "/tmp", reason: "检查 UID，不修改文件。",
+  }, undefined, undefined, ctx);
+  const rejected = assert.rejects(pending, /cancelled during validation/);
+  options!.onDisconnected!();
+  options!.onConnected!();
+  await rejected;
+  assert.equal(published.filter(e => e.event.type === "extension_ui").length, 0);
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
