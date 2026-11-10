@@ -220,6 +220,10 @@ export type LiveSessionCommand =
       readonly feature: "background-commands";
       readonly command: { readonly type: "background"; readonly toolCallId: string };
     }
+  /** Read-only snapshot of the prompts this bridge is holding before dispatch. */
+  | { readonly type: "get_queue" }
+  /** Withdraw one still-queued prompt; an already dispatched prompt cannot be recalled. */
+  | { readonly type: "cancel_queue_item"; readonly id: string }
   | { readonly type: "answer_sudo"; readonly id: string; readonly password?: string; readonly cancelled?: boolean }
   | {
       readonly type: "answer_ui";
@@ -373,6 +377,13 @@ function parseCommand(value: unknown): LiveSessionCommand | undefined {
   if (value.type === "get_models" && hasOnlyKeys(value, ["type"])) return { type: "get_models" };
 
   if (value.type === "get_context" && hasOnlyKeys(value, ["type"])) return { type: "get_context" };
+
+  if (value.type === "get_queue" && hasOnlyKeys(value, ["type"])) return { type: "get_queue" };
+
+  if (value.type === "cancel_queue_item" && hasOnlyKeys(value, ["type", "id"])) {
+    if (!isBoundedString(value.id, 128)) return undefined;
+    return { type: "cancel_queue_item", id: value.id };
+  }
 
   if (value.type === "set_model" && hasOnlyKeys(value, ["type", "provider", "modelId"])) {
     if (!isBoundedString(value.provider, 512) || !isBoundedString(value.modelId, 1024)) return undefined;
