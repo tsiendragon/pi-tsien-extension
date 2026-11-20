@@ -91,6 +91,35 @@ describe("parseRouterConfig", () => {
   });
 });
 
+describe("tier downgrade", () => {
+  it("runs one tier lower when every candidate of the requested tier is unusable", async () => {
+    const router = new ModelRouter({ configPath: configFile(baseConfig) });
+    router.reportFailure("c/medium-1", "not_found", "Model not found");
+    const lease = await router.acquire(router.plan({ tier: "medium" }), new Set());
+    expect(lease.model).toBe("a/light-1");
+    expect(lease.tier).toBe("light");
+    lease.release();
+  });
+
+  it("still fails when the lowest tier is unusable too", async () => {
+    const router = new ModelRouter({ configPath: configFile(baseConfig) });
+    router.reportFailure("c/medium-1", "not_found", "Model not found");
+    router.reportFailure("a/light-1", "not_found", "Model not found");
+    router.reportFailure("b/light-2", "not_found", "Model not found");
+    await expect(router.acquire(router.plan({ tier: "medium" }), new Set())).rejects.toBeInstanceOf(RouterExhaustedError);
+  });
+
+  it("does not downgrade while a candidate is merely cooling down", async () => {
+    const router = new ModelRouter({ configPath: configFile(baseConfig) });
+    router.reportFailure("c/medium-1", "rate_limited", "429 rate limit", 1_000);
+    const started = Date.now();
+    const lease = await router.acquire(router.plan({ tier: "medium" }), new Set());
+    expect(lease.model).toBe("c/medium-1");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+    lease.release();
+  });
+});
+
 describe("ModelRouter", () => {
   it("uses candidates in order, cools down rate-limited models, and returns after cooldown", async () => {
     const { router, advance } = clockRouter();

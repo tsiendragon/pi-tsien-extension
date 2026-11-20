@@ -6,6 +6,17 @@ import type { AgentThinkingLevel } from "./subagent-service.ts";
 
 export const TIERS = ["light", "medium", "heavy", "ultra"] as const;
 export type Tier = (typeof TIERS)[number];
+
+/**
+ * When every candidate of a tier is unusable (all disabled, or none registered),
+ * run one tier lower instead of failing outright. A weaker model that finishes
+ * beats a task that never starts.
+ */
+const DOWNGRADE_TIER: Partial<Record<Tier, Tier>> = {
+  ultra: "heavy",
+  heavy: "medium",
+  medium: "light",
+};
 export type RouterRole = "read_only" | "code" | "research";
 export type ExhaustedAction = "wait" | "wait_then_escalate" | "escalate" | "fail";
 
@@ -491,6 +502,7 @@ export class ModelRouter {
     }
     let tier = plan.tier as Tier;
     let waitStarted = this.now();
+    const visited = new Set<Tier>([tier]);
     for (;;) {
       if (signal?.aborted) throw signal.reason ?? new Error("aborted");
       const config = this.config();
@@ -525,8 +537,21 @@ export class ModelRouter {
         await this.sleep(Math.min(POLL_MS, Number.isFinite(earliestCooldown) ? earliestCooldown : POLL_MS, rule.maxWaitMs - waited), signal);
         continue;
       }
-      if ((rule.action === "escalate" || rule.action === "wait_then_escalate") && rule.escalateTo) {
+      // Escalation and downgrade can point at each other (light -> medium on
+      // exhaustion, medium -> light on downgrade); visiting each tier once stops
+      // them from passing the task back and forth forever.
+      if ((rule.action === "escalate" || rule.action === "wait_then_escalate") && rule.escalateTo && !visited.has(rule.escalateTo)) {
         tier = rule.escalateTo;
+        visited.add(tier);
+        waitStarted = this.now();
+        continue;
+      }
+      // Nothing in this tier can run at all (not just "busy" or "cooling down"):
+      // fall back to the next lower tier rather than failing the whole task.
+      const downgrade = DOWNGRADE_TIER[tier];
+      if (usable === 0 && downgrade && !visited.has(downgrade)) {
+        tier = downgrade;
+        visited.add(tier);
         waitStarted = this.now();
         continue;
       }
