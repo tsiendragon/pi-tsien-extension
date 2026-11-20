@@ -12,6 +12,8 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { registerChildMultiTool } from "./multi-tool.ts";
+import { defaultSubagentSessionDir } from "./providers/pi-rpc-process-provider.ts";
+import { pruneSubagentSessions } from "./session-retention.ts";
 import {
   WORKBENCH_RUNTIME_SYMBOL,
   createWorkbenchRuntimeHost,
@@ -1077,6 +1079,11 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
   const extensionHost = (useProcessDedupe ? globalThis : pi) as unknown as Record<PropertyKey, unknown>;
   if (extensionHost[extensionMarker]) return;
   extensionHost[extensionMarker] = true;
+  // Child transcripts grow ~0.5 GB a day; trim old ones once per plugin load.
+  const sessionDir = defaultSubagentSessionDir();
+  if (sessionDir && !isChildProcess) {
+    void pruneSubagentSessions(sessionDir).catch(() => undefined);
+  }
   const installedRuntime = isDashboard
     ? createWorkbenchRuntimeHost()
     : installWorkbenchRuntime();
