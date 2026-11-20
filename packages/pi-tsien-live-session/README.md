@@ -21,6 +21,12 @@
 
 `before_provider_request` 只做观察：记下最后一次发给 provider 的载荷，供 dashboard 的只读 `get_context` 命令取用（照原样返回 `undefined`，不改写请求）。
 
+## Proof jobs（只读）
+
+Live Session 在发送会话快照后，经 Pi 事件总线发送 `pimatrix:proof-jobs:request`（`{ sessionId }`），并监听 pi-matrix 的 `pimatrix:proof-jobs:snapshot`（`{ sessionId, tasks }`）。仅接收当前会话的数据。
+
+dashboard 收到 `live_feature_snapshot`，其 `data` 为 `{ feature: "proof-jobs", snapshot: { tasks } }`。每项仅包含 `id`、`label`、`state` 和可选的毫秒时间戳 `createdAt`、`startedAt`、`finishedAt`。快照替换整个列表；`tasks: []` 清空列表。切换会话不沿用旧列表，重连或 resync 会重新发布并请求最新快照。不提供 job 控制命令，协议仍为 v2。
+
 ## 配置
 
 无（协议见 `src/protocol.ts`）

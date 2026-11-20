@@ -141,6 +141,44 @@ export interface LiveSessionSummaryPatch {
   readonly compacting?: LiveSessionSummary["compacting"] | null;
 }
 
+export const PROOF_JOBS_FEATURE = "proof-jobs";
+export const PROOF_JOBS_REQUEST_EVENT = "pimatrix:proof-jobs:request";
+export const PROOF_JOBS_SNAPSHOT_EVENT = "pimatrix:proof-jobs:snapshot";
+
+export interface ProofJobsTask {
+  readonly id: string;
+  readonly label: string;
+  readonly state: string;
+  /** Timestamps are epoch milliseconds. */
+  readonly createdAt?: number;
+  readonly startedAt?: number;
+  readonly finishedAt?: number;
+}
+
+/** Full replacement in `live_feature_snapshot` data; an empty array clears it. */
+export interface ProofJobsSnapshot {
+  readonly tasks: readonly ProofJobsTask[];
+}
+
+/** Select only the public wire fields from a matching session's bus snapshot. */
+export function projectProofJobsSnapshot(value: unknown, sessionId: string): ProofJobsSnapshot | undefined {
+  if (!isRecord(value) || value.sessionId !== sessionId || !Array.isArray(value.tasks)) return undefined;
+  const tasks: ProofJobsTask[] = [];
+  for (const task of value.tasks) {
+    if (!isRecord(task)) return undefined;
+    const { id, label, state, createdAt, startedAt, finishedAt } = task;
+    if (typeof id !== "string" || typeof label !== "string" || typeof state !== "string") return undefined;
+    const timestamp = (at: unknown): at is number => typeof at === "number" && Number.isFinite(at);
+    tasks.push({
+      id, label, state,
+      ...(timestamp(createdAt) ? { createdAt } : {}),
+      ...(timestamp(startedAt) ? { startedAt } : {}),
+      ...(timestamp(finishedAt) ? { finishedAt } : {}),
+    });
+  }
+  return { tasks };
+}
+
 export type LiveSessionInputChannel = "web" | "terminal" | "chatapp" | "mobile";
 
 export interface LiveSessionImage {

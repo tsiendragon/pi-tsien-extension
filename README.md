@@ -201,7 +201,9 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 
 ### `pi-tsien-goal`
 
-已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项、每 20 分钟自动 continuation；遇到卡点先走「绕过/自助解决/先推进其他工作」阶梯，仍无法解决的外部等待记录为结构化 blocker 并保持目标 active、由 continuation 每轮先复核，暂停仅用于用户要求停止或继续不安全的场景。`/goal <objective>` 无人值守：一条命令即起草、保存并开始执行，没有替换确认、评审选择或开始确认；`/goal resume` 恢复后直接开始。目标状态变更通过扩展事件总线实时同步给 dashboard（live-session 收到后重推快照），无需等待重连或重载。
+已将 `pi-agent-goal` 迁入本 package，提供持久化目标、分支感知状态、验收标准、进度/阻塞项、基于轮末交接和后台证明任务事件的模型评估续跑（无周期注入）；遇到卡点先走「绕过/自助解决/先推进其他工作」阶梯，仍无法解决的外部等待记录为结构化 blocker 并保持目标 active、等待相关结果或人工输入，暂停仅用于用户要求停止或继续不安全的场景。`/goal <objective>` 无人值守：一条命令即起草、保存并开始执行，没有替换确认、评审选择或开始确认；`/goal resume` 恢复后直接开始。目标状态变更通过扩展事件总线实时同步给 dashboard（live-session 收到后重推快照），无需等待重连或重载。
+
+开始、恢复或收到「继续目标」时，只要预算内还有已授权、可执行的工作，就应在本轮推进，不把阶段汇报或下一步计划当成结束。仅查询状态时只回答状态；只有确实在等待结果且无其他可推进事项时，才酌情安排一次可核实的续查。`active` 表示目标尚未完成，不表示当前有任务在运行。
 
 - `/goal`、`/goal status`、`/goal start`、`/goal import`、`/goal pause|resume|complete|clear`
 - Tools：`get_goal`、`create_goal`、`propose_goal_draft`、`update_goal`、`complete_goal`、`pause_goal`、`update_goal_progress`、`update_goal_graph`

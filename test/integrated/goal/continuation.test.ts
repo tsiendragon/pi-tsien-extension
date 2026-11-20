@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	createGoalContinuationState,
-	GOAL_CONTINUATION_CUSTOM_TYPE,
 	maybeQueueGoalContinuation,
 	registerGoalRuntime,
 } from "pi-tsien-goal/src/runtime.ts";
@@ -102,92 +101,18 @@ describe("goal continuation", () => {
 		}
 	});
 
-	it("honors a one-minute interval configuration", async () => {
+	it.each(["provider/model", "off"])("does not inject periodic continuation with %s", async (models) => {
 		vi.useFakeTimers();
-		vi.setSystemTime(0);
 		try {
 			const handlers = new Map<string, (event: unknown, ctx: never) => Promise<unknown>>();
-			const created = createGoal();
-			const branch: Array<{ type: string; id?: string; timestamp?: number; customType?: string; data?: unknown }> = [
-				goalEntry(created.entry, 0),
-			];
-			const pi = {
-				registerFlag: vi.fn(),
-				on: vi.fn((event: string, handler) => handlers.set(event, handler)),
-				appendEntry: vi.fn((customType: string, data: unknown) =>
-					branch.push({ type: "custom", id: crypto.randomUUID(), timestamp: Date.now(), customType, data }),
-				),
-				sendUserMessage: vi.fn(),
-				getFlag: vi.fn((name: string) => {
-					if (name === "goal-continuation") return true;
-					if (name === "goal-continuation-interval-minutes") return "1";
-					return undefined;
-				}),
-			} as unknown as ExtensionAPI;
-			const ctx = {
-				sessionManager: { getBranch: vi.fn(() => branch) },
-				ui: { setStatus: vi.fn(), setWidget: vi.fn() },
-			};
-
-			registerGoalRuntime(pi);
+			const { api, ctx, sendUserMessage } = createHarness([goalEntry(createGoal().entry)]);
+			registerGoalRuntime({ ...api, getFlag: (name: string) => name === "goal-evaluator-models" ? models : undefined,
+				on: (event: string, handler: never) => handlers.set(event, handler),
+			} as unknown as ExtensionAPI);
 			await handlers.get("session_start")?.({}, ctx as never);
-			await vi.advanceTimersByTimeAsync(60_000 - 1);
-			expect((pi as unknown as { sendUserMessage: ReturnType<typeof vi.fn> }).sendUserMessage).not.toHaveBeenCalled();
-			await vi.advanceTimersByTimeAsync(1);
-			expect((pi as unknown as { sendUserMessage: ReturnType<typeof vi.fn> }).sendUserMessage).toHaveBeenCalledWith(
-				"继续目标",
-				{ deliverAs: "followUp" },
-			);
+			await vi.advanceTimersByTimeAsync(60 * 60_000);
+			expect(sendUserMessage).not.toHaveBeenCalled();
 			await handlers.get("session_shutdown")?.({}, ctx as never);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("fires every 20 minutes by default and cleans up on shutdown", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(0);
-		try {
-			const handlers = new Map<string, (event: unknown, ctx: never) => Promise<unknown>>();
-			const created = createGoal();
-			const branch: Array<{ type: string; id?: string; timestamp?: number; customType?: string; data?: unknown }> = [
-				goalEntry(created.entry, 0),
-			];
-			const pi = {
-				registerFlag: vi.fn(),
-				on: vi.fn((event: string, handler) => handlers.set(event, handler)),
-				appendEntry: vi.fn((customType: string, data: unknown) =>
-					branch.push({ type: "custom", id: crypto.randomUUID(), timestamp: Date.now(), customType, data }),
-				),
-				sendUserMessage: vi.fn(),
-				getFlag: vi.fn((name: string) => (name === "goal-continuation" ? true : undefined)),
-			} as unknown as ExtensionAPI;
-			const ctx = {
-				sessionManager: { getBranch: vi.fn(() => branch) },
-				ui: { setStatus: vi.fn(), setWidget: vi.fn() },
-			};
-
-			registerGoalRuntime(pi);
-			await handlers.get("session_start")?.({}, ctx as never);
-			await vi.advanceTimersByTimeAsync(20 * 60 * 1000 - 1);
-			expect((pi as unknown as { sendUserMessage: ReturnType<typeof vi.fn> }).sendUserMessage).not.toHaveBeenCalled();
-			await vi.advanceTimersByTimeAsync(1);
-			expect((pi as unknown as { sendUserMessage: ReturnType<typeof vi.fn> }).sendUserMessage).toHaveBeenCalledWith(
-				"继续目标",
-				{ deliverAs: "followUp" },
-			);
-			expect((pi as unknown as { appendEntry: ReturnType<typeof vi.fn> }).appendEntry).toHaveBeenCalledWith(
-				GOAL_CONTINUATION_CUSTOM_TYPE,
-				expect.objectContaining({ action: "queued", source: "timer" }),
-			);
-
-			await handlers.get("input")?.({ text: "继续目标" }, ctx as never);
-			await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
-			expect((pi as unknown as { sendUserMessage: ReturnType<typeof vi.fn> }).sendUserMessage).toHaveBeenCalledTimes(2);
-
-			await handlers.get("session_shutdown")?.({}, ctx as never);
-			await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
-			expect((pi as unknown as { sendUserMessage: ReturnType<typeof vi.fn> }).sendUserMessage).toHaveBeenCalledTimes(2);
 		} finally {
 			vi.useRealTimers();
 		}

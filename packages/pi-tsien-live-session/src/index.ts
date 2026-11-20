@@ -19,6 +19,11 @@ import { buildContextView, contextViewJson, CONTEXT_TOTAL_TEXT_BUDGET, type Cont
 import { dispatchLiveFeatureCommand, liveFeatureSnapshots, subscribeLiveFeatures } from "pi-tsien-shared/src/lib/live-observer.ts";
 import {
   LIVE_SESSION_PROTOCOL_VERSION,
+  PROOF_JOBS_FEATURE,
+  PROOF_JOBS_REQUEST_EVENT,
+  PROOF_JOBS_SNAPSHOT_EVENT,
+  projectProofJobsSnapshot,
+  type ProofJobsSnapshot,
   type CommandEnvelope,
   type CommandExecutionResult,
   type EventMessage,
@@ -58,7 +63,7 @@ function isLiveSessionActive(
 
 type PendingFeatureSnapshot = {
   snapshot: unknown;
-  ctx: ExtensionContext;
+  ctx?: ExtensionContext;
 };
 
 type QueuedInput = {
@@ -223,6 +228,8 @@ export function registerLiveSessionExtension(
   let featureCleanup: (() => void) | undefined;
   let featurePublishTimer: ReturnType<typeof setTimeout> | undefined;
   const pendingFeatureSnapshots = new Map<string, PendingFeatureSnapshot>();
+  let proofJobs: { sessionId: string; snapshot: ProofJobsSnapshot } | undefined;
+  let proofJobsCleanup: (() => void) | undefined;
   /**
    * Unanswered extension UI dialogs, keyed by request id.
    *
@@ -527,7 +534,7 @@ export function registerLiveSessionExtension(
   const queueFeatureSnapshot = (
     feature: string,
     snapshot: unknown,
-    ctx: ExtensionContext,
+    ctx?: ExtensionContext,
   ): void => {
     pendingFeatureSnapshots.set(feature, { snapshot, ctx });
     if (featurePublishTimer) return;
@@ -536,6 +543,25 @@ export function registerLiveSessionExtension(
       LIVE_FEATURE_PUBLISH_INTERVAL_MS,
     );
     featurePublishTimer.unref?.();
+  };
+
+  const resetProofJobs = (): void => {
+    proofJobs = undefined;
+    proofJobsCleanup?.();
+    proofJobsCleanup = undefined;
+    pendingFeatureSnapshots.delete(PROOF_JOBS_FEATURE);
+  };
+
+  const subscribeProofJobs = (sessionId: string): void => {
+    const scope: NonNullable<typeof proofJobs> = { sessionId, snapshot: { tasks: [] } };
+    proofJobs = scope;
+    proofJobsCleanup = pi.events.on(PROOF_JOBS_SNAPSHOT_EVENT, (data) => {
+      if (proofJobs !== scope || currentContext?.sessionManager.getSessionId() !== sessionId) return;
+      const snapshot = projectProofJobsSnapshot(data, sessionId);
+      if (!snapshot) return;
+      scope.snapshot = snapshot;
+      queueFeatureSnapshot(PROOF_JOBS_FEATURE, snapshot);
+    });
   };
 
   /**
@@ -555,6 +581,16 @@ export function registerLiveSessionExtension(
       if (snapshot === undefined) continue;
       client?.publish(projector.createEvent("live_feature_snapshot", { feature, snapshot }));
     }
+    const scope = proofJobs;
+    if (!scope || currentContext?.sessionManager.getSessionId() !== scope.sessionId) return;
+    // A synchronous response updates the cache before replay; otherwise replay
+    // the cached value (or an empty reset) and publish the response when it lands.
+    pi.events.emit(PROOF_JOBS_REQUEST_EVENT, { sessionId: scope.sessionId });
+    if (proofJobs !== scope) return;
+    pendingFeatureSnapshots.delete(PROOF_JOBS_FEATURE);
+    client?.publish(projector.createEvent("live_feature_snapshot", {
+      feature: PROOF_JOBS_FEATURE, snapshot: scope.snapshot,
+    }));
   };
 
   const lease = new LeaseManager({
@@ -1025,6 +1061,7 @@ export function registerLiveSessionExtension(
   });
 
   pi.on("session_start", async (event, ctx) => {
+    resetProofJobs();
     currentContext = ctx;
     // A new/forked/switched session has not sent anything yet; the old payload
     // belongs to another conversation.
@@ -1034,6 +1071,7 @@ export function registerLiveSessionExtension(
     lastActivityAt = Date.now();
     if (!isLiveSessionActive(ctx)) return;
     const mode: LiveSessionMode = ctx.mode;
+    subscribeProofJobs(ctx.sessionManager.getSessionId());
 
     // Re-subscribe per session_start so a fork/switch cannot leave two listeners
     // behind (pi also drops tracked bus subscriptions when the runtime reloads).
@@ -1295,6 +1333,7 @@ export function registerLiveSessionExtension(
   });
 
   pi.on("session_shutdown", (event) => {
+    resetProofJobs();
     lease.dispose(event.reason === "quit" ? "session_shutdown" : "session_switch");
     featureCleanup?.();
     featureCleanup = undefined;

@@ -25,7 +25,6 @@ export {
 	createGoalCompaction,
 	createGoalContextMessage,
 	createGoalContinuationState,
-	DEFAULT_GOAL_CONTINUATION_INTERVAL_MINUTES,
 	filterGoalContextMessages,
 	hydrateGoalContinuationState,
 	finishRunningGoalContinuation,

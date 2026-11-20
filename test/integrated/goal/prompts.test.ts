@@ -89,6 +89,18 @@ describe("goal prompt rendering", () => {
 		expect(context).toContain("never pause the goal for external waits");
 	});
 
+	it("requires execution after checkpoints without overriding status requests or real stops", () => {
+		for (const prompt of [renderGoalStartPrompt(goal()), renderGoalContext(goal())]) {
+			expect(prompt).toContain('including "继续目标", as a request to execute');
+			expect(prompt).toContain("take the next authorized, actionable step in this turn");
+			expect(prompt).toContain("If the user only asks for status or another task, answer that request instead");
+			expect(prompt).toContain("a real budget or safety limit");
+			expect(prompt).toContain("Do not bypass required human decisions or approvals");
+			expect(prompt).toContain("Proof jobs report completion automatically");
+			expect(prompt).toContain("Do not schedule a generic goal continuation");
+		}
+	});
+
 	it("documents update_goal guardrails in the goal context rules", () => {
 		const context = renderGoalContext(goal());
 
