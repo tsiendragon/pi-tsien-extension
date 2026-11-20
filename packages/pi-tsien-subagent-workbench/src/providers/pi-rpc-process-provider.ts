@@ -674,9 +674,12 @@ export class PiRpcProcessProvider implements SubagentProvider {
     this.loadPromptTemplates = options.loadPromptTemplates ?? true;
     this.loadContextFiles = options.loadContextFiles ?? true;
     this.environment = Object.freeze({ ...(options.environment ?? {}) });
+    // 30s was not enough under load: 35 runs in 30 days died in
+    // "Timed out waiting for Pi RPC response to get_state" after the child had
+    // already started, so the handshake gets the same room as a slow model.
     this.commandTimeoutMs = positiveInteger(
       "commandTimeoutMs",
-      options.commandTimeoutMs ?? 30_000,
+      options.commandTimeoutMs ?? 60_000,
     );
     this.startupTimeoutMs = positiveInteger(
       "startupTimeoutMs",
