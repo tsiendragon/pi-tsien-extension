@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import ptcExtension from "pi-tsien-code-mode/src/index.ts";
@@ -15,12 +16,54 @@ function createContext() {
   };
 }
 
-test("Code Mode is always available and composes active tools", async () => {
+const nativeTypeScript = spawnSync(process.execPath, [
+  "--permission", "--no-warnings", "--disable-sigusr1", "-e",
+  'require("node:module").stripTypeScriptTypes("const n: number = 1");',
+], { env: {}, encoding: "utf8", timeout: 2_000 });
+
+function assertCodeModeUnavailable() {
+  let start: ((event: unknown, ctx: unknown) => void) | undefined;
+  ptcExtension({
+    registerTool: () => assert.fail("must not expose run_code"),
+    on: (event: string, handler: typeof start) => {
+      assert.equal(event, "session_start", "only the startup diagnostic should be registered");
+      start = handler;
+    },
+    setActiveTools: () => assert.fail("must not change other active tools"),
+  } as any);
+  assert.ok(start);
+  const notices: Array<[string, string]> = [];
+  const ctx = { hasUI: true, ui: { notify: (text: string, level: string) => notices.push([text, level]) } };
+  start({}, ctx);
+  start({}, ctx);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0][1], "warning");
+  assert.match(notices[0][0], /run_code.*sandbox probe failed/);
+  assert.ok(notices[0][0].includes("/reload does not switch Node"));
+}
+
+test("Code Mode is not exposed when native TypeScript fails", {
+  skip: nativeTypeScript.status === 0,
+}, assertCodeModeUnavailable);
+
+test("Code Mode remains unavailable if the child cannot start", () => {
+  const execPath = process.execPath;
+  try {
+    process.execPath = `${execPath}/missing-node`;
+    assertCodeModeUnavailable();
+  } finally {
+    process.execPath = execPath;
+  }
+});
+
+test("Code Mode on supported Node composes active tools and only advertises when active", {
+  skip: nativeTypeScript.status !== 0,
+}, async () => {
   let registeredTool: any;
   let commandRegistrations = 0;
   const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
   const nestedCalls: Array<{ name: string; args: unknown }> = [];
-  const activeTools = ["read", "bash", "run_code"];
+  const activeTools = ["read", "bash"];
   const allTools = [
     {
       name: "read",
@@ -71,20 +114,26 @@ Available tools:
 - run_code: old description
 
 In addition to the tools above, you may have access to other custom tools depending on the project.`;
-  const prompt = await handlers.get("before_agent_start")?.[0]?.({ systemPrompt: basePrompt }, ctx);
+  const beforeAgentStart = handlers.get("before_agent_start")?.[0];
+  assert.ok(beforeAgentStart);
+  assert.equal(await beforeAgentStart({ systemPrompt: basePrompt.replace("- run_code: old description\n", "") }, ctx), undefined);
+  activeTools.push("run_code");
+  const prompt = await beforeAgentStart({ systemPrompt: basePrompt }, ctx);
   const writeIndex = prompt.systemPrompt.indexOf("- write:");
   const codeIndex = prompt.systemPrompt.indexOf("- run_code:");
   const customIndex = prompt.systemPrompt.indexOf("- knowledge_search:");
   assert.ok(writeIndex >= 0 && codeIndex > writeIndex && customIndex > codeIndex);
   assert.equal(prompt.systemPrompt.match(/^- run_code:/gm)?.length, 1);
   assert.match(prompt.systemPrompt, /默认首选/);
+  assert.match(prompt.systemPrompt, /单条命令直接用 bash/);
+  assert.match(registeredTool.description, /save a script and run the file/);
 
   const result = await registeredTool.execute(
     "outer-call",
     {
       description: "Read and run in one program",
       code: `
-        const [file, shell] = await Promise.all([
+        const [file, shell]: [string, string] = await Promise.all([
           tools.read({ path: "README.md" }),
           tools.bash({ command: "printf shell-output" }),
         ]);
@@ -101,4 +150,47 @@ In addition to the tools above, you may have access to other custom tools depend
   assert.match(result.content[0].text, /shell-output/);
   assert.equal(result.details.codeMode, true);
   assert.equal(result.details.availableTools, 2);
+});
+
+test("Code Mode distinguishes compile, execution, and nested tool failures", {
+  skip: nativeTypeScript.status !== 0,
+}, async () => {
+  let registeredTool: any;
+  let nestedCalls = 0;
+  ptcExtension({
+    registerTool(definition: any) { registeredTool = definition; },
+    on() {},
+    getActiveTools: () => ["run_code", "bash"],
+    async executeTool() {
+      nestedCalls += 1;
+      return {
+        result: { content: [{
+          type: "text",
+          text: `Python SyntaxError: unterminated string literal\n${"x".repeat(80_000)}\nCommand exited with code 2`,
+        }] },
+        isError: true,
+      };
+    },
+  } as any);
+  const execute = (code: string) => registeredTool.execute(
+    "diagnostic-test", { code, description: "Test diagnostics" }, undefined, undefined, createContext(),
+  );
+
+  await assert.rejects(() => execute('await tools.bash({ command: "unused" }); const x: number = ;'),
+    /script compilation failed \(no tools ran\)/);
+  assert.equal(nestedCalls, 0);
+  await assert.rejects(() => execute('throw new Error("bad script state")'), /script execution failed[\s\S]*bad script state/);
+  assert.equal(nestedCalls, 0);
+  await assert.rejects(() => execute('await tools.bash({ command: "fake command" })'), (error: Error) => {
+    assert.match(error.message, /nested tool "bash" failed/);
+    assert.match(error.message, /Python SyntaxError: unterminated string literal/);
+    assert.match(error.message, /omitted middle of tool error/);
+    assert.match(error.message, /Command exited with code 2$/);
+    assert.ok(error.message.length < 5000);
+    return true;
+  });
+  assert.equal(nestedCalls, 1, "failed tool was not retried");
+  const caught = await execute('try { await tools.bash({ command: "fake command" }); } catch (error) { return String(error).includes("Command exited with code 2"); }');
+  assert.match(caught.content[0].text, /true/);
+  assert.equal(nestedCalls, 2);
 });

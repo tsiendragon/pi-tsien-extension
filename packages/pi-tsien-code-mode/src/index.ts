@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -36,12 +36,21 @@ const FULL_TOOLS = [...READ_ONLY_TOOLS, "write", "run"] as const;
 const MAX_CODE_BYTES = 64 * 1024;
 const MAX_PROTOCOL_BYTES = 256 * 1024;
 const MAX_BINDING_RESULT_BYTES = 64 * 1024;
+const MAX_ERROR_EDGE_BYTES = 2 * 1024;
 const MAX_WRITE_BYTES = 256 * 1024;
 const MAX_RUN_OUTPUT_BYTES = 128 * 1024;
 const MAX_SUB_CALLS = 256;
 const RUNTIME_HEARTBEAT_GRACE_MS = 250;
 const RUNTIME_WATCHDOG_INTERVAL_MS = 100;
 const MAX_RUN_TIMEOUT_MS = 15_000;
+const RUNTIME_PROBE_TIMEOUT_MS = 2_000;
+const RUNTIME_ARGS = [
+  "--permission",
+  "--no-warnings",
+  "--disable-sigusr1",
+  "--max-old-space-size=128",
+  fileURLToPath(new URL("./runtime-child.mjs", import.meta.url)),
+];
 const BLOCKED_WRITE_SEGMENTS = new Set([".git", ".pi", ".ssh", ".aws", ".gnupg", "node_modules"]);
 
 type BindingName = string;
@@ -75,6 +84,8 @@ type RuntimeDoneMessage = {
 type RuntimeErrorMessage = {
   type: "error";
   code?: "compute_timeout";
+  phase?: "compile" | "execute" | "tool";
+  tool?: string;
   message: string;
   computeTimeMs?: number;
 };
@@ -185,7 +196,7 @@ function textFromToolResult(result: { content: Array<{ type: string; text?: stri
     .join("\n");
 }
 
-const CODE_MODE_SNIPPET = "默认首选：只要任务需要多次工具调用、循环、分支、并行、批量读取、过滤或汇总，就用一段程序一次完成，不要在普通工具之间来回多轮；仅当单步操作、或每一步都必须依据上一步结果临时判断时才改用普通工具。";
+const CODE_MODE_SNIPPET = "默认首选：只要任务需要多次工具调用、循环、分支、并行、批量读取、过滤或汇总，就用一段程序一次完成，不要在普通工具之间来回多轮；单条命令直接用 bash；多行 Python 或包含多层引号的脚本先用 write 保存成文件，再运行，避免把 heredoc 塞进 TypeScript 字符串。需要逐步判断时直接用普通工具。";
 
 function placeCodeModeAfterCoreTools(systemPrompt: string): string {
   const lines = systemPrompt.split("\n");
@@ -211,6 +222,23 @@ function truncateBindingResult(value: string): string {
   if (bytes <= MAX_BINDING_RESULT_BYTES) return value;
   const prefix = Buffer.from(value, "utf8").subarray(0, MAX_BINDING_RESULT_BYTES).toString("utf8");
   return `${prefix}\n[PTC binding result truncated at ${MAX_BINDING_RESULT_BYTES} bytes]`;
+}
+
+function summarizeBindingError(text: string): string {
+  const bytes = Buffer.from(text.trim(), "utf8");
+  if (bytes.length <= 2 * MAX_ERROR_EDGE_BYTES) return bytes.toString("utf8");
+  const head = bytes.subarray(0, MAX_ERROR_EDGE_BYTES).toString("utf8");
+  const tail = bytes.subarray(-MAX_ERROR_EDGE_BYTES).toString("utf8");
+  return `${head}\n[Code Mode: omitted middle of tool error]\n${tail}`;
+}
+
+function formatRuntimeError(error: RuntimeErrorMessage): string {
+  switch (error.phase) {
+    case "compile": return `Code Mode: script compilation failed (no tools ran).\n${error.message}`;
+    case "execute": return `Code Mode: script execution failed.\n${error.message}`;
+    case "tool": return `Code Mode: nested tool ${JSON.stringify(error.tool ?? "unknown")} failed.\n${error.message}`;
+    default: return error.message;
+  }
 }
 
 function requireRecord(value: unknown, toolName: string): Record<string, unknown> {
@@ -471,6 +499,26 @@ function parseRuntimeMessage(line: string): RuntimeMessage {
   throw new Error("Invalid PTC runtime protocol message");
 }
 
+function supportsPtcRuntime(): boolean {
+  // Some Node builds export stripTypeScriptTypes but throw ERR_NO_TYPESCRIPT on use.
+  // Check the actual sandboxed child with a fixed program, not the host's API shape.
+  const probe = spawnSync(process.execPath, RUNTIME_ARGS, {
+    env: {},
+    input: `${JSON.stringify({ type: "run", code: "const value: number = 42; return value;", allowedTools: [] })}\n`,
+    encoding: "utf8",
+    timeout: RUNTIME_PROBE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    maxBuffer: MAX_PROTOCOL_BYTES,
+  });
+  if (probe.error || probe.status !== 0) return false;
+  try {
+    const final = parseRuntimeMessage(probe.stdout.trim().split("\n").at(-1) ?? "");
+    return final.type === "done" && final.calls === 0 && final.result === 42;
+  } catch {
+    return false;
+  }
+}
+
 async function runPtcProgram(
   code: string,
   cwd: string,
@@ -483,14 +531,7 @@ async function runPtcProgram(
     throw new Error(`PTC program exceeds ${MAX_CODE_BYTES} bytes`);
   }
 
-  const runnerPath = fileURLToPath(new URL("./runtime-child.mjs", import.meta.url));
-  const child = spawn(process.execPath, [
-    "--permission",
-    "--no-warnings",
-    "--disable-sigusr1",
-    "--max-old-space-size=128",
-    runnerPath,
-  ], {
+  const child = spawn(process.execPath, RUNTIME_ARGS, {
     cwd,
     env: {},
     stdio: ["pipe", "pipe", "pipe"],
@@ -601,7 +642,7 @@ async function runPtcProgram(
             type: "result",
             id: message.id,
             ok: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: summarizeBindingError(error instanceof Error ? error.message : String(error)) || "No error details returned",
           }),
         )
         .finally(() => inFlight.delete(task));
@@ -644,7 +685,7 @@ async function runPtcProgram(
             computeTimeoutMs,
           ));
         } else {
-          rejectPromise(new Error(finalMessage.message));
+          rejectPromise(new Error(formatRuntimeError(finalMessage)));
         }
         return;
       }
@@ -705,6 +746,18 @@ const RESULT_CONTRACT_SCHEMA = Type.Optional(Type.Object({
 }, { additionalProperties: false }));
 
 export default function ptcExtension(pi: ExtensionAPI): void {
+  if (!supportsPtcRuntime()) {
+    let warned = false;
+    pi.on("session_start", (_event, ctx) => {
+      if (warned) return;
+      warned = true;
+      const message = `Code Mode (run_code) is disabled: the TypeScript sandbox probe failed under ${process.execPath} (${process.version}). Other tools are available. Restart the Pi process using a compatible Node runtime; /reload does not switch Node.`;
+      if (ctx.hasUI) ctx.ui.notify(message, "warning");
+      else process.stderr.write(`${message}\n`);
+    });
+    return;
+  }
+
   const toolApi = pi as ExtensionAPI & HigherOrderToolAPI;
   let budget: PtcBudgetState | undefined;
 
@@ -725,7 +778,7 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Code Mode",
-    description: "Run one TypeScript program that can call any currently active Pi tool. Nested calls use each target tool's normal validation and policy hooks; only printed and returned values come back to the model. Inside run_code, call active tools as await tools.name(args); use Promise.all only for independent calls. Keep intermediate values inside run_code and return only the compact result needed for the next reasoning step. Prefer run_code for any task that needs more than one tool call, a loop, a branch, parallelism, bulk reads, filtering, or aggregation: write one program instead of many separate tool turns (for example, read several files, filter, and return one summary). Use ordinary tools only for a single call or when each next action depends on fresh step-by-step judgment.",
+    description: "Run one TypeScript program that can call any currently active Pi tool. Nested calls use each target tool's normal validation and policy hooks; only printed and returned values come back to the model. Inside run_code, call active tools as await tools.name(args); use Promise.all only for independent calls. Keep intermediate values inside run_code and return only the compact result needed for the next reasoning step. Prefer run_code for any task that needs more than one tool call, a loop, a branch, parallelism, bulk reads, filtering, or aggregation: write one program instead of many separate tool turns (for example, read several files, filter, and return one summary). For one shell command use bash directly. For multiline Python or scripts with nested quoting, use write to save a script and run the file instead of embedding a heredoc in a TypeScript string. Use ordinary tools for step-by-step judgment.",
     promptSnippet: CODE_MODE_SNIPPET,
     parameters: Type.Object({
       code: Type.String({ description: "Body of an async TypeScript function with top-level await/return" }),
@@ -752,9 +805,9 @@ export default function ptcExtension(pi: ExtensionAPI): void {
             toolCallId: `${toolCallId}:code:${call.id}`,
             signal: nestedSignal,
           });
-          const text = truncateBindingResult(textFromToolResult(nested.result));
-          if (nested.isError) throw new Error(text || `${call.name} failed`);
-          return text;
+          const text = textFromToolResult(nested.result);
+          if (nested.isError) throw new Error(text);
+          return truncateBindingResult(text);
         },
       };
 
@@ -798,6 +851,7 @@ export default function ptcExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
+    if (!pi.getActiveTools().includes(TOOL_NAME)) return;
     resetBudget(ctx);
     return { systemPrompt: placeCodeModeAfterCoreTools(event.systemPrompt) };
   });

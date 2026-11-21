@@ -5,6 +5,8 @@ import vm from "node:vm";
 
 let allowedTools = new Set(["read", "find", "grep", "ls"]);
 const pendingCalls = new Map();
+const compileFailures = new WeakSet();
+const toolFailures = new WeakMap();
 let started = false;
 let settled = false;
 let nextCallId = 1;
@@ -130,7 +132,7 @@ function callTool(name, args) {
   nextCallId += 1;
   toolCounts[name] = (toolCounts[name] ?? 0) + 1;
   return new Promise((resolve, reject) => {
-    pendingCalls.set(id, { resolve, reject });
+    pendingCalls.set(id, { name, resolve, reject });
     send({ type: "call", id, name, args: safeArgs });
   });
 }
@@ -163,17 +165,22 @@ async function runProgram(message) {
     ));
   }
   const code = typeof message.code === "string" ? message.code : "";
-  if (!code.trim()) throw new Error("PTC program is empty");
-
-  const wrapped = `async function __ptc_main(tools, console) {\n${code}\n}`;
-  const stripped = stripTypeScriptTypes(wrapped, { mode: "strip" });
+  let script;
+  try {
+    if (!code.trim()) throw new Error("PTC program is empty");
+    const wrapped = `async function __ptc_main(tools, console) {\n${code}\n}`;
+    const stripped = stripTypeScriptTypes(wrapped, { mode: "strip" });
+    script = new vm.Script(`${stripped}\n__ptc_main(tools, console)`, {
+      filename: "ptc-program.ts",
+    });
+  } catch (error) {
+    compileFailures.add(error);
+    throw error;
+  }
   const context = vm.createContext(
     { tools, console: safeConsole },
     { codeGeneration: { strings: false, wasm: false }, name: "pi-ptc-experimental" },
   );
-  const script = new vm.Script(`${stripped}\n__ptc_main(tools, console)`, {
-    filename: "ptc-program.ts",
-  });
   startComputeHeartbeat();
   const result = await script.runInContext(context, { timeout: maxComputeTimeMs });
   return cloneLosslessJson(result, "PTC result");
@@ -206,6 +213,8 @@ input.on("line", (line) => {
       (error) => exitWith({
         type: "error",
         code: error?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT" ? "compute_timeout" : undefined,
+        phase: compileFailures.has(error) ? "compile" : toolFailures.has(error) ? "tool" : "execute",
+        tool: toolFailures.get(error),
         message: error instanceof Error ? error.message : String(error),
         computeTimeMs: currentComputeTimeMs(),
       }, 1),
@@ -218,7 +227,11 @@ input.on("line", (line) => {
     if (!pending) return;
     pendingCalls.delete(message.id);
     if (message.ok) pending.resolve(message.value);
-    else pending.reject(new Error(typeof message.error === "string" ? message.error : "PTC tool call failed"));
+    else {
+      const error = new Error(typeof message.error === "string" ? message.error : "PTC tool call failed");
+      toolFailures.set(error, pending.name);
+      pending.reject(error);
+    }
   }
 });
 
