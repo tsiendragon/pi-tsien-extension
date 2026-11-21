@@ -1,10 +1,17 @@
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { getOpenBlockers, getWorkItems, goalWorkOverview } from "./goal-graph.ts";
+import {
+	currentMilestone,
+	getOpenBlockers,
+	getWorkItems,
+	goalWorkOverview,
+	readyWorkItems,
+} from "./goal-graph.ts";
 import type { GoalBlockerDisposition, GoalState, GoalStatus } from "./types.ts";
 
 export const GOAL_USAGE = [
 	"Usage:",
 	"  /goal <objective>          Start a long-running goal; interactive UI can edit before start",
+	"  /goal replan <objective>   Update the outcome in place; keep existing work items",
 	"  /goal status               Show expanded goal status",
 	"  /goal start                Queue one explicit handoff for the active goal",
 	"  /goal import <path> [--yes] Import a PRD/docs file or folder",
@@ -146,8 +153,27 @@ export function renderGoalStatus(goal: GoalState, symbols = getGoalSymbols()): s
 		"Blocked:",
 		...formatList(goal.progress.blocked),
 		"",
-		"Work items:",
-		...formatList(getWorkItems(goal).map((item) => `[${item.state}] ${item.title}`)),
+		...(getWorkItems(goal).some((item) => item.horizon !== undefined)
+			? [
+					"Current milestone:",
+					...formatList(
+						(() => {
+							const current = currentMilestone(goal);
+							return current
+								? [`[${current.state}] ${current.title}${current.doneWhen?.length ? ` (done when: ${current.doneWhen.join("; ")})` : ""}`]
+								: [goal.status === "complete" ? "all milestones done" : "none; add the next action"];
+						})(),
+					),
+					"Ready next actions:",
+					...formatList(readyWorkItems(goal).map((item) => `[${item.state}] ${item.title}`)),
+					"Milestones:",
+					...formatList(
+						getWorkItems(goal)
+							.filter((item) => item.horizon === "mid")
+							.map((item) => `[${item.state}] ${item.title}`),
+					),
+				]
+			: ["Work items:", ...formatList(getWorkItems(goal).map((item) => `[${item.state}] ${item.title}`))]),
 		"",
 		"Structured blockers:",
 		...formatList(
@@ -426,7 +452,7 @@ function blockerDispositionToken(disposition: GoalBlockerDisposition): GoalTheme
 
 function blockerDispositionNextStep(disposition: GoalBlockerDisposition): string {
 	if (disposition === "needs_user") return "Provide the required decision or approval.";
-	if (disposition === "agent_can_try") return "Try the recorded safe next step within budget.";
+	if (disposition === "agent_can_try") return "Try the recorded safe next step within the authorized scope.";
 	return "Wait for the external dependency, then reassess.";
 }
 

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { GoalDraftProposal } from "./goal-prep.ts";
+import { mergeReplannedWorkItems, planFromWorkItems, workItemsFromPlan } from "./goal-plan.ts";
 import { importGoalSources, parseEditableGoalDraft, renderEditableGoalDraft } from "./import.ts";
 import { renderGoalAgentDraftingPrompt, renderGoalStartPrompt } from "./prompts.ts";
 import { loadGoalState, saveGoalState, validateObjective } from "./state.ts";
@@ -22,6 +23,7 @@ export type GoalCommandKind =
 	| "show"
 	| "status"
 	| "create"
+	| "replan"
 	| "edit"
 	| "pause"
 	| "resume"
@@ -73,7 +75,7 @@ export interface GoalProposalReviewResult {
 export interface SaveReviewedGoalOptions {
 	current: GoalState | null;
 	proposal: GoalDraftProposal;
-	action: "create" | "replace";
+	action: "create" | "replace" | "replan";
 	start: boolean;
 	sourceDocs?: GoalSourceDoc[];
 	successMessage?: string;
@@ -82,6 +84,7 @@ export interface SaveReviewedGoalOptions {
 
 const CONTROL_COMMANDS = new Set([
 	"status",
+	"replan",
 	"edit",
 	"pause",
 	"resume",
@@ -140,6 +143,9 @@ export async function handleGoalCommand(
 			case "create":
 				await createOrReplaceGoal(pi, ctx, parsed, current);
 				return;
+			case "replan":
+				await replanGoal(pi, ctx, parsed, current);
+				return;
 			case "start":
 				await startActiveGoal(pi, ctx, current?.goalId);
 				return;
@@ -186,6 +192,14 @@ export function parseGoalCommand(args: string): ParsedGoalCommand {
 	const start = flags.has("--start");
 
 	if (first === "status") return { kind: "status", confirmed, replace, start };
+	if (first === "replan") {
+		const objective = tokens
+			.slice(1)
+			.filter((token) => !RECOGNIZED_FLAGS.has(token))
+			.join(" ")
+			.trim();
+		return { kind: "replan", objective, confirmed, replace, start: true };
+	}
 	if (first === "edit") return { kind: "edit", confirmed, replace, start };
 	if (first === "pause") return { kind: "pause", confirmed, replace, start };
 	if (first === "resume") return { kind: "resume", confirmed, replace, start };
@@ -365,6 +379,34 @@ async function createOrReplaceGoal(
 	ctx.ui.notify("Goal draft queued; it will be saved and started automatically.", "info");
 }
 
+async function replanGoal(
+	pi: ExtensionAPI,
+	ctx: GoalCommandContext,
+	parsed: ParsedGoalCommand,
+	current: GoalState | null,
+): Promise<void> {
+	if (!current) {
+		ctx.ui.notify(noGoalMessage("replan"), "error");
+		return;
+	}
+	if (current.status === "complete") {
+		ctx.ui.notify("Cannot replan a complete goal. Start a new goal instead.", "error");
+		return;
+	}
+	const objective = validateObjective(parsed.objective ?? current.objective);
+	if (!pi.sendUserMessage) {
+		ctx.ui.notify("Cannot draft goal: follow-up messaging API is unavailable.", "error");
+		return;
+	}
+	pi.sendUserMessage(
+		renderGoalAgentDraftingPrompt(objective, {
+			replanningExistingGoal: true,
+			currentGoal: current,
+		}),
+	);
+	ctx.ui.notify("Goal replan queued; existing work items will be preserved.", "info");
+}
+
 export async function confirmGoalReplacement(
 	ctx: GoalWorkflowContext,
 	current: GoalState | null,
@@ -403,16 +445,51 @@ export async function saveReviewedGoalAndOfferStart(
 		return null;
 	}
 
-	const action = latest ? "replace" : options.action;
+	const action = options.action === "replan" ? "replan" : latest ? "replace" : options.action;
+	if (action === "replan" && !latest) {
+		ctx.ui.notify(noGoalMessage("replan"), "error");
+		return null;
+	}
+	const now = Date.now();
+	if (action === "replan") {
+		const workItems = options.proposal.plan
+			? mergeReplannedWorkItems(latest!.workItems, options.proposal.plan, latest!.goalId, now)
+			: undefined;
+		const next = saveGoalState(
+			api,
+			{
+				action: "edit",
+				goalId: latest!.goalId,
+				objective: validateObjective(options.proposal.objective),
+				acceptanceCriteria: options.proposal.acceptanceCriteria,
+				constraints: options.proposal.constraints,
+				...(workItems ? { workItems } : {}),
+				now,
+				reason: "Replanned by user.",
+			},
+			latest,
+		);
+		updateGoalUi(ctx, next);
+		ctx.ui.notify(options.successMessage ?? "Goal replanned; existing work items preserved.", "info");
+		if (next) await offerGoalStartHandoff(api, ctx, next.goalId, options.start);
+		return next;
+	}
+	const goalId = crypto.randomUUID();
+	const workItems =
+		options.proposal.plan && options.proposal.plan.milestones.length > 0
+			? workItemsFromPlan(options.proposal.plan, goalId, now)
+			: undefined;
 	const next = saveGoalState(
 		api,
 		{
 			action,
-			goalId: crypto.randomUUID(),
+			goalId,
 			objective: validateObjective(options.proposal.objective),
 			sourceDocs: options.sourceDocs,
 			acceptanceCriteria: options.proposal.acceptanceCriteria,
-			now: Date.now(),
+			constraints: options.proposal.constraints,
+			workItems,
+			now,
 			owner: "user",
 		},
 		latest,
@@ -494,6 +571,8 @@ async function editGoal(pi: ExtensionAPI, ctx: GoalCommandContext, current: Goal
 		renderEditableGoalDraft({
 			objective: current.objective,
 			acceptanceCriteria: current.acceptanceCriteria,
+			constraints: current.constraints,
+			plan: planFromWorkItems(current.workItems),
 		}),
 	);
 	if (edited === undefined) {
@@ -515,6 +594,7 @@ async function editGoal(pi: ExtensionAPI, ctx: GoalCommandContext, current: Goal
 			goalId: latest.goalId,
 			objective: draft.objective,
 			acceptanceCriteria: draft.acceptanceCriteria,
+			constraints: draft.constraints,
 			now: Date.now(),
 		},
 		latest,
@@ -623,7 +703,12 @@ export async function reviewGoalProposal(
 		const edited = await ctx.ui.editor("Edit goal proposal", renderEditableGoalDraft(proposal));
 		if (edited === undefined) continue;
 		try {
-			proposal = parseEditableGoalDraft(edited);
+			// The plan is not editable in this text editor yet; keep the generated plan
+			// when the user edits objective/criteria/constraints.
+			proposal = {
+				...parseEditableGoalDraft(edited),
+				...(proposal.plan ? { plan: proposal.plan } : {}),
+			};
 		} catch (error) {
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		}

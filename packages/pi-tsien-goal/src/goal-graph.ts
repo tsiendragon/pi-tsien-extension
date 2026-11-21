@@ -7,6 +7,9 @@ export interface GoalWorkOverview {
 	openBlockers: number;
 	ready: WorkItem[];
 	blocked: WorkItem[];
+	/** Present for hierarchical goals; long-term outcome stays on the goal. */
+	milestonesDone?: number;
+	milestonesTotal?: number;
 }
 
 export function initialWorkItems(goalId: string, acceptanceCriteria: string[], now: number): WorkItem[] {
@@ -27,9 +30,43 @@ export function getWorkItems(goal: GoalState): WorkItem[] {
 	return (
 		goal.workItems?.map((item) => ({
 			...item,
+			...(item.doneWhen ? { doneWhen: [...item.doneWhen] } : {}),
+			...(item.evidence ? { evidence: [...item.evidence] } : {}),
 			dependsOn: [...item.dependsOn],
 			acceptanceCriteriaIds: [...item.acceptanceCriteriaIds],
 		})) ?? initialWorkItems(goal.goalId, goal.acceptanceCriteria, goal.createdAt)
+	);
+}
+
+export function isHierarchicalGoal(goal: GoalState): boolean {
+	return (goal.workItems ?? []).some((item) => item.horizon !== undefined);
+}
+
+export function milestonesOf(goal: GoalState): WorkItem[] {
+	return getWorkItems(goal).filter((item) => item.horizon === "mid");
+}
+
+export function actionsOf(goal: GoalState): WorkItem[] {
+	return getWorkItems(goal).filter((item) => item.horizon === "short");
+}
+
+/**
+ * The single milestone whose actions may run now: first unfinished milestone
+ * whose dependencies are done. Later milestones stay locked even if their own
+ * dependencies happen to be satisfied early.
+ */
+export function currentMilestone(goal: GoalState): WorkItem | undefined {
+	const milestones = milestonesOf(goal);
+	if (milestones.length === 0) return undefined;
+	const byId = new Map(milestones.map((item) => [item.id, item]));
+	return milestones.find(
+		(item) =>
+			item.state !== "done" &&
+			item.state !== "deferred" &&
+			item.dependsOn.every((dependency) => {
+				const parent = byId.get(dependency);
+				return parent?.state === "done" || parent?.state === "deferred";
+			}),
 	);
 }
 
@@ -51,6 +88,18 @@ export function readyWorkItems(goal: GoalState): WorkItem[] {
 			.filter(isHardBlocker)
 			.flatMap((blocker) => blocker.workItemIds),
 	);
+	if (isHierarchicalGoal(goal)) {
+		const current = currentMilestone(goal);
+		if (!current) return [];
+		return items.filter(
+			(item) =>
+				item.horizon === "short" &&
+				item.parentId === current.id &&
+				(item.state === "todo" || item.state === "in_progress") &&
+				item.dependsOn.every((dependency) => byId.get(dependency)?.state === "done") &&
+				!hardBlocked.has(item.id),
+		);
+	}
 	return items.filter(
 		(item) =>
 			(item.state === "todo" || item.state === "in_progress") &&
@@ -67,12 +116,21 @@ export function blockedWorkItems(goal: GoalState): WorkItem[] {
 
 export function goalWorkOverview(goal: GoalState): GoalWorkOverview {
 	const items = getWorkItems(goal);
+	const milestones = items.filter((item) => item.horizon === "mid");
+	const actions = items.filter((item) => item.horizon === "short");
+	const countable = actions.length > 0 ? actions : items;
 	return {
-		done: items.filter((item) => item.state === "done").length,
-		total: items.length,
+		done: countable.filter((item) => item.state === "done").length,
+		total: countable.length,
 		openBlockers: getOpenBlockers(goal).length,
 		ready: readyWorkItems(goal),
 		blocked: blockedWorkItems(goal),
+		...(milestones.length > 0
+			? {
+					milestonesDone: milestones.filter((item) => item.state === "done").length,
+					milestonesTotal: milestones.length,
+				}
+			: {}),
 	};
 }
 
@@ -80,6 +138,13 @@ export function allPathsBlocked(goal: GoalState): boolean {
 	const items = getWorkItems(goal);
 	if (items.every((item) => item.state === "done" || item.state === "deferred")) return false;
 	if (readyWorkItems(goal).length > 0) return false;
+	if (isHierarchicalGoal(goal)) {
+		const current = currentMilestone(goal);
+		// A milestone without actions is unplanned, not blocked: the agent should add the next action.
+		if (current && !items.some((item) => item.horizon === "short" && item.parentId === current.id)) {
+			return false;
+		}
+	}
 	const hardBlocked = new Set(
 		getOpenBlockers(goal)
 			.filter(isHardBlocker)
@@ -187,6 +252,6 @@ function recommendedSteps(blockers: GoalBlocker[]): string[] {
 			return `- User: ${blocker.proposedResolution ?? `resolve ${blocker.title}`}`;
 		if (blocker.disposition === "external_wait")
 			return `- External dependency: ${blocker.proposedResolution ?? `wait for ${blocker.title}`}`;
-		return `- Agent may try within the configured budget: ${blocker.proposedResolution ?? blocker.title}`;
+		return `- Agent may try within the authorized scope: ${blocker.proposedResolution ?? blocker.title}`;
 	});
 }

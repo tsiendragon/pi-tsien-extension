@@ -47,6 +47,32 @@ export {
 export { preparePlainGoalDraft } from "./goal-prep.ts";
 export type { GoalDraftProposal, GoalProposalGenerator, PreparedGoalDraft } from "./goal-prep.ts";
 export {
+	normalizeGoalOptimizationDraft,
+	optimizationCriterion,
+	optimizationObjective,
+	OPTIMIZATION_METHOD_FREEDOM,
+	validateGoalOptimizationDraft,
+} from "./goal-optimization.ts";
+export type { GoalOptimizationDraft } from "./goal-optimization.ts";
+export {
+	normalizeGoalPlanDraft,
+	planFromWorkItems,
+	validateGoalPlanDraft,
+	workItemsFromPlan,
+} from "./goal-plan.ts";
+export type { GoalMilestoneDraft, GoalPlanDraft } from "./goal-plan.ts";
+export {
+	auditGoalDraft,
+	formatGoalQualityIssues,
+	hasBlockingGoalQualityIssues,
+} from "./goal-quality.ts";
+export type {
+	GoalQualityField,
+	GoalQualityInput,
+	GoalQualityIssue,
+	GoalQualitySeverity,
+} from "./goal-quality.ts";
+export {
 	DEFAULT_IMPORT_MAX_FILE_BYTES,
 	DEFAULT_IMPORT_MAX_FILES,
 	extractGoalBrief,

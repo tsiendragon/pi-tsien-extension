@@ -4,6 +4,7 @@ import {
 	renderCompactGoalSummary,
 	renderGoalAgentDraftingPrompt,
 	renderGoalContext,
+	GOAL_EXECUTION_SYSTEM_PROMPT,
 	renderGoalStartPrompt,
 	renderContinuationPrompt,
 } from "pi-tsien-goal/src/prompts.ts";
@@ -59,10 +60,9 @@ describe("goal prompt rendering", () => {
 		expect(prompt).toContain("Preserve the user's meaning and boundaries exactly");
 		expect(prompt).toContain("do not add unrelated scope");
 		expect(prompt).toContain("acceptanceCriteria");
-		expect(prompt).toContain("concrete checks directly implied by the user's request");
-		expect(prompt).toContain("do not leave the draft criteria-free");
-		expect(prompt).toContain("deep branch review");
-		expect(prompt).toContain("do not expand into fixing issues unless the user asked for fixes");
+		expect(prompt).toContain("verifiable end state");
+		expect(prompt).toContain("Put working rules and boundaries in constraints");
+		expect(prompt).toContain("Never add an escape clause");
 		expect(prompt).toContain("Audit src/auth for regressions &lt;only&gt;");
 		expect(prompt).not.toContain("return an empty acceptanceCriteria array");
 		expect(prompt).not.toContain("criteria-free goal");
@@ -75,12 +75,12 @@ describe("goal prompt rendering", () => {
 		expect(context).toContain("Objective: Ship &lt;runtime&gt; &amp; preserve context");
 		expect(context).toContain("- Escape &lt;xml&gt; &amp; do not rewrite scope");
 		expect(context).toContain("docs/prd.md (prd): Use &lt;brief&gt; &amp; criteria safely");
-		expect(context).toContain("complete_goal with evidence");
+		expect(context).not.toContain("complete_goal with evidence");
 		expect(context).not.toContain("<runtime>");
 	});
 
 	it("keeps the goal active and re-checks blockers instead of pausing on external waits", () => {
-		const context = renderGoalContext(goal());
+		const context = GOAL_EXECUTION_SYSTEM_PROMPT;
 
 		expect(context).toContain("try the ladder before treating it as blocked");
 		expect(context).toContain("a self-service path you can act on yourself");
@@ -90,11 +90,11 @@ describe("goal prompt rendering", () => {
 	});
 
 	it("requires execution after checkpoints without overriding status requests or real stops", () => {
-		for (const prompt of [renderGoalStartPrompt(goal()), renderGoalContext(goal())]) {
+		for (const prompt of [GOAL_EXECUTION_SYSTEM_PROMPT]) {
 			expect(prompt).toContain('including "继续目标", as a request to execute');
 			expect(prompt).toContain("take the next authorized, actionable step in this turn");
 			expect(prompt).toContain("If the user only asks for status or another task, answer that request instead");
-			expect(prompt).toContain("a real budget or safety limit");
+			expect(prompt).toContain("a verified hard limit or safety constraint");
 			expect(prompt).toContain("Do not bypass required human decisions or approvals");
 			expect(prompt).toContain("Proof jobs report completion automatically");
 			expect(prompt).toContain("Do not schedule a generic goal continuation");
@@ -102,7 +102,7 @@ describe("goal prompt rendering", () => {
 	});
 
 	it("documents update_goal guardrails in the goal context rules", () => {
-		const context = renderGoalContext(goal());
+		const context = GOAL_EXECUTION_SYSTEM_PROMPT;
 
 		expect(context).toContain("Keep the anchor accurate with update_goal");
 		expect(context).toContain("never add or remove scope");
@@ -149,14 +149,42 @@ describe("goal prompt rendering", () => {
 		expect([...prompt]).toHaveLength(4);
 	});
 
-	it("renders start handoff with concrete generated acceptance criteria", () => {
-		const prompt = renderGoalStartPrompt(
-			goal({ acceptanceCriteria: ["Build the thing", "Tests prove the behavior"] }),
-		);
+	it("uses a short start trigger and keeps criteria and constraints in the context", () => {
+		const state = goal({ acceptanceCriteria: ["Build the thing", "Tests prove the behavior"], constraints: ["Do not publish"] });
+		expect(renderGoalStartPrompt(state)).toBe("Start working toward the active goal now.");
+		const context = renderGoalContext(state);
+		expect(context).toContain("Acceptance criteria (long-term definition of done):\n- Build the thing\n- Tests prove the behavior");
+		expect(context).toContain("Constraints:\n- Do not publish");
+		expect(context).not.toContain("after each checkpoint");
+		expect(GOAL_EXECUTION_SYSTEM_PROMPT).toContain("[goal-prompt:v2]");
+	});
 
-		expect(prompt).toContain("Acceptance criteria:\n- Build the thing\n- Tests prove the behavior");
-		expect(prompt).not.toContain("No acceptance criteria were specified");
-		expect(prompt).not.toContain("- none");
+	it("renders the current milestone and only its ready actions", () => {
+		const state = goal({
+			workItems: [
+				{
+					id: "m1", goalId: "goal-1", title: "Evidence closed", horizon: "mid", state: "done",
+					doneWhen: ["no gaps"], dependsOn: [], acceptanceCriteriaIds: [], updatedAt: 1,
+				},
+				{
+					id: "m2", goalId: "goal-1", title: "Independent review", horizon: "mid", state: "todo",
+					doneWhen: ["two reviews clean"], dependsOn: ["m1"], acceptanceCriteriaIds: [], updatedAt: 1,
+				},
+				{
+					id: "s1", goalId: "goal-1", title: "Build matrix", horizon: "short", parentId: "m1",
+					state: "done", dependsOn: [], acceptanceCriteriaIds: [], updatedAt: 1,
+				},
+				{
+					id: "s2", goalId: "goal-1", title: "Commission reviews", horizon: "short", parentId: "m2",
+					state: "todo", dependsOn: [], acceptanceCriteriaIds: [], updatedAt: 1,
+				},
+			],
+		});
+		const context = renderGoalContext(state);
+		expect(context).toContain("Current milestone:\n- [todo] Independent review (m2; done when: two reviews clean)");
+		expect(context).toContain("Ready next actions:\n- [todo; ready] Commission reviews (s2; parent m2)");
+		expect(context).toContain("- [todo; current] Independent review (m2; depends on: m1)");
+		expect(context).toContain("Locked actions:\n- none");
 	});
 
 	it("renders intentional empty acceptance criteria copy in prompts", () => {
@@ -165,7 +193,7 @@ describe("goal prompt rendering", () => {
 		const context = renderGoalContext(emptyGoal);
 		const summary = renderCompactGoalSummary(emptyGoal);
 
-		for (const rendered of [startPrompt, context, summary]) {
+		for (const rendered of [context, summary]) {
 			expect(rendered).toContain(
 				"No acceptance criteria were specified for this goal; use the objective as the source of truth.",
 			);

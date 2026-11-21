@@ -1,3 +1,4 @@
+import { normalizeResearchFeedback } from "./research-feedback.ts";
 import { initialWorkItems } from "./goal-graph.ts";
 import { GOAL_STATE_CHANGED_EVENT, type GoalStateChangedEvent } from "pi-tsien-shared/src/lib/goal-events.ts";
 import type {
@@ -64,7 +65,9 @@ export function createGoalState(event: Extract<GoalStateEvent, { action: "create
 		constraints: [...(event.constraints ?? [])],
 		acceptanceCriteria: [...(event.acceptanceCriteria ?? [])],
 		progress: normalizeProgress(event.progress),
-		workItems: initialWorkItems(event.goalId, event.acceptanceCriteria ?? [], event.now),
+		workItems: event.workItems
+			? cloneWorkItems(event.workItems)
+			: initialWorkItems(event.goalId, event.acceptanceCriteria ?? [], event.now),
 		blockers: [],
 		blockerAttempts: [],
 		reports: [],
@@ -89,6 +92,8 @@ export function reduceGoalState(current: GoalState | null, event: GoalStateEvent
 				constraints: event.constraints === undefined ? current.constraints : [...event.constraints],
 				acceptanceCriteria:
 					event.acceptanceCriteria === undefined ? current.acceptanceCriteria : [...event.acceptanceCriteria],
+				workItems:
+					event.workItems === undefined ? current.workItems : cloneWorkItems(event.workItems),
 				updatedAt: event.now,
 			};
 		}
@@ -229,6 +234,9 @@ function normalizeProgress(progress: Partial<GoalProgress> = {}, base?: GoalProg
 		current: progress.current ?? base?.current,
 		blocked: [...(progress.blocked ?? base?.blocked ?? [])],
 		lastSummary: progress.lastSummary ?? base?.lastSummary ?? "",
+		...((progress.researchCheckpoints ?? base?.researchCheckpoints)?.length ? {
+			researchCheckpoints: (progress.researchCheckpoints ?? base?.researchCheckpoints ?? []).map(checkpoint => ({ ...checkpoint, ...(checkpoint.feedback ? { feedback: { ...checkpoint.feedback } } : {}) })),
+		} : {}),
 	};
 }
 
@@ -265,7 +273,14 @@ function parseGoalStateEvent(data: unknown): GoalStateEvent | undefined {
 		const constraints = readOptionalStringArray(data, "constraints");
 		const acceptanceCriteria = readOptionalStringArray(data, "acceptanceCriteria");
 		const progress = readOptionalProgress(data, "progress");
-		if (sourceDocs === null || constraints === null || acceptanceCriteria === null || progress === null)
+		const workItems = readOptionalArray(data, "workItems", isWorkItem);
+		if (
+			sourceDocs === null ||
+			constraints === null ||
+			acceptanceCriteria === null ||
+			progress === null ||
+			workItems === null
+		)
 			return undefined;
 		const owner: GoalOwner | undefined =
 			data.owner === "model" || data.owner === "user" ? data.owner : undefined;
@@ -278,6 +293,7 @@ function parseGoalStateEvent(data: unknown): GoalStateEvent | undefined {
 			...(constraints ? { constraints } : {}),
 			...(acceptanceCriteria ? { acceptanceCriteria } : {}),
 			...(progress ? { progress } : {}),
+			...(workItems ? { workItems } : {}),
 			...(reason ? { reason } : {}),
 		};
 		return data.action === "create" ? { action: "create", ...base } : { action: "replace", ...base };
@@ -300,7 +316,10 @@ function parseGoalStateEvent(data: unknown): GoalStateEvent | undefined {
 		const sourceDocs = readOptionalSourceDocs(data, "sourceDocs");
 		const constraints = readOptionalStringArray(data, "constraints");
 		const acceptanceCriteria = readOptionalStringArray(data, "acceptanceCriteria");
-		if (sourceDocs === null || constraints === null || acceptanceCriteria === null) return undefined;
+		const workItems = readOptionalArray(data, "workItems", isWorkItem);
+		if (sourceDocs === null || constraints === null || acceptanceCriteria === null || workItems === null) {
+			return undefined;
+		}
 		return {
 			action: "edit",
 			goalId: data.goalId,
@@ -309,6 +328,7 @@ function parseGoalStateEvent(data: unknown): GoalStateEvent | undefined {
 			...(sourceDocs ? { sourceDocs } : {}),
 			...(constraints ? { constraints } : {}),
 			...(acceptanceCriteria ? { acceptanceCriteria } : {}),
+			...(workItems ? { workItems } : {}),
 			...(reason ? { reason } : {}),
 		};
 	}
@@ -408,7 +428,16 @@ function readOptionalProgress(
 	if (value.current !== undefined && typeof value.current !== "string") return null;
 	if (value.blocked !== undefined && !isStringArray(value.blocked)) return null;
 	if (value.lastSummary !== undefined && typeof value.lastSummary !== "string") return null;
+	const checkpoints = readOptionalArray(value, "researchCheckpoints", (item): item is NonNullable<GoalProgress["researchCheckpoints"]>[number] =>
+		isRecord(item) && (item.kind === "gate_decision" || item.kind === "replication" || item.kind === "resource_frontier") &&
+		typeof item.evidence === "string" && item.evidence.length > 0 && item.evidence.length <= 300 &&
+		typeof item.decision === "string" && item.decision.length > 0 && item.decision.length <= 500);
+	if (checkpoints === null || (checkpoints && checkpoints.length > 128)) return null;
 	return {
+		...(checkpoints ? { researchCheckpoints: checkpoints.map(({ kind, evidence, decision, feedback }) => {
+			const validFeedback = normalizeResearchFeedback(feedback);
+			return { kind, evidence, decision, ...(validFeedback ? { feedback: validFeedback } : {}) };
+		}) } : {}),
 		...(value.done ? { done: [...value.done] } : {}),
 		...(typeof value.current === "string" ? { current: value.current } : {}),
 		...(value.blocked ? { blocked: [...value.blocked] } : {}),
@@ -484,6 +513,10 @@ function isWorkItem(value: unknown): value is WorkItem {
 		typeof value.goalId === "string" &&
 		typeof value.title === "string" &&
 		(value.description === undefined || typeof value.description === "string") &&
+		(value.horizon === undefined || value.horizon === "mid" || value.horizon === "short") &&
+		(value.parentId === undefined || typeof value.parentId === "string") &&
+		(value.doneWhen === undefined || isStringArray(value.doneWhen)) &&
+		(value.evidence === undefined || isStringArray(value.evidence)) &&
 		(value.state === "todo" ||
 			value.state === "in_progress" ||
 			value.state === "done" ||
@@ -582,6 +615,8 @@ function cloneGoalState(state: GoalState | null): GoalState | null {
 function cloneWorkItems(items: WorkItem[]): WorkItem[] {
 	return items.map((item) => ({
 		...item,
+		...(item.doneWhen ? { doneWhen: [...item.doneWhen] } : {}),
+		...(item.evidence ? { evidence: [...item.evidence] } : {}),
 		dependsOn: [...item.dependsOn],
 		acceptanceCriteriaIds: [...item.acceptanceCriteriaIds],
 	}));

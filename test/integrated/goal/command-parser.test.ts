@@ -84,6 +84,11 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("clear --yes")).toMatchObject({ kind: "clear", confirmed: true });
 		expect(parseGoalCommand("complete -y")).toMatchObject({ kind: "complete", confirmed: true });
 		expect(parseGoalCommand("start")).toMatchObject({ kind: "start", start: true });
+		expect(parseGoalCommand("replan ship v2")).toMatchObject({
+			kind: "replan",
+			objective: "ship v2",
+			start: true,
+		});
 		expect(parseGoalCommand("import docs/prd.md --start")).toMatchObject({
 			kind: "import",
 			path: "docs/prd.md",
@@ -142,6 +147,22 @@ describe("/goal command lifecycle", () => {
 		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("ship the feature"));
 		expect(ctx.ui.notify).toHaveBeenCalledWith(
 			"Goal draft queued; it will be saved and started automatically.",
+			"info",
+		);
+	});
+
+	it("queues an in-place replan prompt without replacing the current goal", async () => {
+		const { pi, ctx, branch } = createHarness();
+		const goal = seedGoal(branch, { objective: "old objective" });
+		await handleGoalCommand(pi, "replan new objective", ctx);
+
+		expect(ctx.waitForIdle).toHaveBeenCalledOnce();
+		expect(pi.appendEntry).not.toHaveBeenCalled();
+		expect(latestGoalEntry(branch).state?.objective).toBe(goal.objective);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("replan: true"));
+		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("completed/deferred work items"));
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			"Goal replan queued; existing work items will be preserved.",
 			"info",
 		);
 	});
@@ -222,7 +243,7 @@ describe("/goal command lifecycle", () => {
 			expect.stringContaining("Start working toward the active goal now."),
 			{ deliverAs: "followUp" },
 		);
-		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("ship"), {
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
 			deliverAs: "followUp",
 		});
 		expect(ctx.ui.notify).toHaveBeenLastCalledWith("Goal start queued.", "info");

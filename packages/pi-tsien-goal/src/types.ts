@@ -1,4 +1,5 @@
 export type GoalStatus = "active" | "paused" | "complete";
+export type WorkItemHorizon = "mid" | "short";
 export type GoalOwner = "user" | "model";
 export type WorkItemState = "todo" | "in_progress" | "done" | "blocked" | "deferred";
 export type BlockerKind =
@@ -20,7 +21,24 @@ export interface GoalSourceDoc {
 	extractedAt: number;
 }
 
+export interface ResearchFeedback {
+	method: string;
+	scope: string;
+	outcome: "reinforce" | "falsified" | "proof_gap" | "resource_limit" | "inconclusive";
+	gate?: string;
+	independentCheck?: string;
+	challenge?: string;
+}
+
+export interface ResearchCheckpoint {
+	feedback?: ResearchFeedback;
+	kind: "gate_decision" | "replication" | "resource_frontier";
+	evidence: string;
+	decision: string;
+}
+
 export interface GoalProgress {
+	researchCheckpoints?: ResearchCheckpoint[];
 	done: string[];
 	current?: string;
 	blocked: string[];
@@ -32,6 +50,14 @@ export interface WorkItem {
 	goalId: string;
 	title: string;
 	description?: string;
+	/** Long-term outcome lives in the goal objective; work items are mid-term milestones or short-term actions. */
+	horizon?: WorkItemHorizon;
+	/** For a short-term action: the milestone it belongs to. */
+	parentId?: string;
+	/** Observable checks that make a milestone done. */
+	doneWhen?: string[];
+	/** Artifacts/commands/results that satisfy an action or milestone. */
+	evidence?: string[];
 	state: WorkItemState;
 	dependsOn: string[];
 	acceptanceCriteriaIds: string[];
@@ -105,6 +131,8 @@ export interface GoalCreateEvent {
 	constraints?: string[];
 	acceptanceCriteria?: string[];
 	progress?: Partial<GoalProgress>;
+	/** Optional initial plan; when omitted, acceptance criteria become flat work items. */
+	workItems?: WorkItem[];
 	reason?: string;
 }
 export interface GoalReplaceEvent extends Omit<GoalCreateEvent, "action"> {
@@ -118,6 +146,8 @@ export interface GoalEditEvent {
 	sourceDocs?: GoalSourceDoc[];
 	constraints?: string[];
 	acceptanceCriteria?: string[];
+	/** Optional replanned work items; omitted edits preserve the current graph. */
+	workItems?: WorkItem[];
 	reason?: string;
 }
 export interface GoalPauseEvent {

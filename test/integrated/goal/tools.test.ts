@@ -89,6 +89,7 @@ describe("goal tool schemas and registration", () => {
 			"current",
 			"blocked",
 			"summary",
+			"checkpoint",
 		]);
 		expect(Object.keys(updateGoalGraphParams.properties)).toEqual(["workItems", "blockers", "attempt"]);
 		expect(Object.keys(updateGoalParams.properties)).toEqual([
@@ -105,9 +106,13 @@ describe("goal tool schemas and registration", () => {
 			"objective",
 			"description",
 			"acceptanceCriteria",
+			"constraints",
+			"optimization",
+			"milestones",
 			"sourcePaths",
 			"startImmediately",
 			"autoApprove",
+			"replan",
 			"draftId",
 			"commandId",
 		]);
@@ -130,7 +135,8 @@ describe("goal tool schemas and registration", () => {
 		expect(proposeGoalDraftPromptGuidelines).toEqual(
 			expect.arrayContaining([
 				expect.stringContaining("Preserve the user's meaning and boundaries"),
-				expect.stringContaining("editable acceptanceCriteria"),
+				expect.stringContaining("verifiable end state"),
+				expect.stringContaining("acceptanceCriteria are outcome checks"),
 				expect.stringContaining("Do not leave acceptanceCriteria empty"),
 				expect.stringContaining("Use create_goal only for an already-authorized new goal"),
 			]),
@@ -288,13 +294,7 @@ describe("goal tool execution", () => {
 			sourceDocs: [expect.objectContaining({ path: "docs/prd.md" })],
 		});
 		expect(sendUserMessage).toHaveBeenCalledOnce();
-		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Ship reviewed goal"), {
-			deliverAs: "followUp",
-		});
-		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("- done"), {
-			deliverAs: "followUp",
-		});
-		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("- tests pass"), {
+		expect(sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
 			deliverAs: "followUp",
 		});
 		expect(result).toMatchObject({
@@ -329,10 +329,7 @@ describe("goal tool execution", () => {
 			objective: "Edited goal",
 			acceptanceCriteria: ["edited criterion"],
 		});
-		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Edited goal"), {
-			deliverAs: "followUp",
-		});
-		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("- edited criterion"), {
+		expect(sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
 			deliverAs: "followUp",
 		});
 		expect(result.details).toMatchObject({ status: "saved", started: true });
@@ -421,6 +418,10 @@ describe("goal tool execution", () => {
 			{
 				objective: "Unattended goal",
 				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "First milestone", doneWhen: ["first check passes"], actions: ["Run the first check"] },
+					{ title: "Second milestone", doneWhen: ["second check passes"] },
+				],
 				autoApprove: true,
 				startImmediately: true,
 			},
@@ -431,7 +432,7 @@ describe("goal tool execution", () => {
 		expect(ui.confirm).not.toHaveBeenCalled();
 		expect(latestGoalEntry(branch).action).toBe("create");
 		expect(latestGoalEntry(branch).state?.objective).toBe("Unattended goal");
-		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Unattended goal"), {
+		expect(sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
 			deliverAs: "followUp",
 		});
 		expect(result.details).toMatchObject({ status: "saved", action: "create", started: true });
@@ -439,7 +440,15 @@ describe("goal tool execution", () => {
 		const replacing = createHarness();
 		executeCreateGoal({ objective: "Existing goal", explicit_request: true }, replacing.ctx, replacing.pi);
 		const replaced = await executeProposeGoalDraft(
-			{ objective: "Replacement goal", acceptanceCriteria: ["criterion"], autoApprove: true },
+			{
+				objective: "Replacement goal",
+				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "First milestone", doneWhen: ["first check passes"], actions: ["Run the first check"] },
+					{ title: "Second milestone", doneWhen: ["second check passes"] },
+				],
+				autoApprove: true,
+			},
 			replacing.ctx,
 			{ ...replacing.pi, sendUserMessage: vi.fn() },
 		);
@@ -450,11 +459,342 @@ describe("goal tool execution", () => {
 
 		const noUi = createHarness();
 		const noUiResult = await executeProposeGoalDraft(
-			{ objective: "Headless unattended", acceptanceCriteria: ["criterion"], autoApprove: true },
+			{
+				objective: "Headless unattended",
+				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "First milestone", doneWhen: ["first check passes"], actions: ["Run the first check"] },
+					{ title: "Second milestone", doneWhen: ["second check passes"] },
+				],
+				autoApprove: true,
+			},
 			{ ...noUi.ctx, hasUI: false },
 			{ ...noUi.pi, sendUserMessage: vi.fn() },
 		);
 		expect(noUiResult.details).toMatchObject({ status: "saved", started: true });
+	});
+
+	it("propose_goal_draft replans in place and preserves completed history", async () => {
+		const { pi, ctx, branch } = createHarness();
+		await executeProposeGoalDraft(
+			{
+				objective: "First objective",
+				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "First milestone", doneWhen: ["check one"], actions: ["do one"] },
+					{ title: "Second milestone", doneWhen: ["check two"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		const initial = latestGoalEntry(branch).state!;
+		executeUpdateGoalGraph(
+			{
+				workItems: initial.workItems?.map((item) =>
+					item.id === "m1"
+						? { ...item, state: "done" as const, evidence: ["reports/first.md"] }
+						: item.id === "s1"
+							? { ...item, state: "done" as const }
+							: item,
+				),
+			},
+			ctx,
+			pi,
+		);
+		const before = latestGoalEntry(branch).state!;
+		const sendUserMessage = vi.fn();
+		const result = await executeProposeGoalDraft(
+			{
+				objective: "Replanned objective",
+				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "Replanned next", doneWhen: ["check three"], actions: ["do three"] },
+					{ title: "Replanned final", doneWhen: ["check four"] },
+				],
+				replan: true,
+				autoApprove: true,
+				startImmediately: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage },
+		);
+
+		const after = latestGoalEntry(branch).state!;
+		expect(result.details).toMatchObject({ status: "saved", action: "replan", started: true });
+		expect(latestGoalEntry(branch).action).toBe("edit");
+		expect(after.goalId).toBe(before.goalId);
+		expect(after.objective).toBe("Replanned objective");
+		expect(after.workItems).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "m1", state: "done", evidence: ["reports/first.md"] }),
+				expect.objectContaining({ id: "s1", state: "done" }),
+				expect.objectContaining({ id: "r1-m1", state: "todo", dependsOn: ["m1"] }),
+				expect.objectContaining({ id: "r1-m2", state: "todo", dependsOn: ["r1-m1"] }),
+			]),
+		);
+		expect(after.workItems?.find((item) => item.id === "m2")).toBeUndefined();
+		expect(sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
+			deliverAs: "followUp",
+		});
+	});
+
+	it("propose_goal_draft renders an optimization contract and allows any method", async () => {
+		const { pi, ctx, branch } = createHarness();
+		const result = await executeProposeGoalDraft(
+			{
+				objective: "优化 Frank–Wolfe 的总 matvec 成本",
+				acceptanceCriteria: ["报告列出每个基线的总 matvec 和证书口径"],
+				optimization: {
+					metric: "总 matvec 数（含证书与重启）",
+					baseline: "最强 cold-start 基线",
+					target: "降低 ≥20%",
+					guardrails: ["同一有效 FW gap 证书", "所有成本计入"],
+				},
+				milestones: [
+					{ title: "基线测量可复现", doneWhen: ["baseline.json 生成"], actions: ["跑基线"] },
+					{ title: "达到指标目标", doneWhen: ["target.json 显示降低 ≥20%"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		expect(result.details).toMatchObject({ status: "saved", started: true });
+		const state = latestGoalEntry(branch).state!;
+		expect(state.objective).toContain("优化合同");
+		expect(state.objective).toContain("降低 ≥20%");
+		expect(state.acceptanceCriteria[0]).toContain("测量脚本、原始输出和汇总可复核");
+		expect(state.constraints).toContain(
+			"允许尝试任意算法、实现、超参数或系统优化路线；只固定指标、基线、目标值和 guardrails。",
+		);
+	});
+
+	it("propose_goal_draft rejects an optimization target without a number", async () => {
+		const { pi, ctx } = createHarness();
+		await expect(
+			executeProposeGoalDraft(
+				{
+					objective: "优化算法",
+					acceptanceCriteria: ["criterion"],
+					optimization: {
+						metric: "runtime",
+						baseline: "current",
+						target: "明显更快",
+					},
+					milestones: [
+						{ title: "M1", doneWhen: ["check one"], actions: ["act"] },
+						{ title: "M2", doneWhen: ["check two"] },
+					],
+					autoApprove: true,
+				},
+				ctx,
+				{ ...pi, sendUserMessage: vi.fn() },
+			),
+		).rejects.toMatchObject({ code: "invalid_optimization" });
+	});
+
+	it("propose_goal_draft persists constraints separately from acceptance criteria", async () => {
+		const { pi, ctx, branch } = createHarness();
+		await executeProposeGoalDraft(
+			{
+				objective: "证明定理 T。",
+				acceptanceCriteria: ["proofs/t.lean 中 T 的证明被 Lean 接受，目标状态为 proved"],
+				constraints: ["按 pi-matrix 流程记录并独立评审", "不代替人工对齐"],
+				milestones: [
+					{ title: "引理闭合", doneWhen: ["所有引理有 review 记录"], actions: ["整理引理依赖并补缺口"] },
+					{ title: "目标证明完成", doneWhen: ["proofs/t.lean 通过 Lean 检查"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		expect(latestGoalEntry(branch).state).toMatchObject({
+			objective: "证明定理 T。",
+			acceptanceCriteria: ["proofs/t.lean 中 T 的证明被 Lean 接受，目标状态为 proved"],
+			constraints: ["按 pi-matrix 流程记录并独立评审", "不代替人工对齐"],
+		});
+	});
+
+	it("propose_goal_draft persists a milestone plan with nested actions", async () => {
+		const { pi, ctx, branch } = createHarness();
+		const result = await executeProposeGoalDraft(
+			{
+				objective: "证明定理 T。",
+				acceptanceCriteria: ["proofs/t.lean 中 T 的证明被 Lean 接受，目标状态为 proved"],
+				milestones: [
+					{ title: "引理闭合", doneWhen: ["所有引理有独立 review 记录"], actions: ["补齐引理依赖"] },
+					{ title: "目标证明完成", doneWhen: ["proofs/t.lean 通过 Lean 检查"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		expect(result.details).toMatchObject({ status: "saved", started: true });
+		expect(latestGoalEntry(branch).state?.workItems).toEqual([
+			expect.objectContaining({
+				id: "m1",
+				horizon: "mid",
+				state: "todo",
+				doneWhen: ["所有引理有独立 review 记录"],
+				dependsOn: [],
+			}),
+			expect.objectContaining({
+				id: "m2",
+				horizon: "mid",
+				state: "todo",
+				doneWhen: ["proofs/t.lean 通过 Lean 检查"],
+				dependsOn: ["m1"],
+			}),
+			expect.objectContaining({
+				id: "s1",
+				horizon: "short",
+				parentId: "m1",
+				title: "补齐引理依赖",
+			}),
+		]);
+	});
+
+	it("complete_goal refuses open milestones and accepts a fully reconciled plan", async () => {
+		const { pi, ctx, branch } = createHarness();
+		await executeProposeGoalDraft(
+			{
+				objective: "证明定理 T。",
+				acceptanceCriteria: ["proofs/t.lean 中 T 的证明被 Lean 接受，目标状态为 proved"],
+				milestones: [
+					{ title: "引理闭合", doneWhen: ["所有引理有独立 review 记录"], actions: ["补齐引理依赖"] },
+					{ title: "目标证明完成", doneWhen: ["proofs/t.lean 通过 Lean 检查"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		expect(executeCompleteGoal({ evidence: "batch done" }, ctx, pi)).toMatchObject({
+			details: { status: "refused", reason: "open_milestones" },
+		});
+
+		const goal = latestGoalEntry(branch).state;
+		expect(goal?.workItems).toHaveLength(3);
+		executeUpdateGoalGraph(
+			{
+				workItems: goal?.workItems?.map((item) =>
+					item.horizon === "mid"
+						? { ...item, state: "done" as const, evidence: ["proofs/t.lean"] }
+						: { ...item, state: "done" as const },
+				),
+			},
+			ctx,
+			pi,
+		);
+		const completed = executeCompleteGoal({ evidence: "proofs/t.lean 通过 Lean 检查" }, ctx, pi);
+		expect(completed.details).toMatchObject({ goal: { status: "complete" } });
+	});
+
+	it("update_goal_graph refuses to close a milestone with open actions or no evidence", async () => {
+		const { pi, ctx, branch } = createHarness();
+		await executeProposeGoalDraft(
+			{
+				objective: "证明定理 T。",
+				acceptanceCriteria: ["proofs/t.lean 中 T 的证明被 Lean 接受，目标状态为 proved"],
+				milestones: [
+					{ title: "引理闭合", doneWhen: ["所有引理有独立 review 记录"], actions: ["补齐引理依赖"] },
+					{ title: "目标证明完成", doneWhen: ["proofs/t.lean 通过 Lean 检查"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		const goal = latestGoalEntry(branch).state;
+		const items = goal?.workItems ?? [];
+		const closeFirstWithoutActions = executeUpdateGoalGraph(
+			{
+				workItems: items.map((item) => item.id === "m1" ? { ...item, state: "done" as const } : item),
+			},
+			ctx,
+			pi,
+		);
+		expect(closeFirstWithoutActions).toMatchObject({
+			details: { status: "refused", reason: "milestone_not_ready" },
+		});
+
+		const actionDone = items.map((item) => item.id === "s1" ? { ...item, state: "done" as const } : item);
+		const closeWithoutEvidence = executeUpdateGoalGraph(
+			{ workItems: actionDone.map((item) => item.id === "m1" ? { ...item, state: "done" as const } : item) },
+			ctx,
+			pi,
+		);
+		expect(closeWithoutEvidence).toMatchObject({
+			details: { status: "refused", reason: "milestone_evidence_required" },
+		});
+
+		const closeWithEvidence = executeUpdateGoalGraph(
+			{
+				workItems: actionDone.map((item) =>
+					item.id === "m1" ? { ...item, state: "done" as const, evidence: ["reports/deps.md"] } : item,
+				),
+			},
+			ctx,
+			pi,
+		);
+		expect(closeWithEvidence).toMatchObject({ details: { goal: { workItems: expect.any(Array) } } });
+	});
+
+	it("update_goal_graph accepts a partial patch and inherits the remaining fields", async () => {
+		const { pi, ctx, branch } = createHarness();
+		await executeProposeGoalDraft(
+			{
+				objective: "证明定理 T。",
+				acceptanceCriteria: ["proofs/t.lean 中 T 的证明被 Lean 接受，目标状态为 proved"],
+				milestones: [
+					{ title: "引理闭合", doneWhen: ["所有引理有独立 review 记录"], actions: ["补齐引理依赖"] },
+					{ title: "目标证明完成", doneWhen: ["proofs/t.lean 通过 Lean 检查"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		executeUpdateGoalGraph(
+			{ workItems: [{ id: "s1", state: "done" as const }] },
+			ctx,
+			pi,
+		);
+		const updated = latestGoalEntry(branch).state?.workItems?.find((item) => item.id === "s1");
+		expect(updated).toMatchObject({
+			id: "s1",
+			title: "补齐引理依赖",
+			parentId: "m1",
+			horizon: "short",
+			state: "done",
+		});
+	});
+
+	it("propose_goal_draft rejects an unattended draft that is only a process plan", async () => {
+		const { pi, ctx, branch, ui } = createHarness();
+		const result = await executeProposeGoalDraft(
+			{
+				objective: "按规范持续推进这个项目，并定期汇报进展。",
+				acceptanceCriteria: ["记录每轮进展", "更新 STATUS 文档"],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		expect(branch).toHaveLength(0);
+		expect(ui.select).not.toHaveBeenCalled();
+		expect(result).toMatchObject({
+			terminate: true,
+			details: { status: "rejected", reason: "goal_quality" },
+		});
+		expect(result.content?.[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("outcome quality gate"),
+		});
 	});
 
 	it("propose_goal_draft throws for invalid model-provided draft shape before review", async () => {
@@ -554,6 +894,18 @@ describe("goal tool execution", () => {
 			details: { status: "refused", reason: "goal_inactive" },
 		});
 		expect(latestGoalEntry(branch).state?.objective).toBe("Keep me");
+	});
+
+	it("records a decision checkpoint once per evidence reference without completing the goal", () => {
+		const { pi, ctx, branch } = createHarness();
+		executeCreateGoal({ objective: "Track experiment", explicit_request: true, acceptance_criteria: ["Compare at matched budget"] }, ctx, pi);
+		const checkpoint = { kind: "gate_decision" as const, evidence: "./experiments/result.json", decision: "Drop the candidate after it misses the frozen gate" };
+		expect(executeUpdateGoalProgress({ checkpoint }, ctx, pi)).toMatchObject({ details: { goal: { progress: { researchCheckpoints: [{ ...checkpoint, evidence: "experiments/result.json" }] } } } });
+		const length = branch.length;
+		executeUpdateGoalProgress({ checkpoint: { ...checkpoint, evidence: "experiments/result.json", decision: "Paraphrased decision" } }, ctx, pi);
+		expect(branch).toHaveLength(length);
+		executeUpdateGoalProgress({ summary: "Candidate ruled out" }, ctx, pi);
+		expect(latestGoalEntry(branch).state).toMatchObject({ status: "active", progress: { researchCheckpoints: [{ decision: checkpoint.decision }] } });
 	});
 
 	it("update_goal_progress only mutates progress fields", () => {
@@ -774,9 +1126,13 @@ describe("goal tool renderers", () => {
 			formatProposeGoalDraftToolCall({
 				objective: "Review branch",
 				acceptanceCriteria: ["Review the diff", "Report risks"],
+				milestones: [
+					{ title: "Findings ready", doneWhen: ["findings.md exists"], actions: ["Inspect the diff"] },
+					{ title: "Review closed", doneWhen: ["no open P0/P1"] },
+				],
 			}),
 		).toBe(
-			"Propose goal draft\nObjective: Review branch\nAcceptance criteria:\n- Review the diff\n- Report risks",
+			"Propose goal draft\nObjective: Review branch\nPlan: 2 milestones · 1 actions\nAcceptance criteria:\n- Review the diff\n- Report risks",
 		);
 		expect(
 			formatUpdateGoalProgressToolCall({

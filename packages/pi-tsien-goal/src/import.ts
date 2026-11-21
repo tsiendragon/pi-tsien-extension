@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import type { GoalPlanDraft } from "./goal-plan.ts";
 import type { GoalSourceDoc } from "./types.ts";
 
 export const DEFAULT_IMPORT_MAX_FILE_BYTES = 256 * 1024;
@@ -49,6 +50,9 @@ interface ExtractedDoc {
 export interface EditableGoalDraft {
 	objective: string;
 	acceptanceCriteria: string[];
+	constraints?: string[];
+	/** Read-only plan preview; this editor does not change the plan yet. */
+	plan?: GoalPlanDraft;
 }
 
 export class GoalImportError extends Error {
@@ -121,6 +125,7 @@ export function parseEditableGoalDraft(content: string): EditableGoalDraft {
 	if (!objective) {
 		throw new GoalImportError("Goal draft must include a non-empty Objective section.");
 	}
+	const constraints = editableListValues(sections, ["constraints", "non-goals", "non goals"]);
 	return {
 		objective,
 		acceptanceCriteria: editableListValues(sections, [
@@ -129,14 +134,27 @@ export function parseEditableGoalDraft(content: string): EditableGoalDraft {
 			"definition of done",
 			"success criteria",
 		]),
+		...(constraints.length > 0 ? { constraints } : {}),
 	};
 }
 
 export function renderEditableGoalDraft(input: EditableGoalDraft): string {
 	const acceptanceCriteria = input.acceptanceCriteria.map((item) => `- ${item}`).join("\n");
-	return [`# Objective`, input.objective, ``, `# Acceptance criteria`, acceptanceCriteria]
-		.join("\n")
-		.trimEnd();
+	const constraints = (input.constraints ?? []).map((item) => `- ${item}`).join("\n");
+	const sections = [`# Objective`, input.objective, ``, `# Acceptance criteria`, acceptanceCriteria];
+	if (constraints) sections.push(``, `# Constraints`, constraints);
+	if (input.plan) {
+		sections.push(
+			``,
+			`# Plan preview (read-only)`,
+			`## Milestones`,
+			...input.plan.milestones.flatMap((milestone, index) => [
+				`- ${index + 1}. ${milestone.title} | done when: ${milestone.doneWhen.join("; ")}`,
+				...(milestone.actions ?? []).map((action) => `  - ${action}`),
+			]),
+		);
+	}
+	return sections.join("\n").trimEnd();
 }
 
 export function resolveImportPath(inputPath: string, cwd: string): string {

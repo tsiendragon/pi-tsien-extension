@@ -36,6 +36,51 @@ function persist(
 }
 
 describe("goal state reducer", () => {
+	it("persists an explicit milestone plan and replays it from the branch", () => {
+		const event: Extract<GoalStateEvent, { action: "create" }> = {
+			action: "create",
+			goalId: "goal-1",
+			objective: "Ship the feature",
+			now: baseTime,
+			owner: "user",
+			workItems: [
+				{
+					id: "m1",
+					goalId: "goal-1",
+					title: "Evidence closed",
+					horizon: "mid",
+					doneWhen: ["no gaps"],
+					state: "todo",
+					dependsOn: [],
+					acceptanceCriteriaIds: [],
+					updatedAt: baseTime,
+				},
+				{
+					id: "s1",
+					goalId: "goal-1",
+					title: "Build matrix",
+					horizon: "short",
+					parentId: "m1",
+					evidence: ["reports/evidence.md"],
+					state: "todo",
+					dependsOn: [],
+					acceptanceCriteriaIds: [],
+					updatedAt: baseTime,
+				},
+			],
+		};
+		const { entry, state } = persist(event, null);
+		expect(state?.workItems).toHaveLength(2);
+		expect(state?.workItems?.[1]).toMatchObject({
+			horizon: "short",
+			parentId: "m1",
+			evidence: ["reports/evidence.md"],
+		});
+
+		const snapshot = createGoalStateSnapshot([customEntry(entry)]);
+		expect(snapshot.current?.workItems).toEqual(state?.workItems);
+	});
+
 	it("supports create, edit, pause, resume, progress, import-docs, complete, clear, and replace", () => {
 		let state = reduceGoalState(null, createEvent());
 		expect(state).toMatchObject({ goalId: "goal-1", objective: "Ship the feature", status: "active" });

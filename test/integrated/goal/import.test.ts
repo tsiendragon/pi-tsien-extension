@@ -251,7 +251,7 @@ describe("/goal import command", () => {
 			"Ship goal import from docs.",
 		);
 		expect(pi.sendUserMessage).toHaveBeenCalledOnce();
-		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Ship goal import from docs."), {
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
 			deliverAs: "followUp",
 		});
 	});
@@ -266,7 +266,7 @@ describe("/goal import command", () => {
 		expect(latestGoalEntry(branch).action).toBe("create");
 		expect(ctx.ui.confirm).not.toHaveBeenCalled();
 		expect(pi.sendUserMessage).toHaveBeenCalledOnce();
-		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Ship goal import from docs."), {
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", {
 			deliverAs: "followUp",
 		});
 	});

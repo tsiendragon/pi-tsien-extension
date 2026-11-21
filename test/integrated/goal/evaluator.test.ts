@@ -65,7 +65,9 @@ describe("goal evaluator", () => {
 			const statusOnly = await handlers.get("before_agent_start")!({ prompt: "Only report status", systemPrompt: "original" }, ctx);
 			expect(statusOnly.systemPrompt).toBeUndefined();
 			const started = await handlers.get("before_agent_start")!({ prompt: "继续目标", systemPrompt: "original" }, ctx);
-			expect(started.systemPrompt).toContain("original\n\nAt the end of a goal execution run");
+			expect(started.systemPrompt).toContain("original\n\n## Active goal execution");
+			expect(started.systemPrompt).toContain("execute it now");
+			expect(started.systemPrompt).toContain("GOAL_HANDOFF");
 			await handlers.get("agent_end")!({ messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Unrelated analysis\nGOAL_HANDOFF\nReady now: none until review j finishes" }] }] }, ctx);
 			const job = events.get("pimatrix:proof-job")!;
 			if (fallback) {
@@ -103,7 +105,7 @@ describe("goal evaluator", () => {
 			const [, request] = stream.mock.calls[0] as unknown as [unknown, { messages: { content: string }[] }];
 			const snapshot = JSON.parse(request.messages[0].content);
 			expect(snapshot.latestAssistantHandoff).toBe("GOAL_HANDOFF\nReady now: none until review j finishes");
-			expect(snapshot.jobs).toEqual([{ id: "j", label: "review T", state: "pending" }]);
+			expect(snapshot.jobs).toEqual([{ id: "j", kind: "proof", label: "review T", state: "pending" }]);
 			expect(appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ action: "queued", source: "proof-job" }));
 			expect(sendUserMessage).toHaveBeenCalledWith("继续目标", { deliverAs: "followUp" });
 		} finally {

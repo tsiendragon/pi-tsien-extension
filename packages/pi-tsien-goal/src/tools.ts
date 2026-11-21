@@ -8,9 +8,19 @@ import {
 	type GoalStartAPI,
 	type GoalWorkflowContext,
 } from "./commands.ts";
+import { normalizeResearchFeedback } from "./research-feedback.ts";
 import { loadGoalState, saveGoalState, validateObjective } from "./state.ts";
 import { applyGoalUi, renderGoalStatus } from "./ui.ts";
 
+import { auditGoalDraft, formatGoalQualityIssues, hasBlockingGoalQualityIssues } from "./goal-quality.ts";
+import {
+	normalizeGoalOptimizationDraft,
+	optimizationCriterion,
+	optimizationObjective,
+	OPTIMIZATION_METHOD_FREEDOM,
+	validateGoalOptimizationDraft,
+} from "./goal-optimization.ts";
+import { normalizeGoalPlanDraft } from "./goal-plan.ts";
 import type { GoalDraftProposal } from "./goal-prep.ts";
 import type {
 	GoalBlocker,
@@ -42,6 +52,40 @@ export const createGoalParams = Type.Object(
 	},
 	{ additionalProperties: false },
 );
+const optimizationDraftSchema = Type.Object(
+	{
+		metric: Type.String({
+			description: "The one quantity to optimize, including the workload or benchmark it is measured on.",
+		}),
+		baseline: Type.String({ description: "The named comparator, implementation, version, or measured baseline." }),
+		target: Type.String({
+			description: "A measurable target with a number or factor, e.g. 降低 ≥20%, 误差 ≤0.05, 吞吐 ≥1.5×.",
+		}),
+		guardrails: Type.Optional(
+			Type.Array(Type.String(), {
+				maxItems: 5,
+				description: "Invariants that must not regress, e.g. same certificate, same accuracy, all costs counted.",
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
+const milestoneDraftSchema = Type.Object(
+	{
+		title: Type.String({ description: "Milestone outcome, not a working rule." }),
+		doneWhen: Type.Array(Type.String(), {
+			minItems: 1,
+			description: "Observable checks that make this milestone done.",
+		}),
+		actions: Type.Optional(
+			Type.Array(Type.String(), {
+				maxItems: 3,
+				description: "Concrete actions under this milestone. The first milestone needs 1-3; later ones may be added when reached.",
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
 export const proposeGoalDraftParams = Type.Object(
 	{
 		objective: Type.String({ description: "The concise objective for the proposed /goal draft." }),
@@ -52,9 +96,24 @@ export const proposeGoalDraftParams = Type.Object(
 			}),
 		),
 		acceptanceCriteria: Type.Array(Type.String(), {
-			description: "Concrete, editable completion checks directly implied by the user's request.",
+			description:
+				"Verifiable end-state checks: proof, metric target, test result, or concrete artifact. Process rules belong in constraints.",
 			minItems: 1,
 		}),
+		constraints: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					"Working rules and boundaries (recording, reporting, independent review, do not submit). Not acceptance criteria.",
+			}),
+		),
+		optimization: Type.Optional(optimizationDraftSchema),
+		milestones: Type.Optional(
+			Type.Array(milestoneDraftSchema, {
+				minItems: 2,
+				maxItems: 4,
+				description: "2-4 ordered milestones, each with its own actions. The first milestone needs 1-3 actions.",
+			}),
+		),
 		sourcePaths: Type.Optional(
 			Type.Array(Type.String(), {
 				description: "Optional source paths explicitly associated with this goal draft.",
@@ -67,6 +126,12 @@ export const proposeGoalDraftParams = Type.Object(
 			Type.Boolean({
 				description:
 					"Unattended /goal command drafts only: save and start the goal without the review dialog. Set true only when the command context explicitly requests unattended creation.",
+			}),
+		),
+		replan: Type.Optional(
+			Type.Boolean({
+				description:
+					"In-place /goal replan only: update the objective and criteria, preserve the goal ID and existing work items. Set only when the command context asks for a replan.",
 			}),
 		),
 		draftId: Type.Optional(Type.String({ description: "Optional model-generated draft correlation id." })),
@@ -96,6 +161,19 @@ export const updateGoalProgressParams = Type.Object(
 			}),
 		),
 		summary: Type.Optional(Type.String({ description: "Short progress summary." })),
+		checkpoint: Type.Optional(Type.Object({
+			kind: Type.Union([Type.Literal("gate_decision"), Type.Literal("replication"), Type.Literal("resource_frontier")]),
+			evidence: Type.String({ minLength: 1, maxLength: 300, description: "Stable artifact path, run ID or result digest; reuse it for the same evidence." }),
+			decision: Type.String({ minLength: 1, maxLength: 500, description: "What changed and the next bounded action; for reinforce, name the preset gate met." }),
+			feedback: Type.Optional(Type.Object({
+				method: Type.String({ minLength: 1, maxLength: 120 }),
+				scope: Type.String({ minLength: 1, maxLength: 280 }),
+				outcome: Type.Union([Type.Literal("reinforce"), Type.Literal("falsified"), Type.Literal("proof_gap"), Type.Literal("resource_limit"), Type.Literal("inconclusive")]),
+				gate: Type.Optional(Type.String({ minLength: 1, maxLength: 300, description: "Preset success criterion that the evidence met." })),
+				independentCheck: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
+				challenge: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
+			}, { additionalProperties: false, description: "Scoped route feedback. Reinforce requires the preset success gate, an independent check reference and a complementary challenge." })),
+		}, { additionalProperties: false })),
 	},
 	{ additionalProperties: false, minProperties: 1 },
 );
@@ -129,9 +207,6 @@ export const updateGoalParams = Type.Object(
 const workItemSchema = Type.Object(
 	{
 		id: Type.String(),
-		goalId: Type.String(),
-		title: Type.String(),
-		description: Type.Optional(Type.String()),
 		state: Type.Union([
 			Type.Literal("todo"),
 			Type.Literal("in_progress"),
@@ -139,9 +214,16 @@ const workItemSchema = Type.Object(
 			Type.Literal("blocked"),
 			Type.Literal("deferred"),
 		]),
-		dependsOn: Type.Array(Type.String()),
-		acceptanceCriteriaIds: Type.Array(Type.String()),
-		updatedAt: Type.Number(),
+		goalId: Type.Optional(Type.String()),
+		title: Type.Optional(Type.String()),
+		description: Type.Optional(Type.String()),
+		horizon: Type.Optional(Type.Union([Type.Literal("mid"), Type.Literal("short")])),
+		parentId: Type.Optional(Type.String()),
+		doneWhen: Type.Optional(Type.Array(Type.String())),
+		evidence: Type.Optional(Type.Array(Type.String())),
+		dependsOn: Type.Optional(Type.Array(Type.String())),
+		acceptanceCriteriaIds: Type.Optional(Type.Array(Type.String())),
+		updatedAt: Type.Optional(Type.Number()),
 	},
 	{ additionalProperties: false },
 );
@@ -191,7 +273,10 @@ const blockerAttemptSchema = Type.Object(
 export const updateGoalGraphParams = Type.Object(
 	{
 		workItems: Type.Optional(
-			Type.Array(workItemSchema, { description: "Full replacement snapshot of goal work items." }),
+			Type.Array(workItemSchema, {
+				description:
+					"Full replacement snapshot of goal work items. Only id and state are required; omitted fields inherit the current item.",
+			}),
 		),
 		blockers: Type.Optional(
 			Type.Array(blockerSchema, { description: "Full replacement snapshot of structured blockers." }),
@@ -206,7 +291,11 @@ export const proposeGoalDraftPromptSnippet =
 
 export const proposeGoalDraftPromptGuidelines = [
 	"Preserve the user's meaning and boundaries; do not invent unrelated scope or silently drop constraints.",
-	"Provide objective, editable acceptanceCriteria with concrete completion checks implied by the request; description is optional non-persisted context.",
+	"The objective must be a verifiable end state: a proved/disproved statement, a metric target with baseline, or an exploration quality bar.",
+	"Provide 2-4 ordered milestones with doneWhen checks. Put 1-3 concrete actions under the first milestone; later milestones stay locked.",
+	"acceptanceCriteria are outcome checks, not working rules. Move recording, reporting, independent review, audit, and do-not-submit rules to constraints.",
+	"For an algorithm speed/accuracy/memory/cost request, set optimization {metric, baseline, target, guardrails}; the objective is a single measurable target, not paper completion. Allow any method in constraints.",
+	"Do not add escape clauses that let the goal close when the result is not achieved.",
 	"Do not leave acceptanceCriteria empty; if details are uncertain, state the uncertainty rather than creating unrelated checks.",
 	"Call it once instead of replying with the draft in prose. Use create_goal only for an already-authorized new goal.",
 ] as const;
@@ -315,7 +404,7 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "complete_goal",
 		label: "Complete Goal",
 		description:
-			"Mark the active goal complete only when the objective is achieved and no required work remains. It cannot pause, resume, or rewrite the objective.",
+			"Mark the active goal complete only when the objective's verifiable end state is achieved and no required work remains. A finished batch, report, review, or process checklist is not completion. It cannot pause, resume, or rewrite the objective.",
 		promptSnippet: "Use complete_goal to mark the current /goal complete with evidence.",
 		parameters: completeGoalParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -356,7 +445,7 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		name: "update_goal_graph",
 		label: "Update Goal Work Graph",
 		description:
-			"Update work items and structured blockers for the active goal; attempts are append-only audit records. Try the ladder first — a way around the blocker, a self-service path, then other advanceable work — record each attempt with evidence, and only mark a blocker needs_user or external_wait after that; credentials, permissions, irreversible actions, product decisions, and policy limits need user/external waiting.",
+			"Update work items and structured blockers for the active goal. Send every work item; each item only needs id and state, and omitted fields inherit the current value. A milestone can be marked done only after its short actions are done/deferred and it has evidence that the doneWhen checks passed. Attempts are append-only audit records. Try the ladder first — a way around the blocker, a self-service path, then other advanceable work — record each attempt with evidence, and only mark a blocker needs_user or external_wait after that; credentials, permissions, irreversible actions, product decisions, and policy limits need user/external waiting.",
 		promptSnippet:
 			"Use update_goal_graph to record work-item state, structured blockers, and blocker attempts.",
 		parameters: updateGoalGraphParams,
@@ -374,7 +463,7 @@ export function registerGoalTools(pi: ExtensionAPI): void {
 		label: "Update Goal Progress",
 		description:
 			"Update execution progress for the active goal without changing objective, source docs, or criteria. It cannot rewrite objective, source docs, or acceptance criteria.",
-		promptSnippet: "Use update_goal_progress to update /goal progress fields only.",
+		promptSnippet: "Use update_goal_progress to record a research checkpoint only when durable evidence changes a gate, replication conclusion, or resource decision; do not count routine batches or paraphrases.",
 		parameters: updateGoalProgressParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return executeUpdateGoalProgress(params as UpdateGoalProgressToolInput, ctx as GoalToolContext, pi);
@@ -448,6 +537,27 @@ export async function executeProposeGoalDraft(
 	// Unattended /goal command drafts save and start without dialogs. The model
 	// only sets autoApprove when the command drafting prompt asked for it.
 	const autoApprove = params.autoApprove === true;
+	const replan = params.replan === true;
+	const qualityIssues = auditGoalDraft({ ...normalized.proposal, requirePlan: autoApprove });
+	if (hasBlockingGoalQualityIssues(qualityIssues) && autoApprove) {
+		return {
+			content: [
+				{
+					type: "text",
+					text: [
+						"Goal draft rejected by the outcome quality gate. No goal was saved.",
+						formatGoalQualityIssues(qualityIssues),
+						"Revise the objective and acceptance criteria so they name the verifiable end result; move process rules to constraints.",
+					].join("\n"),
+				},
+			],
+			details: { status: "rejected", reason: "goal_quality", issues: qualityIssues, goal: null },
+			terminate: true,
+		};
+	}
+	if (!autoApprove && qualityIssues.length > 0) {
+		ctx.ui?.notify(formatGoalQualityIssues(qualityIssues), "warning");
+	}
 
 	if (!autoApprove && (!ctx.hasUI || !ctx.ui?.select || !ctx.ui.editor)) {
 		return {
@@ -463,8 +573,24 @@ export async function executeProposeGoalDraft(
 	}
 
 	const current = loadGoalState(ctx);
-	let action: "create" | "replace";
-	if (autoApprove) {
+	if (replan && !current) {
+		return {
+			content: [{ type: "text", text: "No goal exists to replan. No goal was saved." }],
+			details: { status: "cancelled", reason: "no_goal", goal: null },
+			terminate: true,
+		};
+	}
+	if (replan && current?.status === "complete") {
+		return {
+			content: [{ type: "text", text: "Cannot replan a complete goal. Start a new goal instead." }],
+			details: { status: "cancelled", reason: "goal_complete", goal: current },
+			terminate: true,
+		};
+	}
+	let action: "create" | "replace" | "replan";
+	if (replan) {
+		action = "replan";
+	} else if (autoApprove) {
 		action = current ? "replace" : "create";
 	} else {
 		const confirmed = await confirmGoalReplacement(
@@ -497,6 +623,7 @@ export async function executeProposeGoalDraft(
 	const reviewed = normalizeReviewedProposal(review.proposal);
 	if (!reviewed.ok) throw goalToolError(reviewed.message, reviewed.code);
 
+	const start = replan ? current?.status === "active" : true;
 	const next = await saveReviewedGoalAndOfferStart(
 		pi as ExtensionAPI & Partial<GoalStartAPI>,
 		ctx as GoalWorkflowContext,
@@ -504,10 +631,14 @@ export async function executeProposeGoalDraft(
 			current,
 			proposal: reviewed.proposal,
 			action,
-			start: true,
-			sourceDocs: sourceDocsFromPaths(normalized.sourcePaths),
+			start,
+			sourceDocs: replan ? undefined : sourceDocsFromPaths(normalized.sourcePaths),
 			successMessage:
-				action === "replace" ? "Goal draft accepted and replaced." : "Goal draft accepted and saved.",
+				action === "replan"
+					? "Goal replanned; existing work items preserved."
+					: action === "replace"
+						? "Goal draft accepted and replaced."
+						: "Goal draft accepted and saved.",
 			staleMessage: "Goal changed before saving. Re-run /goal draft for the current goal.",
 		},
 	);
@@ -520,7 +651,7 @@ export async function executeProposeGoalDraft(
 		details: {
 			status: "saved",
 			action,
-			started: true,
+			started: next.status === "active",
 			goal: next,
 			draftId: normalized.draftId,
 			commandId: normalized.commandId,
@@ -542,6 +673,42 @@ export function executeCompleteGoal(
 		return refusalResult("Only active goals can be completed.", "goal_inactive", current);
 
 	const evidence = params.evidence?.trim();
+	const items = current.workItems ?? [];
+	const milestones = items.filter((item) => item.horizon === "mid");
+	if (milestones.length > 0) {
+		const openMilestones = milestones.filter((item) => item.state !== "done" && item.state !== "deferred");
+		if (openMilestones.length > 0) {
+			return refusalResult(
+				`Cannot complete: ${openMilestones.length} milestone(s) are still open (${openMilestones
+					.map((item) => item.title)
+					.join("; ")}). Mark each milestone done with evidence, or defer it explicitly.`,
+				"open_milestones",
+				current,
+			);
+		}
+		const milestoneById = new Map(milestones.map((item) => [item.id, item]));
+		const openActions = items.filter((item) => {
+			if (item.horizon !== "short" || item.state === "done" || item.state === "deferred") return false;
+			const parent = item.parentId ? milestoneById.get(item.parentId) : undefined;
+			return parent?.state !== "done" && parent?.state !== "deferred";
+		});
+		if (openActions.length > 0) {
+			return refusalResult(
+				`Cannot complete: ${openActions.length} next action(s) are still open (${openActions
+					.map((item) => item.title)
+					.join("; ")}).`,
+				"open_actions",
+				current,
+			);
+		}
+		if (!evidence) {
+			return refusalResult(
+				"A hierarchical goal needs completion evidence that covers the acceptance criteria.",
+				"missing_evidence",
+				current,
+			);
+		}
+	}
 	const next = saveGoalState(
 		pi,
 		{
@@ -591,12 +758,14 @@ export function executeUpdateGoalGraph(
 	if (current.status !== "active")
 		return refusalResult("Only active goals can receive work-graph updates.", "goal_inactive", current);
 	if (
-		params.workItems?.some((item) => item.goalId !== current.goalId) ||
+		params.workItems?.some((item) => item.goalId !== undefined && item.goalId !== current.goalId) ||
 		params.blockers?.some((blocker) => blocker.goalId !== current.goalId) ||
 		(params.attempt?.goalId !== undefined && params.attempt.goalId !== current.goalId)
 	) {
 		return refusalResult("Work graph records must belong to the active goal.", "stale_goal", current);
 	}
+	const now = Date.now();
+	const workItems = normalizeWorkItemSnapshot(current, params.workItems, now);
 	const unsafe = params.blockers?.find(
 		(blocker) =>
 			(blocker.kind === "permission_or_credential" ||
@@ -607,13 +776,17 @@ export function executeUpdateGoalGraph(
 	);
 	if (unsafe)
 		return refusalResult(`${unsafe.kind} blockers cannot be agent_can_try.`, "policy_boundary", current);
+	if (workItems) {
+		const milestoneError = validateMilestoneTransitions(current, workItems);
+		if (milestoneError) return refusalResult(milestoneError.message, milestoneError.code, current);
+	}
 	const next = saveGoalState(
 		pi,
 		{
 			action: "graph",
 			goalId: current.goalId,
-			now: Date.now(),
-			workItems: params.workItems as WorkItem[] | undefined,
+			now,
+			workItems,
 			blockers: params.blockers as GoalBlocker[] | undefined,
 			attempt: params.attempt as GoalBlockerAttempt | undefined,
 			reason: "Updated by update_goal_graph.",
@@ -622,6 +795,69 @@ export function executeUpdateGoalGraph(
 	);
 	applyGoalUi(ctx, next);
 	return { content: [{ type: "text", text: "Goal work graph updated" }], details: { goal: next } };
+}
+
+function normalizeWorkItemSnapshot(
+	current: GoalState,
+	patches: UpdateGoalGraphToolInput["workItems"],
+	now: number,
+): WorkItem[] | undefined {
+	if (!patches) return undefined;
+	const previousById = new Map((current.workItems ?? []).map((item) => [item.id, item]));
+	return patches.map((patch) => {
+		const previous = previousById.get(patch.id);
+		const description = patch.description ?? previous?.description;
+		const horizon = patch.horizon ?? previous?.horizon;
+		const parentId = patch.parentId ?? previous?.parentId;
+		const doneWhen = patch.doneWhen ?? previous?.doneWhen;
+		const evidence = patch.evidence ?? previous?.evidence;
+		return {
+			id: patch.id,
+			goalId: current.goalId,
+			title: patch.title?.trim() || previous?.title || patch.id,
+			...(description !== undefined ? { description } : {}),
+			...(horizon !== undefined ? { horizon } : {}),
+			...(parentId !== undefined ? { parentId } : {}),
+			...(doneWhen !== undefined ? { doneWhen: [...doneWhen] } : {}),
+			...(evidence !== undefined ? { evidence: [...evidence] } : {}),
+			state: patch.state,
+			dependsOn: [...(patch.dependsOn ?? previous?.dependsOn ?? [])],
+			acceptanceCriteriaIds: [...(patch.acceptanceCriteriaIds ?? previous?.acceptanceCriteriaIds ?? [])],
+			updatedAt: patch.updatedAt ?? now,
+		};
+	});
+}
+
+function validateMilestoneTransitions(
+	current: GoalState,
+	nextItems: WorkItem[],
+): { code: string; message: string } | undefined {
+	const previous = new Map((current.workItems ?? []).map((item) => [item.id, item]));
+	for (const item of nextItems) {
+		if (item.horizon !== "mid" || item.state !== "done" || previous.get(item.id)?.state === "done") continue;
+		const openActions = nextItems.filter(
+			(action) =>
+				action.horizon === "short" &&
+				action.parentId === item.id &&
+				action.state !== "done" &&
+				action.state !== "deferred",
+		);
+		if (openActions.length > 0) {
+			return {
+				code: "milestone_not_ready",
+				message: `Cannot mark milestone "${item.title}" done: ${openActions.length} action(s) are still open (${openActions
+					.map((action) => action.title)
+					.join("; ")}).`,
+			};
+		}
+		if (!(item.evidence ?? []).some((entry) => entry.trim())) {
+			return {
+				code: "milestone_evidence_required",
+				message: `Cannot mark milestone "${item.title}" done without evidence that its doneWhen checks passed.`,
+			};
+		}
+	}
+	return undefined;
 }
 
 export function executeUpdateGoalProgress(
@@ -639,15 +875,34 @@ export function executeUpdateGoalProgress(
 		params.done === undefined &&
 		params.current === undefined &&
 		params.blocked === undefined &&
-		params.summary === undefined
+		params.summary === undefined &&
+		params.checkpoint === undefined
 	)
 		return refusalResult(
-			"Provide at least one progress field: done, current, blocked, or summary.",
+			"Provide at least one progress field: done, current, blocked, summary, or checkpoint.",
 			"empty_progress",
 			current,
 		);
 
+	const checkpoints = current.progress.researchCheckpoints ?? [];
+	let researchCheckpoints: GoalProgress["researchCheckpoints"];
+	if (params.checkpoint) {
+		const { kind } = params.checkpoint;
+		const evidence = params.checkpoint.evidence.trim().replace(/^(?:\.\/)+/u, "");
+		const decision = params.checkpoint.decision.trim();
+		if (!["gate_decision", "replication", "resource_frontier"].includes(kind) || !evidence || evidence.length > 300 || /[\r\n]/u.test(evidence) || !decision || decision.length > 500)
+			return refusalResult("Provide a stable evidence reference and a concrete decision.", "invalid_checkpoint", current);
+		const feedback = normalizeResearchFeedback(params.checkpoint.feedback);
+		if (params.checkpoint.feedback !== undefined && !feedback) return refusalResult("Invalid route feedback; reinforcement requires the preset success gate, an independent check and a complementary challenge.", "invalid_feedback", current);
+		if (!checkpoints.some(checkpoint => checkpoint.evidence === evidence)) {
+			if (checkpoints.length >= 128) return refusalResult("This goal has reached its recorded checkpoint limit; use the work graph for further progress.", "checkpoint_limit", current);
+			researchCheckpoints = [...checkpoints, { kind, evidence, decision, ...(feedback ? { feedback } : {}) }];
+		} else if (params.done === undefined && params.current === undefined && params.blocked === undefined && params.summary === undefined) {
+			return { content: [{ type: "text", text: "Research checkpoint already recorded; no new progress." }], details: { goal: current, progress: current.progress } };
+		}
+	}
 	const progress: Partial<GoalProgress> = {
+		researchCheckpoints,
 		done: params.done,
 		current: params.current,
 		blocked: params.blocked,
@@ -737,6 +992,10 @@ export function formatGoalToolCall(toolName: string, body?: string, theme?: Goal
 
 export function formatProposeGoalDraftToolCall(input: ProposeGoalDraftToolInput, theme?: GoalTheme): string {
 	const lines = [`Objective: ${input.objective}`];
+	if (input.milestones?.length) {
+		const actionCount = input.milestones.reduce((total, milestone) => total + (milestone.actions?.length ?? 0), 0);
+		lines.push(`Plan: ${input.milestones.length} milestones · ${actionCount} actions`);
+	}
 	const criteria = normalizeStringList(input.acceptanceCriteria);
 	if (criteria.length > 0) {
 		lines.push("Acceptance criteria:", ...criteria.map((item) => `- ${item}`));
@@ -846,9 +1105,32 @@ function normalizeGoalDraftParams(
 			message: "Goal draft must include at least one non-empty acceptance criterion.",
 		};
 	}
+	const constraints = normalizeStringList(params.constraints);
+	const optimization = normalizeGoalOptimizationDraft(params.optimization);
+	if (optimization) {
+		const optimizationErrors = validateGoalOptimizationDraft(optimization);
+		if (optimizationErrors.length > 0) {
+			return { ok: false, code: "invalid_optimization", message: optimizationErrors.join(" ") };
+		}
+	}
+	const plan = normalizeGoalPlanDraft({ milestones: params.milestones });
+	const finalObjective = optimization ? optimizationObjective(optimization) : objective;
+	const finalCriteria = optimization
+		? normalizeStringList([optimizationCriterion(optimization), ...acceptanceCriteria])
+		: acceptanceCriteria;
+	const finalConstraints = normalizeStringList([
+		...(optimization ? [OPTIMIZATION_METHOD_FREEDOM] : []),
+		...constraints,
+	]);
 	return {
 		ok: true,
-		proposal: { objective, acceptanceCriteria },
+		proposal: {
+			objective: finalObjective,
+			acceptanceCriteria: finalCriteria,
+			...(finalConstraints.length > 0 ? { constraints: finalConstraints } : {}),
+			...(plan ? { plan } : {}),
+			...(optimization ? { optimization } : {}),
+		},
 		sourcePaths: normalizeStringList(params.sourcePaths),
 		draftId: params.draftId?.trim() || undefined,
 		commandId: params.commandId?.trim() || undefined,
@@ -869,7 +1151,16 @@ function normalizeReviewedProposal(
 			message: "Edited goal draft must include at least one acceptance criterion.",
 		};
 	}
-	return { ok: true, proposal: { objective, acceptanceCriteria } };
+	const constraints = normalizeStringList(proposal.constraints);
+	return {
+		ok: true,
+		proposal: {
+			objective,
+			acceptanceCriteria,
+			...(constraints.length > 0 ? { constraints } : {}),
+			...(proposal.plan ? { plan: proposal.plan } : {}),
+		},
+	};
 }
 
 function normalizeStringList(values?: string[]): string[] {

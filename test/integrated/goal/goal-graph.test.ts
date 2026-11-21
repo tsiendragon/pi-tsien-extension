@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	allPathsBlocked,
 	chooseExplorableBlocker,
+	currentMilestone,
 	goalWorkOverview,
 	readyWorkItems,
 	renderBlockerReport,
@@ -129,6 +130,107 @@ describe("goal work graph", () => {
 		expect(report.markdown).toContain("Credential required");
 		expect(report.markdown).toContain("Existing auth may work");
 		expect(report.checksum).toHaveLength(64);
+	});
+
+	it("runs only the current milestone's actions and unlocks the next milestone", () => {
+		const state = goal({
+			acceptanceCriteria: ["Outcome verified"],
+			workItems: [
+				{
+					id: "m1",
+					goalId: "goal-1",
+					title: "Evidence closed",
+					horizon: "mid",
+					doneWhen: ["evidence matrix has no gaps"],
+					state: "todo",
+					dependsOn: [],
+					acceptanceCriteriaIds: [],
+					updatedAt: 1,
+				},
+				{
+					id: "m2",
+					goalId: "goal-1",
+					title: "Independent review",
+					horizon: "mid",
+					doneWhen: ["two reviews have no P0/P1"],
+					state: "todo",
+					dependsOn: ["m1"],
+					acceptanceCriteriaIds: [],
+					updatedAt: 1,
+				},
+				{
+					id: "s1",
+					goalId: "goal-1",
+					title: "Build evidence matrix",
+					horizon: "short",
+					parentId: "m1",
+					state: "todo",
+					dependsOn: [],
+					acceptanceCriteriaIds: [],
+					updatedAt: 1,
+				},
+				{
+					id: "s2",
+					goalId: "goal-1",
+					title: "Commission two reviews",
+					horizon: "short",
+					parentId: "m2",
+					state: "todo",
+					dependsOn: [],
+					acceptanceCriteriaIds: [],
+					updatedAt: 1,
+				},
+			],
+		});
+		expect(currentMilestone(state)?.id).toBe("m1");
+		expect(readyWorkItems(state).map((item) => item.id)).toEqual(["s1"]);
+		expect(goalWorkOverview(state)).toMatchObject({
+			done: 0,
+			total: 2,
+			milestonesDone: 0,
+			milestonesTotal: 2,
+		});
+
+		const advanced = goal({
+			...state,
+			workItems: state.workItems?.map((item) =>
+				item.id === "m1" || item.id === "s1" ? { ...item, state: "done" as const } : item,
+			),
+		});
+		expect(currentMilestone(advanced)?.id).toBe("m2");
+		expect(readyWorkItems(advanced).map((item) => item.id)).toEqual(["s2"]);
+		expect(goalWorkOverview(advanced)).toMatchObject({ done: 1, total: 2, milestonesDone: 1 });
+	});
+
+	it("treats a current milestone without actions as unplanned, not blocked", () => {
+		const state = goal({
+			workItems: [
+				{
+					id: "m1",
+					goalId: "goal-1",
+					title: "Evidence closed",
+					horizon: "mid",
+					doneWhen: ["evidence matrix has no gaps"],
+					state: "todo",
+					dependsOn: [],
+					acceptanceCriteriaIds: [],
+					updatedAt: 1,
+				},
+				{
+					id: "m2",
+					goalId: "goal-1",
+					title: "Independent review",
+					horizon: "mid",
+					doneWhen: ["two reviews have no P0/P1"],
+					state: "todo",
+					dependsOn: ["m1"],
+					acceptanceCriteriaIds: [],
+					updatedAt: 1,
+				},
+			],
+		});
+		expect(readyWorkItems(state)).toEqual([]);
+		expect(allPathsBlocked(state)).toBe(false);
 	});
 
 	it("permits only agent-eligible blockers as exploration candidates", () => {
