@@ -134,7 +134,9 @@ export interface WorkbenchRunWarning {
   readonly sessionId: string;
   readonly runId: string;
   readonly workflowId?: string;
-  readonly warning: "idle" | "wall";
+  readonly warning: "idle" | "wall" | "soft-deadline";
+  readonly deadlineAt?: number;
+  readonly maxExtensionMs?: number;
   readonly message: string;
   readonly elapsedMs: number;
   readonly idleMs?: number;
@@ -967,6 +969,8 @@ export class WorkbenchController {
             thinking: lease.thinking ?? DEFAULT_EXECUTION_THINKING,
             allowedTools: roleToolNames(role),
             hardWallTimeMs,
+            hardWallMaxMs: config.workHardMaxMs,
+            workExtensionMaxMs: config.workExtensionMaxMs,
             maxModelCalls: config.maxModelCallsPerTask,
           });
         } catch (error) {
@@ -1428,6 +1432,16 @@ export class WorkbenchController {
       sources: Object.freeze(sources),
       omittedSources: collected.length - shown.length,
     });
+  }
+
+  extendJobDeadline(workId: string, runId: string, extendMs: number) {
+    const job = this.jobs.get(workId);
+    if (job?.status !== "running" || (job.kind === "agent"
+      ? job.runId !== runId
+      : !job.workflowId || ![...this.conversations.values()].some(c => c.workflowId === job.workflowId && c.activeRunId === runId))) {
+      return { ok: false, reason: "Run does not belong to an active job." } as const;
+    }
+    return this.provider.extendRunDeadline(runId, extendMs);
   }
 
   cancelJob(workId: string, reason?: string): WorkbenchJobSnapshot | undefined {
@@ -3036,6 +3050,8 @@ export class WorkbenchController {
         ? { workflowId: conversation.workflowId }
         : {}),
       warning: event.warning,
+      ...(event.deadlineAt === undefined ? {} : { deadlineAt: event.deadlineAt }),
+      ...(event.maxExtensionMs === undefined ? {} : { maxExtensionMs: event.maxExtensionMs }),
       message: event.message,
       elapsedMs: event.elapsedMs,
       ...(event.idleMs === undefined ? {} : { idleMs: event.idleMs }),

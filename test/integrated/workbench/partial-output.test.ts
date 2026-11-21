@@ -195,7 +195,9 @@ describe("subagent_results partial output", () => {
     vi.stubEnv("PI_RUNTIME", "");
     const tools = new Map<string, any>();
     const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const appendEntry = vi.fn();
     subagentWorkbench({
+      appendEntry,
       on: vi.fn((event: string, handler: (...args: any[]) => any) => {
         handlers.set(event, [...(handlers.get(event) ?? []), handler]);
       }),
@@ -203,8 +205,54 @@ describe("subagent_results partial output", () => {
       registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
     } as any);
     const ctx = { cwd: process.cwd(), hasUI: false, isIdle: () => true, ui: { notify: vi.fn() } };
-    return { tools, handlers, ctx };
+    return { tools, handlers, ctx, appendEntry };
   }
+
+  it("requires a reason and records a successful explicit extension", async () => {
+    const extend = vi.spyOn(WorkbenchController.prototype, "extendJobDeadline").mockReturnValue({
+      ok: true, previousDeadlineAt: 10_000, deadlineAt: 70_000, extendMs: 60_000,
+    });
+    const { tools, handlers, ctx, appendEntry } = install();
+    const params = { workId: "work-1", runId: "run-1", extendMs: 60_000, reason: " " };
+    const invoke = () => tools.get("subagent_extend").execute("extend", params, new AbortController().signal, undefined, ctx);
+    expect((await invoke()).details.ok).toBe(false);
+    expect(extend).not.toHaveBeenCalled();
+    params.reason = "One saved checkpoint remains to verify";
+    expect((await invoke()).details).toMatchObject({ ok: true, deadlineAt: 70_000 });
+    expect(extend).toHaveBeenCalledWith("work-1", "run-1", 60_000);
+    expect(appendEntry).toHaveBeenCalledWith("subagent-deadline-extension", expect.objectContaining({ reason: params.reason, previousDeadlineAt: 10_000, deadlineAt: 70_000 }));
+    for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+  });
+
+  it("registers distinct, tool-named delegation and result guidelines", async () => {
+    const { tools, handlers } = install();
+    for (const name of ["subagent_start", "subagent_workflow", "subagent_results"]) {
+      const guidelines: string[] = tools.get(name).promptGuidelines;
+      expect(guidelines.length).toBeGreaterThan(0);
+      expect(guidelines.every((line) => line.includes(name))).toBe(true);
+    }
+    expect(tools.get("subagent_start").promptGuidelines.join(" ")).toContain("one independent, verifiable task");
+    expect(tools.get("subagent_workflow").promptGuidelines.join(" ")).toContain("reuse finished siblings");
+    expect(tools.get("subagent_results").promptGuidelines.join(" ")).toContain("partial text as unverified");
+    for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+  });
+
+  it("distinguishes timeout recovery from quota failures without retrying", async () => {
+    const timeout = "Pi RPC Run example exceeded hard wall time 100000 ms.";
+    vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
+      pending: [], missing: [], completed: [
+        { workId: "work-timeout", kind: "workflow", status: "failed", label: "Run", result: { stages: [{ label: "Stage 1", tasks: [{ key: "audit", error: timeout, status: "failed" }] }] } },
+        { workId: "work-quota", kind: "agent", status: "failed", label: "Review", error: "quota_exhausted" },
+      ],
+    } as any);
+    const { tools, handlers, ctx } = install();
+    const response = await tools.get("subagent_results").execute("q", { mode: "status" }, new AbortController().signal, undefined, ctx);
+    expect(response.details.completed[0].failure).toMatchObject({ code: "timeout", wallTimeMs: 100000, checkpoint: "unknown" });
+    expect(response.content[0].text).toContain("Retry only audit with retry_task");
+    expect(response.details.completed[1].failure).toMatchObject({ code: "quota_exhausted" });
+    expect(response.content[0].text).toContain("Do not retry immediately against the same exhausted quota");
+    for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+  });
 
   it("is opt-in, requires explicit workIds, and stays bounded", async () => {
     const runningJob = {

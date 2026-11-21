@@ -47,12 +47,14 @@ export interface RouterConfig {
   readonly tiers: Readonly<Record<Tier, TierConfig>>;
   readonly workHardMs: number;
   readonly workHardMaxMs: number;
+  readonly workExtensionMaxMs: number;
   readonly maxModelCallsPerTask: number;
   readonly legacy: boolean;
 }
 
 export const DEFAULT_WORK_HARD_MS = 72 * 60 * 60_000;
 export const DEFAULT_WORK_HARD_MAX_MS = 14 * 24 * 60 * 60_000;
+export const DEFAULT_WORK_EXTENSION_MAX_MS = 5 * 60_000;
 export const DEFAULT_MAX_MODEL_CALLS = 2_000;
 export const MAX_SWITCHES_PER_TASK = 3;
 const DEFAULT_MAX_CONCURRENCY = 4;
@@ -231,6 +233,7 @@ export function parseRouterConfig(raw: unknown): RouterConfig {
     tiers: Object.freeze(tiers),
     workHardMs,
     workHardMaxMs,
+    workExtensionMaxMs: Math.min(workHardMaxMs, timeouts.workExtensionMaxMs === 0 ? 0 : positive(timeouts.workExtensionMaxMs, "timeouts.workExtensionMaxMs", DEFAULT_WORK_EXTENSION_MAX_MS)),
     maxModelCallsPerTask: positive(budgets.maxModelCallsPerTask, "budgets.maxModelCallsPerTask", DEFAULT_MAX_MODEL_CALLS),
     legacy: false,
   });
@@ -251,6 +254,7 @@ export function legacyRouterConfig(environment: NodeJS.ProcessEnv = process.env)
     tiers: { light: empty("light"), medium: empty("medium"), heavy: empty("heavy"), ultra: empty("ultra") },
     workHardMs: DEFAULT_WORK_HARD_MS,
     workHardMaxMs: DEFAULT_WORK_HARD_MAX_MS,
+    workExtensionMaxMs: DEFAULT_WORK_EXTENSION_MAX_MS,
     maxModelCallsPerTask: DEFAULT_MAX_MODEL_CALLS,
     legacy: true,
   });

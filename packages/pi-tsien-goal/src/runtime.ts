@@ -66,12 +66,15 @@ export interface GoalContinuationRecord {
 	source?: GoalContinuationSource;
 }
 
-export type GoalContinuationSource = "explicit" | "evaluator" | "proof-job" | "workbench-job" | "handoff";
+export type GoalContinuationSource = "explicit" | "evaluator" | "proof-job" | "workbench-job" | "handoff" | "compaction" | "wait-recheck" | "provider-retry";
+export const GOAL_WAIT_RECHECK_MS = 5 * 60_000;
+const PROVIDER_RETRY_MS = 30_000;
+export const GOAL_EVALUATOR_RETRY_MS = 60_000;
 type GoalJobKind = "proof" | "workbench";
 interface GoalJob { kind: GoalJobKind; id: string; label: string; state: string; collected?: boolean }
 const GOAL_START_PREFIX = "Start working toward the active goal now.";
 const TERMINAL_JOB_STATES = new Set(["finished", "failed", "cancelled"]);
-export type GoalContinuationStopReason = "disabled" | "not-active" | "duplicate-queue" | "stale-goal";
+export type GoalContinuationStopReason = "disabled" | "not-active" | "duplicate-queue" | "stale-goal" | "delivery-failed";
 
 export interface GoalContinuationState {
 	queuedGoalId?: string;
@@ -98,6 +101,18 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 	let summary = "";
 	let reason: string | undefined;
 	let stopped = false;
+	let lastRunOutcome: "success" | "error" | "aborted" | undefined;
+	let providerRetryUsed = false;
+	let retryTimer: ReturnType<typeof setTimeout> | undefined;
+	let retryDue = false;
+	let evaluationRetry: ReturnType<typeof setTimeout> | undefined;
+	let evaluationRetryUsed = false;
+	let compacting = false;
+	let compacted = false;
+	let waitTimer: ReturnType<typeof setTimeout> | undefined;
+	let waitDue: GoalJob[] | undefined;
+	let waitRechecks = 0;
+	const rechecked = new Set<string>();
 	let jobEventVersion = 0;
 	// Keyed by `${kind}:${id}` so proof jobs and workbench jobs never collide.
 	const jobs = new Map<string, GoalJob>();
@@ -119,10 +134,25 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 	};
 	const modelSetting = () => String(api.getFlag?.("goal-evaluator-models") ?? process.env.PI_GOAL_EVALUATOR_MODELS ?? DEFAULT_GOAL_EVALUATORS);
 	const models = () => evaluatorModels(modelSetting());
+	const clearWait = () => {
+		if (waitTimer) clearTimeout(waitTimer);
+		waitTimer = undefined;
+		waitDue = undefined;
+	};
 	const reset = () => {
 		control?.abort();
+		control = undefined;
 		if (pending) clearTimeout(pending);
-		pending = undefined;
+		if (retryTimer) clearTimeout(retryTimer);
+		retryTimer = pending = undefined;
+		if (evaluationRetry) clearTimeout(evaluationRetry);
+		evaluationRetry = undefined;
+		evaluationRetryUsed = false;
+		clearWait();
+		rechecked.clear();
+		waitRechecks = 0;
+		lastRunOutcome = undefined;
+		providerRetryUsed = retryDue = compacting = compacted = false;
 		engaged = undefined;
 		idleTurns = 0;
 		usedHandoffFallback = false;
@@ -134,24 +164,49 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		jobs.clear();
 	};
 	const assess = (ctx: ExtensionContext) => {
-		if (pending || control || continuationState.queuedGoalId || stopped || !engaged || api.getFlag?.("goal-continuation") === false || !models().length) return;
+		const unavailable = () => compacting || stopped || !engaged || api.getFlag?.("goal-continuation") === false || !models().length;
+		if (pending || control || continuationState.queuedGoalId || unavailable()) return;
 		pending = setTimeout(() => {
 			pending = undefined;
-			if (!ctx.isIdle() || continuationState.queuedGoalId) return;
+			if (unavailable() || !ctx.isIdle() || continuationState.queuedGoalId) return;
 			const goal = loadGoalState(ctx);
 			if (!isActiveGoal(goal) || goal.goalId !== engaged) return;
 			const ready = readyWorkItems(goal);
+			const queue = (source: GoalContinuationSource, hint: string) => {
+				clearWait();
+				if (evaluationRetry) clearTimeout(evaluationRetry);
+				evaluationRetry = undefined;
+				compacted = retryDue = false;
+				if (retryTimer) clearTimeout(retryTimer);
+				retryTimer = undefined;
+				reason = hint;
+				void maybeQueueGoalContinuation(api, continuationState, ctx, Date.now(), source).catch(() => {
+					api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "queue-failed", source });
+				});
+			};
 			const completed = takeCompletedJobs();
 			if (completed.length) {
 				// A terminal event is new evidence. Give the worker one bounded chance to
 				// collect it; a stale handoff or a reviewer verdict is not a stop decision.
-				reason = completedJobsNotice(completed);
-				const source = completed.some(job => job.kind === "proof") ? "proof-job" : "workbench-job";
-				void maybeQueueGoalContinuation(api, continuationState, ctx, Date.now(), source).catch(() => { stopped = true; });
+				queue(completed.some(job => job.kind === "proof") ? "proof-job" : "workbench-job", completedJobsNotice(completed));
 				return;
 			}
+			if (waitDue) {
+				const due = waitDue.filter(job => jobs.get(`${job.kind}:${job.id}`)?.state === "pending");
+				waitDue = undefined;
+				if (due.length) {
+					for (const job of due) rechecked.add(`${job.kind}:${job.id}`);
+					waitRechecks++;
+					queue("wait-recheck", `Waiting job(s) had no terminal event: ${due.map(job => `${job.kind}:${job.id}`).join(", ")}. Reconcile their status using proof_jobs or subagent_results and check existing persisted artifacts. This is not a failure signal or authority to restart work. Do not duplicate live or completed work; if still running, report that; if missing, record what you verified and use only an authorized checkpoint.`);
+					return;
+				}
+			}
 			if (allPathsBlocked(goal) || getOpenBlockers(goal).some(b => b.disposition !== "agent_can_try" && !b.workItemIds.length)) return;
-			if (idleTurns >= 3) return;
+			if (retryDue) { queue("provider-retry", "The last request failed after Pi retry handling. Make one bounded attempt from the current checkpoint; do not repeat already successful work."); return; }
+			if (retryTimer || waitTimer || evaluationRetry || lastRunOutcome === "error") return;
+			if (idleTurns >= 3) { compacted = false; return; }
+			if (compacted && ready.length) { queue("compaction", "Context compaction finished. Resume from the current checkpoint and existing work items; collect any terminal jobs before starting duplicate work."); return; }
+			compacted = false;
 			const epoch = jobEventVersion;
 			const leaf = ctx.sessionManager.getLeafId();
 			const run = new AbortController();
@@ -180,14 +235,45 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 				const repeated = key !== undefined && routesTried.has(key);
 				api.appendEntry("goal-evaluation", { goalId: goal.goalId, model: answer?.model, decision: repeated ? "repeated-action" : answer?.decision ?? "unavailable", reason: answer?.reason, action, wake: answer?.decision === "wait" ? answer.wake : undefined, failures, fallback: fallback && !repeated ? "handoff" : undefined, at: Date.now() });
 				if (answer?.decision === "stop") stopped = true;
+				if (answer?.decision === "wait" || !answer && !fallback) {
+					const live = [...jobs.entries()].filter(([id, job]) => job.state === "pending" && !rechecked.has(id));
+					const named = live.filter(([, job]) => answer?.decision === "wait" && answer.wake.includes(job.id));
+					const targets = (named.length ? named : live).map(([, job]) => job);
+					if (targets.length && waitRechecks < 3) {
+						api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "waiting-job", ids: targets.map(job => job.id), recheckAt: Date.now() + GOAL_WAIT_RECHECK_MS });
+						waitTimer = setTimeout(() => {
+							waitTimer = undefined;
+							waitDue = targets;
+							assess(ctx);
+						}, GOAL_WAIT_RECHECK_MS);
+						waitTimer.unref?.();
+					}
+				}
+				if (!answer && !fallback && ![...jobs.values()].some(job => job.state === "pending")) {
+					if (!evaluationRetryUsed && ready.length) {
+						evaluationRetryUsed = true;
+						api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "evaluator-backoff", retryAt: Date.now() + GOAL_EVALUATOR_RETRY_MS });
+						evaluationRetry = setTimeout(() => {
+							evaluationRetry = undefined;
+							assess(ctx);
+						}, GOAL_EVALUATOR_RETRY_MS);
+						evaluationRetry.unref?.();
+					} else {
+						api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "evaluator-unavailable-no-retry", reason: ready.length ? "retry-exhausted" : "no-ready-work" });
+						ctx.ui?.notify?.("/goal 自动续跑评估不可用；没有后台任务可等待。恢复后可用 /goal start 从检查点继续。", "warning");
+					}
+				} else if (answer) evaluationRetryUsed = false;
 				if (!key || repeated) return;
 				routesTried.add(key);
 				if (fallback) usedHandoffFallback = true;
 				reason = `Proposed next action: ${action}. Reason: ${answer?.reason ?? "Evaluator unavailable; resume the explicit checkpoint action if still authorized and unblocked."}`;
 				await maybeQueueGoalContinuation(api, continuationState, ctx, Date.now(), fallback ? "handoff" : "evaluator");
-			}).catch(() => { stopped = true; }).finally(() => {
-				if (control === run) control = undefined;
-				if (!run.signal.aborted && jobEventVersion !== epoch) assess(ctx);
+			}).catch(() => {
+				if (!run.signal.aborted) api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "evaluation-failed" });
+			}).finally(() => {
+				if (control !== run) return;
+				control = undefined;
+				if (jobEventVersion !== epoch || compacted || waitDue || retryDue) assess(ctx);
 			});
 		}, 0);
 	};
@@ -212,8 +298,7 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		if (state === "cancelled") {
 			// A cancelled proof job is a user stop. A cancelled background subagent is
 			// not a wake: it has no result to collect and may be the worker's own choice.
-			if (kind === "proof") { stopped = true; control?.abort(); }
-			else jobs.delete(key);
+			jobs.delete(key);
 			return;
 		}
 		if (job.collected) { jobs.delete(key); return; }
@@ -275,14 +360,14 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		};
 	});
 
-	pi.on("session_before_compact", async (event) =>
-		createGoalCompaction(
-			event as {
-				preparation: { previousSummary?: string; firstKeptEntryId: string; tokensBefore: number };
-				branchEntries: Array<{ type: string; customType?: string; data?: unknown }>;
-			},
-		),
-	);
+	pi.on("session_before_compact", async (event) => {
+		if (engaged && !stopped) {
+			compacting = true;
+			control?.abort();
+			control = undefined;
+		}
+		return createGoalCompaction(event);
+	});
 
 	pi.on("input", async (event, ctx) => {
 		const text = getInputText(event as GoalInputEvent);
@@ -309,7 +394,12 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		const last = [...event.messages].reverse().find(m => m.role === "assistant");
 		if (last?.stopReason === "aborted") deferredStart = undefined;
 		if (!engaged) return;
-		if (!last || last.stopReason === "aborted" || last.stopReason === "error") { stopped = true; return; }
+		if (!last) return;
+		lastRunOutcome = last.stopReason === "aborted" || last.stopReason === "error" ? last.stopReason : "success";
+		if (lastRunOutcome !== "success") return;
+		providerRetryUsed = retryDue = false;
+		if (retryTimer) clearTimeout(retryTimer);
+		retryTimer = undefined;
 		const finalText = last.content.flatMap(p => p.type === "text" ? [p.text] : []).join("\n");
 		const marker = [...finalText.matchAll(/^GOAL_HANDOFF\s*$/gm)].at(-1);
 		summary = (marker ? finalText.slice(marker.index) : finalText).slice(-3000);
@@ -325,8 +415,38 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		idleTurns = advanced ? 0 : idleTurns + 1;
 		progressKey = nextKey;
 	});
+	pi.on("session_compact", async (event, ctx) => {
+		if (!compacting) return;
+		compacting = false;
+		if (event.willRetry) return;
+		compacted = true;
+		assess(ctx);
+	});
+	pi.on("session_compact_failed", async (event, ctx) => {
+		if (!compacting) return;
+		compacting = false;
+		if (!event.aborted && !event.willRetry) assess(ctx);
+	});
 	pi.on("agent_settled", async (_event, ctx) => {
 		syncLedger(ledger, ctx);
+		if (engaged && lastRunOutcome === "aborted") {
+			stopped = true;
+			clearWait();
+			api.appendEntry("goal-scheduler", { goalId: engaged, state: "aborted" });
+			return;
+		}
+		if (engaged && lastRunOutcome === "error" && !stopped && !providerRetryUsed && api.getFlag?.("goal-continuation") !== false && models().length) {
+			providerRetryUsed = true;
+			api.appendEntry("goal-scheduler", { goalId: engaged, state: "provider-backoff", retryAt: Date.now() + PROVIDER_RETRY_MS });
+			retryTimer = setTimeout(() => {
+				retryTimer = undefined;
+				retryDue = true;
+				assess(ctx);
+			}, PROVIDER_RETRY_MS);
+			retryTimer.unref?.();
+		} else if (engaged && lastRunOutcome === "error" && !retryTimer && !retryDue) {
+			api.appendEntry("goal-scheduler", { goalId: engaged, state: "provider-error-no-retry" });
+		}
 		if (deferredStart) {
 			const start = deferredStart;
 			setTimeout(() => {
@@ -456,7 +576,15 @@ export async function maybeQueueGoalContinuation(
 	state.queuedGoalId = goal.goalId;
 	recordGoalContinuation(api, { action: "queued", goalId: goal.goalId, at: now, turnCount: 0, source });
 	updateContinuationStatus(ctx, state);
-	api.sendUserMessage(renderContinuationPrompt(goal), { deliverAs: "followUp" });
+	try {
+		await api.sendUserMessage(renderContinuationPrompt(goal), { deliverAs: "followUp" });
+	} catch (error) {
+		if (state.queuedGoalId === goal.goalId) {
+			stopGoalContinuation(api, state, "delivery-failed");
+			updateContinuationStatus(ctx, state);
+		}
+		throw error;
+	}
 	return { queued: true, goalId: goal.goalId };
 }
 
