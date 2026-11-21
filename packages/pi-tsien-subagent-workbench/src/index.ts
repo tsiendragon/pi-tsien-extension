@@ -23,7 +23,16 @@ import {
   type ConversationWorkbenchHandle,
 } from "./conversation-workbench.ts";
 import {
+  PARTIAL_OUTPUT_DEFAULT_CHARS,
+  PARTIAL_OUTPUT_MAX_CHARS,
+  PARTIAL_OUTPUT_MIN_CHARS,
+  type WorkbenchPartialOutput,
+} from "./workbench-controller.ts";
+import {
+  normalizeWorkflowTaskRetryOptions,
   WorkbenchController,
+  WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS,
+  type WorkflowTaskRetryOptions,
   type WorkbenchJobQuery,
   type WorkbenchRunWarning,
   type WorkbenchWorkflowPreflight,
@@ -205,6 +214,19 @@ const WorkbenchResultsParams = Type.Object({
   waitFor: Type.Optional(Type.Union([Type.Literal("any"), Type.Literal("all")])),
   timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: RESULT_WAIT_MAX_MS })),
   includeOutput: Type.Optional(Type.Boolean()),
+  includePartial: Type.Optional(
+    Type.Boolean({
+      description:
+        "Opt-in: also show bounded assistant text produced so far by running, paused, failed, cancelled, or interrupted jobs (including workflow tasks). Excludes prompts, thinking, and tool data. Partial text is unverified work in progress.",
+    }),
+  ),
+  partialMaxChars: Type.Optional(
+    Type.Integer({
+      minimum: PARTIAL_OUTPUT_MIN_CHARS,
+      maximum: PARTIAL_OUTPUT_MAX_CHARS,
+      description: `Per-job partial output budget in characters (default ${PARTIAL_OUTPUT_DEFAULT_CHARS}); the latest text is kept.`,
+    }),
+  ),
 });
 
 const WorkbenchCancelParams = Type.Object({
@@ -225,6 +247,21 @@ const WorkflowControlParams = Type.Object({
       pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
       description:
         "Required with retry_task: retry only this failed workflow task and reuse its siblings.",
+    }),
+  ),
+  timeoutMs: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "retry_task only: hard wall time in ms for the retried task, overriding its original timeoutMs. Still capped by timeouts.workHardMaxMs. Other tasks keep their definitions.",
+    }),
+  ),
+  resumeContext: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS,
+      description:
+        "retry_task only: short note appended to the retried task's context. The retry is a fresh session, not an in-process resume; point at checkpoint files (absolute paths) the failed attempt wrote and say what remains.",
     }),
   ),
 });
@@ -968,6 +1005,29 @@ function formatJobQuery(
   return lines.length ? boundedToolOutput(lines.join("\n")) : "No matching Subagent Workbench jobs.";
 }
 
+function formatPartialOutputs(partials: readonly WorkbenchPartialOutput[]): string {
+  const lines: string[] = [];
+  for (const partial of partials) {
+    lines.push(
+      `\n## Partial output · ${partial.workId} · ${partial.kind} · ${partial.status} (unverified, may be incomplete)`,
+    );
+    if (!partial.sources.length) {
+      lines.push("No assistant text captured yet.");
+      continue;
+    }
+    for (const source of partial.sources) {
+      lines.push(
+        `\n### ${source.label}${source.taskKey ? ` (${source.taskKey})` : ""} · ${source.status}${source.streaming ? " · streaming" : ""}`,
+      );
+      lines.push(`${source.truncated ? "… " : ""}${source.text}`);
+    }
+    if (partial.omittedSources) {
+      lines.push(`… ${partial.omittedSources} more task(s) with partial output omitted.`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function failedWorkflowTask(
   job: WorkbenchJobSnapshot,
 ): { stage: string; key: string; error?: string } | undefined {
@@ -1050,10 +1110,30 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       }
     }
   };
+  const goalJobs = new Map<string, { sessionId: string; label: string }>();
+  const emitGoalJob = (id: string, owner: { sessionId: string; label: string }, state: string): void => {
+    try { pi.events?.emit("pi:workbench-job", { id, ...owner, state }); }
+    catch { /* Goal observers must not affect workflow execution. */ }
+  };
+  const trackGoalJob = (ctx: ExtensionContext, id: string, label: string): void => {
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!sessionId) return;
+    const owner = { sessionId, label };
+    goalJobs.set(id, owner);
+    emitGoalJob(id, owner, "pending");
+  };
   const deliverPendingCompletions = (): void => {
     const current = controller;
     if (!activeContext || !current || typeof pi.sendMessage !== "function") return;
     for (const job of current.pendingJobCompletions()) {
+      const owner = goalJobs.get(job.workId);
+      let handledByGoal = false;
+      if (owner) {
+        goalJobs.delete(job.workId);
+        const state = job.status === "completed" ? "finished" : job.status === "cancelled" || job.status === "interrupted" ? "cancelled" : "failed";
+        try { pi.events?.emit("pi:workbench-job", { id: job.workId, ...owner, state, claim: () => { handledByGoal = true; } }); }
+        catch { /* Goal observers must not affect workflow execution. */ }
+      }
       try {
         pi.sendMessage(
           {
@@ -1069,7 +1149,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               ...(job.workflowId ? { workflowId: job.workflowId } : {}),
             },
           },
-          job.status === "failed" && activeContext.isIdle()
+          !handledByGoal && job.status === "failed" && activeContext.isIdle()
             ? { triggerTurn: true, deliverAs: "followUp" }
             : { triggerTurn: false, deliverAs: "nextTurn" },
         );
@@ -1190,6 +1270,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             background,
           );
           if (background) {
+            trackGoalJob(ctx, submission.handle.workId, params.label ?? "Subagent task");
             void submission.completion.catch(() => {
               // The durable job record retains the error for collect/status.
             });
@@ -1327,6 +1408,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             : undefined;
           const submission = current.submitWorkflow(request, background);
           if (background) {
+            trackGoalJob(ctx, submission.handle.workId, params.label ?? "Workflow");
             const runRecordPath = params.record
               ? workflowRunPath(ctx.cwd, submission.handle.workId)
               : undefined;
@@ -1423,7 +1505,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_workflow_control",
       label: "Control Subagent Workflow",
       description:
-        "Pause or resume a running workflow, retry a terminal workflow, or retry one failed task while reusing its completed siblings. Pause is cooperative: already-running tasks finish, and the next stage waits. retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage. retry_task requires taskKey and reruns only that failed task; completed or skipped siblings in its Stage are reused.",
+        "Pause or resume a running workflow, retry a terminal workflow, or retry one failed task while reusing its completed siblings. Pause is cooperative: already-running tasks finish, and the next stage waits. retry creates a new background workId, reuses completed Stages, and resumes at the first incomplete Stage. retry_task requires taskKey and reruns only that failed task; completed or skipped siblings in its Stage and earlier Stages are reused, and the source run record is left unchanged. retry_task may set timeoutMs (for that task only) and a bounded resumeContext. The retried task starts a fresh subagent session; it is not an in-process resume, so long tasks should write checkpoint files and resumeContext should name them.",
       promptSnippet:
         "Pause, resume, retry a workflow, or retry one failed workflow task by workId.",
       executionMode: "sequential",
@@ -1471,6 +1553,49 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
         }
         const retryTask = params.action === "retry_task";
         const traceContext = parentTraceContext(ctx, toolCallId);
+        if (
+          !retryTask &&
+          (params.timeoutMs !== undefined || params.resumeContext !== undefined)
+        ) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "timeoutMs and resumeContext are only supported with action=retry_task.",
+              },
+            ],
+            details: {
+              status: "failed",
+              action: params.action,
+              workId: params.workId,
+              error: "retry_task_options_only",
+            },
+          };
+        }
+        let retryTaskOptions: WorkflowTaskRetryOptions = {};
+        try {
+          retryTaskOptions = normalizeWorkflowTaskRetryOptions({
+            ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+            ...(params.resumeContext === undefined
+              ? {}
+              : { resumeContext: params.resumeContext }),
+          });
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: error instanceof Error ? error.message : String(error),
+              },
+            ],
+            details: {
+              status: "failed",
+              action: params.action,
+              workId: params.workId,
+              error: "invalid_retry_task_options",
+            },
+          };
+        }
         if (retryTask && !params.taskKey) {
           return {
             content: [
@@ -1488,7 +1613,12 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
           };
         }
         let retry = retryTask
-          ? current.retryWorkflowTaskJob(params.workId, params.taskKey!, traceContext)
+          ? current.retryWorkflowTaskJob(
+              params.workId,
+              params.taskKey!,
+              traceContext,
+              retryTaskOptions,
+            )
           : current.retryWorkflowJob(params.workId, traceContext);
         let persistedDefinition: SavedWorkflowDefinition | undefined;
         if (!retry) {
@@ -1524,6 +1654,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
                   record.result,
                   params.taskKey!,
                   traceContext,
+                  retryTaskOptions,
                 )
               : current.retryWorkflowFromResult(
                   params.workId,
@@ -1596,6 +1727,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             }
             // Never capture a tool ctx here: it may be stale after shutdown/reload.
           });
+        trackGoalJob(ctx, retry.handle.workId, "Workflow retry");
         const retryJob = current.getJobs([retry.handle.workId]).pending[0];
         return {
           content: [
@@ -1611,6 +1743,12 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             workId: retry.handle.workId,
             attempt: retryJob?.attempt,
             ...(retryTask ? { taskKey: params.taskKey } : {}),
+            ...(retryTask && retryTaskOptions.timeoutMs !== undefined
+              ? { timeoutMs: retryTaskOptions.timeoutMs }
+              : {}),
+            ...(retryTask && retryTaskOptions.resumeContext !== undefined
+              ? { resumeContext: true }
+              : {}),
             retryRecordPath,
           },
         };
@@ -1621,7 +1759,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       name: "subagent_results",
       label: "Subagent Workbench Results",
       description:
-        "Get status or results for subagent work IDs. Use bounded wait only at a real dependency point. Use status or collect while other independent work can continue. Use wait only when the next correct action depends on a result; timeout leaves jobs running. Include workIds whenever known; each call accepts at most eight.",
+        "Get status or results for subagent work IDs. Use bounded wait only at a real dependency point. Use status or collect while other independent work can continue. Use wait only when the next correct action depends on a result; timeout leaves jobs running. Include workIds whenever known; each call accepts at most eight. Set includePartial=true with workIds to inspect bounded in-progress or failed output.",
       promptSnippet: "Inspect or collect background subagent results by workId.",
       executionMode: "sequential",
       parameters: WorkbenchResultsParams,
@@ -1652,16 +1790,47 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             : mode === "status"
               ? current.getJobs(workIds)
               : current.collectJobs(workIds);
+        // Partial output is opt-in and limited to explicitly named jobs owned by
+        // this session's controller; it is never listed for every job.
+        const partials = params.includePartial && workIds?.length
+          ? [...query.pending, ...query.completed]
+              .filter((job) => workIds.includes(job.workId))
+              .map((job) => current.partialJobOutput(job.workId, params.partialMaxChars))
+              .filter((partial): partial is WorkbenchPartialOutput => Boolean(partial))
+          : [];
+        const summary = formatJobQuery(query, params.includeOutput ?? mode !== "status");
+        const partialNote = params.includePartial && !workIds?.length
+          ? "\nPartial output requires explicit workIds."
+          : "";
         return {
           content: [
             {
               type: "text",
-              text: formatJobQuery(query, params.includeOutput ?? mode !== "status"),
+              text: partials.length
+                ? boundedToolOutput(`${summary}\n${formatPartialOutputs(partials)}`)
+                : `${summary}${partialNote}`,
             },
           ],
           details: {
             status: "completed",
             mode,
+            ...(partials.length
+              ? {
+                  partial: partials.map((partial) => ({
+                    workId: partial.workId,
+                    status: partial.status,
+                    sources: partial.sources.map((source) => ({
+                      label: source.label,
+                      ...(source.taskKey ? { taskKey: source.taskKey } : {}),
+                      status: source.status,
+                      chars: source.text.length,
+                      truncated: source.truncated,
+                      streaming: source.streaming,
+                    })),
+                    omittedSources: partial.omittedSources,
+                  })),
+                }
+              : {}),
             completed: query.completed.map((job) => ({
               workId: job.workId,
               kind: job.kind,
@@ -1712,6 +1881,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
   }
 
   pi.on("session_shutdown", async () => {
+    goalJobs.clear();
     activeContext = undefined;
     if (extensionHost[extensionMarker]) delete extensionHost[extensionMarker];
     dashboardBridgeCleanup?.();

@@ -196,7 +196,7 @@ export const STAGE_ORDER = ["rtk", "bash-digest"] as const;
 
 - Tools：`subagent_start`、`subagent_workflow`、`subagent_workflow_control`、`subagent_results`、`subagent_cancel`
 - `/subagent-workbench open|start|status|close`
-- 支持 Direct Subagent、可恢复的单 task/分阶段 Workflow、后台运行、跟进消息和独立视图；Workflow 默认通过摘要与绝对产物路径交接上下文，支持 `retry_task` 精确重试失败 task，并可显式使用受限 JavaScript 编译动态计划为可持久化结构化定义。每个任务可设置 `thinking`，跟进消息固定复用初始 `cwd`、模型与 thinking。
+- 支持 Direct Subagent、可恢复的单 task/分阶段 Workflow、后台运行、跟进消息和独立视图；Workflow 默认通过摘要与绝对产物路径交接上下文，支持 `retry_task` 精确重试失败 task，并可显式使用受限 JavaScript 编译动态计划为可持久化结构化定义。每个任务可设置 `thinking`，跟进消息固定复用初始 `cwd`、模型与 thinking。长任务可在 Workbench 中检查进展；若要在超时后接着做，应由任务把检查点保存为独立文件（命令、参数、已完成范围和候选产物），然后在新尝试中引用。重试不会恢复旧进程的内存；中间产物不是最终结果。
 - 原生全屏路由需要 Pi 宿主支持 `ctx.ui.custom(..., { fullscreen: true })` 与 `aboveStatus` Widget；缺少增强 UI API 时仍使用兼容的编辑器/Footer fallback，但不能保证原生全屏布局。
 
 ### `pi-tsien-goal`

@@ -736,6 +736,97 @@ describe("Pi extension", () => {
     }
   });
 
+  it("forwards retry_task timeoutMs and resumeContext and rejects them on other actions", async () => {
+    const tools = new Map<string, any>();
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const retryTaskJob = vi
+      .spyOn(WorkbenchController.prototype, "retryWorkflowTaskJob")
+      .mockReturnValue({
+        handle: {
+          workId: "work_task_retry",
+          kind: "workflow",
+          status: "queued",
+          background: true,
+        },
+        completion: new Promise(() => {}),
+      });
+    const retryJob = vi.spyOn(WorkbenchController.prototype, "retryWorkflowJob");
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+    };
+    subagentWorkbench(pi as any);
+    const control = tools.get("subagent_workflow_control");
+    expect(control.parameters.properties.resumeContext.maxLength).toBe(4000);
+    expect(control.description).toContain("not an in-process resume");
+    const ctx = { cwd: os.tmpdir(), hasUI: false, ui: { notify: vi.fn() } };
+    try {
+      const rejected = await control.execute(
+        "retry-whole",
+        { action: "retry", workId: "work_source", resumeContext: "note" },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(rejected.details).toMatchObject({
+        status: "failed",
+        error: "retry_task_options_only",
+      });
+      expect(retryJob).not.toHaveBeenCalled();
+
+      const invalid = await control.execute(
+        "retry-invalid",
+        { action: "retry_task", workId: "work_source", taskKey: "flaky", resumeContext: "  " },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(invalid.details).toMatchObject({
+        status: "failed",
+        error: "invalid_retry_task_options",
+      });
+      expect(retryTaskJob).not.toHaveBeenCalled();
+
+      const accepted = await control.execute(
+        "retry-task",
+        {
+          action: "retry_task",
+          workId: "work_source",
+          taskKey: "flaky",
+          timeoutMs: 90000,
+          resumeContext: "Read /tmp/ckpt.json first.",
+        },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      );
+      expect(accepted.details).toMatchObject({
+        status: "queued",
+        action: "retry_task",
+        sourceWorkId: "work_source",
+        workId: "work_task_retry",
+        taskKey: "flaky",
+        timeoutMs: 90000,
+        resumeContext: true,
+      });
+      expect(retryTaskJob).toHaveBeenCalledWith(
+        "work_source",
+        "flaky",
+        expect.objectContaining({ parentToolCallId: "retry-task" }),
+        { timeoutMs: 90000, resumeContext: "Read /tmp/ckpt.json first." },
+      );
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler();
+      }
+    }
+  });
+
   it("registers result collection and cancellation tools for background work", async () => {
     const tools = new Map<string, any>();
     const pi = {

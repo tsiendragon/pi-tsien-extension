@@ -10,7 +10,9 @@ import {
 } from "pi-tsien-subagent-workbench/src/providers/pi-rpc-process-provider.ts";
 import { WorkbenchRuntimeHost } from "pi-tsien-subagent-workbench/src/runtime.ts";
 import {
+  normalizeWorkflowTaskRetryOptions,
   WorkbenchController,
+  WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS,
   type WorkbenchRunWarning,
 } from "pi-tsien-subagent-workbench/src/workbench-controller.ts";
 import { ModelRouter } from "pi-tsien-subagent-workbench/src/model-router.ts";
@@ -1535,6 +1537,141 @@ describe("WorkbenchController", () => {
         },
       ],
     });
+  });
+
+  it("applies explicit timeoutMs and bounded resumeContext only to the retried task", async () => {
+    const { controller } = setup();
+    const request = {
+      label: "Retry with checkpoint",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            { key: "stable", task: "stable sibling", cwd: process.cwd(), timeoutMs: 7000 },
+            { key: "flaky", task: "flaky sibling", cwd: process.cwd(), timeoutMs: 5000 },
+          ],
+        },
+        {
+          tasks: [{ key: "after", task: "after stage", cwd: process.cwd() }],
+        },
+      ],
+    };
+    const requestSnapshot = structuredClone(request);
+    const calls: Array<{ task: string; hardWallTimeMs?: number; context?: string }> = [];
+    let failFlaky = true;
+    const originalStart = controller.service.start.bind(controller.service);
+    vi.spyOn(controller.service, "start").mockImplementation((agentRequest) => {
+      calls.push({
+        task: agentRequest.task,
+        hardWallTimeMs: agentRequest.hardWallTimeMs,
+        context: agentRequest.context,
+      });
+      if (agentRequest.task === "flaky sibling" && failFlaky) {
+        return Promise.reject(new Error("planned timeout"));
+      }
+      return originalStart(agentRequest);
+    });
+
+    const first = await controller.runWorkflow(request);
+    expect(first.status).toBe("failed");
+    const firstSnapshot = structuredClone(first);
+
+    failFlaky = false;
+    const checkpointNote = "Checkpoint: /tmp/flaky-checkpoint.json holds steps 1-3; continue at step 4.";
+    const retry = controller.retryWorkflowTaskFromResult(
+      "work_checkpoint_source",
+      request,
+      first,
+      "flaky",
+      undefined,
+      { timeoutMs: 1234, resumeContext: `  ${checkpointNote}\n` },
+    );
+    const retried = await retry.completion;
+
+    const stableCalls = calls.filter((call) => call.task === "stable sibling");
+    const flakyCalls = calls.filter((call) => call.task === "flaky sibling");
+    const afterCalls = calls.filter((call) => call.task === "after stage");
+    expect(stableCalls).toHaveLength(1);
+    expect(flakyCalls).toHaveLength(2);
+    expect(flakyCalls[0]!.hardWallTimeMs).toBe(5000);
+    expect(flakyCalls[0]!.context ?? "").not.toContain("retry_resume_context");
+    expect(flakyCalls[1]!.hardWallTimeMs).toBe(1234);
+    expect(flakyCalls[1]!.context).toContain(
+      `<retry_resume_context>\n${checkpointNote}\n</retry_resume_context>`,
+    );
+    expect(flakyCalls[1]!.context).toContain("not an in-process resume");
+    expect(flakyCalls[1]!.context).toContain("checkpoint files");
+    // Downstream tasks keep their own definition and do not get the note.
+    expect(afterCalls).toHaveLength(1);
+    expect(afterCalls[0]!.context ?? "").not.toContain("retry_resume_context");
+    expect(afterCalls[0]!.hardWallTimeMs).not.toBe(1234);
+
+    expect(retried).toMatchObject({
+      status: "completed",
+      sourceWorkId: "work_checkpoint_source",
+      attempt: 2,
+      retriedTask: { key: "flaky", timeoutMs: 1234, resumeContext: checkpointNote },
+      stages: [
+        {
+          tasks: [
+            expect.objectContaining({
+              key: "stable",
+              status: "completed",
+              reused: true,
+              output: first.stages[0]!.tasks[0]!.output,
+              sessionId: first.stages[0]!.tasks[0]!.sessionId,
+            }),
+            expect.objectContaining({ key: "flaky", status: "completed" }),
+          ],
+        },
+        { status: "completed" },
+      ],
+    });
+    // Source request and source result are left untouched.
+    expect(request).toEqual(requestSnapshot);
+    expect(first).toEqual(firstSnapshot);
+  });
+
+  it("rejects invalid retry_task options before starting any work", () => {
+    const { controller } = setup();
+    const request = {
+      cwd: process.cwd(),
+      stages: [{ tasks: [{ key: "flaky", task: "flaky", cwd: process.cwd() }] }],
+    };
+    const failed = {
+      workflowId: "workflow_failed",
+      label: "Failed",
+      status: "failed" as const,
+      attempt: 1,
+      stages: [
+        {
+          id: "s1",
+          label: "Stage 1",
+          status: "failed" as const,
+          tasks: [{ id: "t1", key: "flaky", label: "flaky", status: "failed" as const }],
+        },
+      ],
+    };
+    const start = vi.spyOn(controller.service, "start");
+    const attempt = (options: Record<string, unknown>) =>
+      controller.retryWorkflowTaskFromResult(
+        "work_invalid",
+        request,
+        failed,
+        "flaky",
+        undefined,
+        options as never,
+      );
+    expect(() => attempt({ timeoutMs: 0 })).toThrow(/timeoutMs/);
+    expect(() => attempt({ timeoutMs: 1.5 })).toThrow(/timeoutMs/);
+    expect(() => attempt({ resumeContext: "   " })).toThrow(/resumeContext/);
+    expect(() =>
+      attempt({ resumeContext: "x".repeat(WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS + 1) }),
+    ).toThrow(/at most/);
+    expect(normalizeWorkflowTaskRetryOptions({
+      resumeContext: "x".repeat(WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS),
+    }).resumeContext).toHaveLength(WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS);
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("interrupts an active workflow from the runtime command", async () => {

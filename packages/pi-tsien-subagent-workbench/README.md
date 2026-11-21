@@ -33,6 +33,8 @@
 - `read_only`、`research`、`code` 角色在工具事件入口拦截不允许的工具；底层 Pi 的扩展和项目规则仍会加载，不使用 `--no-extensions`。如果底层运行时已经执行了不可逆外部副作用，工作台不能撤销它。
 - `resultPreview` 只是有限预览，原始结果仍保存在工作台，可再次 collect；重复完成不会重复通知。对于背景命令或交接状态不明的外部清理，本包目前不提供自动判断，调用方必须自行确认后清理，不能把它当作已完成。
 - 一次性任务默认关闭子会话；只有显式 `retainSession` 才保留。当前实现不承诺跨进程恢复未持久化的实时流。
+- `subagent_results` 可用 `mode: "status"`、明确的 `workIds` 和 `includePartial: true` 查看运行中或未正常完成的任务最近的回复文本，不必等待。`partialMaxChars` 默认每个任务 2000 字符，最多 8000；不包含思考、提示或工具数据。这只是当前会话内的未验证输出，不保证重启后可查，也不能替代落盘检查点或最终结果。
+- `subagent_workflow_control action=retry_task` 只重跑指定的失败 task，在新的 workId 下运行；同一 Stage 里已完成或已跳过的兄弟 task、之前各 Stage 都直接复用，原运行记录（`.pi/workflow-runs/<源 workId>.json`）不会被改写。可选 `timeoutMs` 只对这个 task 生效，覆盖它原来的设置，仍受 `workHardMaxMs` 上限约束；可选 `resumeContext`（最多 4000 字符）会附加到这个 task 的上下文末尾。重跑**不是在原进程里接着跑**：会开一个全新的子会话，失败那次的内存、对话和工具状态都不保留。长任务应定期把进度写入检查点文件，`resumeContext` 里写明这些文件的绝对路径和剩余工作；子代理会先核对检查点，再继续。这次重跑用到的覆盖项记录在结果的 `retriedTask` 字段中。
 
 ## 依赖
 

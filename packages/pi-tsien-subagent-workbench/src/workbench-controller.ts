@@ -169,6 +169,56 @@ export interface WorkbenchJobQuery {
   readonly missing: readonly string[];
 }
 
+/** Bounded assistant text for one child Run linked to a job by trace data. */
+export interface WorkbenchPartialOutputSource {
+  readonly label: string;
+  readonly taskKey?: string;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly status: string;
+  /** Assistant text only, tail-biased; never prompts, thinking, or tool data. */
+  readonly text: string;
+  /** True when the text was cut to fit the budget or older transcript was evicted. */
+  readonly truncated: boolean;
+  readonly streaming: boolean;
+}
+
+export interface WorkbenchPartialOutput {
+  readonly workId: string;
+  readonly kind: WorkbenchJobSnapshot["kind"];
+  readonly status: WorkbenchJobSnapshot["status"];
+  readonly sources: readonly WorkbenchPartialOutputSource[];
+  /** Linked Runs with text that did not fit in the source limit. */
+  readonly omittedSources: number;
+}
+
+export const PARTIAL_OUTPUT_DEFAULT_CHARS = 2000;
+export const PARTIAL_OUTPUT_MIN_CHARS = 200;
+export const PARTIAL_OUTPUT_MAX_CHARS = 8000;
+const PARTIAL_OUTPUT_MAX_SOURCES = 8;
+const PARTIAL_OUTPUT_JOB_STATUSES: ReadonlySet<string> = new Set([
+  "running",
+  "paused",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+const PARTIAL_OUTPUT_SETTLED_TASK_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "skipped",
+  "queued",
+  "idle",
+]);
+
+function tailWithinChars(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  let tail = text.slice(text.length - maxChars);
+  const first = tail.charCodeAt(0);
+  // Never start on the low half of a surrogate pair.
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  return tail;
+}
+
 export interface WorkbenchAgentRequest {
   readonly task: string;
   readonly traceContext?: SubagentTraceContext;
@@ -295,7 +345,70 @@ export interface WorkbenchWorkflowResult {
   readonly sourceWorkId?: string;
   /** One-based Stage number used as the retry starting point. */
   readonly resumedFromStage?: number;
+  /** Audit of the explicit retry_task overrides applied to the retried task. */
+  readonly retriedTask?: WorkflowRetriedTaskRecord;
   readonly error?: string;
+}
+
+export interface WorkflowRetriedTaskRecord {
+  readonly key: string;
+  readonly timeoutMs?: number;
+  readonly resumeContext?: string;
+}
+
+/**
+ * Explicit overrides for retry_task. The retried task always starts a fresh
+ * subagent session: nothing from the failed process (memory, tool state,
+ * conversation) survives. resumeContext is bounded, user-provided text that
+ * should point at checkpoint files the failed task wrote to disk.
+ */
+export interface WorkflowTaskRetryOptions {
+  /** Hard wall time for the retried task only; capped by timeouts.workHardMaxMs. */
+  readonly timeoutMs?: number;
+  /** Bounded note appended to the retried task's explicit context. */
+  readonly resumeContext?: string;
+}
+
+export const WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS = 4000;
+
+export function normalizeWorkflowTaskRetryOptions(
+  options: WorkflowTaskRetryOptions | undefined,
+): WorkflowTaskRetryOptions {
+  if (!options) return {};
+  const { timeoutMs, resumeContext } = options;
+  if (
+    timeoutMs !== undefined &&
+    (typeof timeoutMs !== "number" || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
+  ) {
+    throw new TypeError("retry_task timeoutMs must be a positive integer.");
+  }
+  let context: string | undefined;
+  if (resumeContext !== undefined) {
+    if (typeof resumeContext !== "string") {
+      throw new TypeError("retry_task resumeContext must be a string.");
+    }
+    context = resumeContext.trim();
+    if (!context) {
+      throw new TypeError("retry_task resumeContext must not be empty.");
+    }
+    if (context.length > WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS) {
+      throw new TypeError(
+        `retry_task resumeContext must be at most ${WORKFLOW_RETRY_RESUME_CONTEXT_MAX_CHARS} characters.`,
+      );
+    }
+  }
+  return {
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(context === undefined ? {} : { resumeContext: context }),
+  };
+}
+
+function retryResumeContextSection(resumeContext: string): string {
+  return [
+    "## Retry resume context",
+    "This task is being retried in a fresh subagent session. It is not an in-process resume: the failed attempt's memory, conversation, and tool state are gone. Recover progress only from durable files, such as checkpoint files referenced below; verify them before relying on them and redo work they do not cover.",
+    `<retry_resume_context>\n${resumeContext}\n</retry_resume_context>`,
+  ].join("\n\n");
 }
 
 interface MutableWorkflowTaskResult {
@@ -342,6 +455,8 @@ interface WorkflowRetryContext {
   readonly fromStage: number;
   /** When present, preserve sibling task results in the resumed Stage. */
   readonly retryTaskKey?: string;
+  /** Overrides applied only to retryTaskKey; never stored in the reusable request. */
+  readonly retryTaskOptions?: WorkflowTaskRetryOptions;
   readonly previousResult: WorkbenchWorkflowResult;
 }
 
@@ -1153,6 +1268,168 @@ export class WorkbenchController {
     return this.getJobs(workIds);
   }
 
+  /**
+   * Opt-in, bounded view of assistant text produced so far by a running,
+   * paused, or unsuccessful job. Only child Runs linked to this job through
+   * controller trace data (job session/run IDs, workflow task and iteration
+   * records, or active Runs tagged with the job's workflowId) are read, and
+   * only assistant message text from those exact Runs is returned: user
+   * prompts, injected context, thinking, tool arguments, and tool output are
+   * never exposed. Completed jobs return undefined; use their final result.
+   */
+  partialJobOutput(
+    workId: string,
+    maxChars: number = PARTIAL_OUTPUT_DEFAULT_CHARS,
+  ): WorkbenchPartialOutput | undefined {
+    const job = this.jobs.get(workId);
+    if (!job || !PARTIAL_OUTPUT_JOB_STATUSES.has(job.status)) return undefined;
+    const budget = Number.isFinite(maxChars)
+      ? Math.min(
+          PARTIAL_OUTPUT_MAX_CHARS,
+          Math.max(PARTIAL_OUTPUT_MIN_CHARS, Math.floor(maxChars)),
+        )
+      : PARTIAL_OUTPUT_DEFAULT_CHARS;
+    const candidates: {
+      label: string;
+      taskKey?: string;
+      sessionId: string;
+      runId: string;
+      status: string;
+    }[] = [];
+    const seen = new Set<string>();
+    const add = (candidate: (typeof candidates)[number]): void => {
+      const key = `${candidate.sessionId}\u0000${candidate.runId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push(candidate);
+    };
+    if (job.kind === "agent") {
+      if (job.sessionId && job.runId) {
+        add({
+          label: job.label,
+          sessionId: job.sessionId,
+          runId: job.runId,
+          status: this.conversations.get(job.sessionId)?.status ?? job.status,
+        });
+      }
+    } else if (job.workflowId) {
+      const workflowId = job.workflowId;
+      const result = job.result as Partial<WorkbenchWorkflowResult> | undefined;
+      const stages: readonly {
+        readonly tasks: readonly {
+          readonly key?: string;
+          readonly label: string;
+          readonly status: string;
+          readonly sessionId?: string;
+          readonly runId?: string;
+          readonly reused?: boolean;
+          readonly iterations?: readonly WorkbenchWorkflowIterationResult[];
+        }[];
+      }[] =
+        this.activeWorkflowProjections.get(workflowId)?.stages ??
+        (result?.workflowId === workflowId && Array.isArray(result.stages)
+          ? result.stages
+          : []);
+      for (const stage of stages) {
+        for (const task of stage.tasks) {
+          // Reused tasks belong to an earlier attempt and already completed.
+          if (task.reused) continue;
+          for (const iteration of task.iterations ?? []) {
+            if (
+              iteration.sessionId &&
+              iteration.runId &&
+              !PARTIAL_OUTPUT_SETTLED_TASK_STATUSES.has(iteration.status)
+            ) {
+              add({
+                label: `${task.label} [${iteration.index + 1}]`,
+                ...(task.key ? { taskKey: task.key } : {}),
+                sessionId: iteration.sessionId,
+                runId: iteration.runId,
+                status: iteration.status,
+              });
+            }
+          }
+          if (
+            task.sessionId &&
+            task.runId &&
+            !PARTIAL_OUTPUT_SETTLED_TASK_STATUSES.has(task.status)
+          ) {
+            add({
+              label: task.label,
+              ...(task.key ? { taskKey: task.key } : {}),
+              sessionId: task.sessionId,
+              runId: task.runId,
+              status: task.status,
+            });
+          }
+        }
+      }
+      // Active Runs launched by this workflow but not yet linked to a task
+      // record (for example later foreach iterations).
+      for (const conversation of this.conversations.values()) {
+        if (conversation.workflowId !== workflowId || !conversation.activeRunId) {
+          continue;
+        }
+        add({
+          label: conversation.label,
+          sessionId: conversation.id,
+          runId: conversation.activeRunId,
+          status: conversation.status,
+        });
+      }
+    }
+    const collected: {
+      candidate: (typeof candidates)[number];
+      text: string;
+      streaming: boolean;
+      evicted: boolean;
+    }[] = [];
+    for (const candidate of candidates) {
+      const conversation = this.conversations.get(candidate.sessionId);
+      if (!conversation) continue;
+      if (job.kind === "workflow" && conversation.workflowId !== job.workflowId) {
+        continue;
+      }
+      const messages = conversation.messages.filter(
+        (message) =>
+          message.role === "assistant" && message.runId === candidate.runId,
+      );
+      const text = messages.map((message) => message.text).join("\n").trim();
+      if (!text) continue;
+      collected.push({
+        candidate,
+        text,
+        streaming: messages.some((message) => message.streaming === true),
+        evicted: conversation.transcriptTruncated,
+      });
+    }
+    const shown = collected.slice(0, PARTIAL_OUTPUT_MAX_SOURCES);
+    const perSource = Math.max(
+      1,
+      Math.floor(budget / Math.max(1, shown.length)),
+    );
+    const sources = shown.map(({ candidate, text, streaming, evicted }) => {
+      const bounded = tailWithinChars(text, perSource);
+      return Object.freeze({
+        label: candidate.label,
+        ...(candidate.taskKey ? { taskKey: candidate.taskKey } : {}),
+        sessionId: candidate.sessionId,
+        runId: candidate.runId,
+        status: candidate.status,
+        text: bounded,
+        truncated: evicted || bounded.length < text.length,
+        streaming,
+      });
+    });
+    return Object.freeze({
+      workId: job.workId,
+      kind: job.kind,
+      status: job.status,
+      sources: Object.freeze(sources),
+      omittedSources: collected.length - shown.length,
+    });
+  }
+
   cancelJob(workId: string, reason?: string): WorkbenchJobSnapshot | undefined {
     const job = this.jobs.cancel(workId, reason);
     if (!job) return undefined;
@@ -1234,6 +1511,7 @@ export class WorkbenchController {
     workId: string,
     taskKey: string,
     traceContext?: SubagentTraceContext,
+    options?: WorkflowTaskRetryOptions,
   ): WorkbenchSubmission<WorkbenchWorkflowResult> | undefined {
     const job = this.jobs.get(workId);
     if (
@@ -1251,6 +1529,7 @@ export class WorkbenchController {
       previousResult,
       taskKey,
       traceContext,
+      options,
     );
   }
 
@@ -1260,10 +1539,12 @@ export class WorkbenchController {
     previousResult: WorkbenchWorkflowResult,
     taskKey: string,
     traceContext?: SubagentTraceContext,
+    options?: WorkflowTaskRetryOptions,
   ): WorkbenchSubmission<WorkbenchWorkflowResult> {
     if (!WORKFLOW_TASK_KEY.test(taskKey)) {
       throw new TypeError(`Invalid workflow task key: ${taskKey}`);
     }
+    const retryTaskOptions = normalizeWorkflowTaskRetryOptions(options);
     if (
       !["completed", "failed", "cancelled"].includes(previousResult.status)
     ) {
@@ -1289,6 +1570,7 @@ export class WorkbenchController {
       attempt: (previousResult.attempt ?? 1) + 1,
       fromStage: stageIndex,
       retryTaskKey: taskKey,
+      retryTaskOptions,
       previousResult,
     });
   }
@@ -1830,12 +2112,20 @@ export class WorkbenchController {
         stage.status = "running";
         publish();
         await Promise.all(
-          sourceStage.tasks.map(async (task, taskIndex) => {
+          sourceStage.tasks.map(async (sourceTask, taskIndex) => {
             const taskResult = stage.tasks[taskIndex]!;
             if (taskResult.reused) {
               publish();
               return;
             }
+            const retryOverrides =
+              retry?.retryTaskKey === taskResult.key
+                ? retry.retryTaskOptions
+                : undefined;
+            const task: WorkbenchWorkflowTaskRequest =
+              retryOverrides?.timeoutMs === undefined
+                ? sourceTask
+                : { ...sourceTask, timeoutMs: retryOverrides.timeoutMs };
             try {
               const baseContext = workflowExpressionContext(
                 request.parameters,
@@ -1879,10 +2169,15 @@ export class WorkbenchController {
                   resolvedWorkflowString(task.label, context)?.trim() ||
                   taskResult.label;
                 if (!task.foreach) taskResult.label = resolvedLabel;
-                const explicitContext = workflowTaskContext(
+                const taskContext = workflowTaskContext(
                   { ...task, context: resolvedContext },
                   outputs,
                 );
+                const explicitContext = retryOverrides?.resumeContext
+                  ? [taskContext, retryResumeContextSection(retryOverrides.resumeContext)]
+                      .filter(Boolean)
+                      .join("\n\n")
+                  : taskContext;
                 try {
                   assertExecutionBudget(
                     resolvedTask,
@@ -1974,6 +2269,10 @@ export class WorkbenchController {
                     index,
                     item,
                     status: abort.signal.aborted ? "cancelled" : "failed",
+                    // Keep trace links so partial output stays inspectable.
+                    ...(error instanceof SubagentExecutionError
+                      ? { sessionId: error.sessionId, runId: error.runId }
+                      : {}),
                     error: errorMessage(error),
                   };
                 }
@@ -2095,6 +2394,14 @@ export class WorkbenchController {
       attempt,
       ...(retry ? { sourceWorkId: retry.sourceWorkId } : {}),
       ...(retry ? { resumedFromStage: resumeFromStage + 1 } : {}),
+      ...(retry?.retryTaskKey
+        ? {
+            retriedTask: {
+              key: retry.retryTaskKey,
+              ...retry.retryTaskOptions,
+            },
+          }
+        : {}),
       stages: stages.map((stage) => ({
         id: stage.id,
         label: stage.label,
