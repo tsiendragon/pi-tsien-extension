@@ -80,6 +80,7 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
     runtime.memoryMutated = false;
     runtime.memoryToolAttempted = false;
     runtime.verifiedToolNames = [];
+    runtime.toolOutcomes = [];
     // Intent detection stays deterministic and in-process; no text is persisted here.
     runtime.intent = new RuleCaptureStrategy().detectExplicitIntent(event.text);
     runtime.inputEntryId = `${Date.now()}-${event.text.length}`;
@@ -134,8 +135,10 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
     if (["memory_remember", "memory_update", "memory_forget", "memory_review"].includes(event.toolName)) {
       runtime.memoryToolAttempted = true;
       if (!event.isError) runtime.memoryMutated = true;
-    } else if (!event.isError) {
-      runtime.verifiedToolNames.push(event.toolName);
+    } else {
+      runtime.toolOutcomes.push({ toolName: event.toolName, isError: event.isError });
+      if (runtime.toolOutcomes.length > 100) runtime.toolOutcomes.shift();
+      if (!event.isError) runtime.verifiedToolNames.push(event.toolName);
     }
     // Tool output is intentionally not retained. Rule capture only sees the settled turn.
   });
@@ -193,6 +196,8 @@ async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: 
   if (runtime.secretFilter.inspect(turn.userText).action !== "allow" || runtime.secretFilter.inspect(turn.assistantText).action !== "allow") return;
   const reviewed = await runtime.candidateReviewer.review(turn, runtime.scope.cwd);
   if (!reviewed) return;
+  // A failed tool without a later success of that same tool must not become a success lesson.
+  if (reviewed.kind === "experience" && (turn.failedToolNames?.length ?? 0) > 0 && (turn.recoveredToolNames?.length ?? 0) === 0) return;
   try {
     const existing = await runtime.service.search(reviewed.content, {
       profileId: runtime.scope.profileId,

@@ -10,6 +10,7 @@ import { DefaultScopeResolver } from "../adapters/pi/scope-resolver.ts";
 import { MemoryService } from "../application/memory-service.ts";
 import { RuleCaptureStrategy } from "../application/capture-rules.ts";
 import { ModelCandidateReviewer } from "../application/candidate-reviewer.ts";
+import { recoveryFromToolOutcomes, type ToolOutcome } from "../application/tool-recovery.ts";
 import type { MemoryScope, RecallBundle, ScopeContext } from "../domain/types.ts";
 import type { ExplicitMemoryIntent, SettledTurn } from "../ports/memory.ts";
 import type { PiExtensionAPI, ExtensionContext } from "./pi-types.ts";
@@ -40,6 +41,7 @@ export interface RuntimeState {
   inputEntryId?: string;
   assistantText?: string;
   verifiedToolNames: string[];
+  toolOutcomes: ToolOutcome[];
   recall?: RecallBundle;
   knowledgeResults: UnifiedRetrievalItem[];
   enabled: boolean;
@@ -65,7 +67,7 @@ export async function createRuntime(pi: PiExtensionAPI, ctx: ExtensionContext, d
   const candidateReviewer = dependencies.candidateReviewer ?? (config.capture.reviewer.enabled && config.privacy.remoteProcessing
     ? new ModelCandidateReviewer(config.capture.reviewer)
     : undefined);
-  return { config, repository, search, service, scope, resolver, secretFilter, knowledgeBridge: new PiKnowledgeBridge(pi.events), promotionAdvisor, candidateReviewer, knowledgeResults: [], enabled: true, closing: false, memoryMutated: false, memoryToolAttempted: false, verifiedToolNames: [] };
+  return { config, repository, search, service, scope, resolver, secretFilter, knowledgeBridge: new PiKnowledgeBridge(pi.events), promotionAdvisor, candidateReviewer, knowledgeResults: [], enabled: true, closing: false, memoryMutated: false, memoryToolAttempted: false, verifiedToolNames: [], toolOutcomes: [] };
 }
 
 export async function closeRuntime(runtime: RuntimeState): Promise<void> {
@@ -94,6 +96,7 @@ export function turnFromState(runtime: RuntimeState): SettledTurn | undefined {
     userText: runtime.inputText,
     assistantText: runtime.assistantText ?? "",
     verifiedToolNames: [...runtime.verifiedToolNames],
+    ...recoveryFromToolOutcomes(runtime.toolOutcomes),
     taskKey: runtime.scope.repositoryId ? `${runtime.scope.repositoryId}:${runtime.scope.branch ?? "detached"}` : runtime.scope.sessionId,
     scope: currentDefaultWriteScope(runtime),
     settledAt: Date.now(),

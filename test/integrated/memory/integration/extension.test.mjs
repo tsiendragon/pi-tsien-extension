@@ -90,28 +90,75 @@ test("extension lifecycle writes explicit memory and injects only temporary cont
   await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
 });
 
-test("agent-settled candidate review prompts in UI and activates accepted candidates", async () => {
+test("agent-settled auto-accepts evidence-backed candidates without prompting", async () => {
   const candidateReviewer = {
     async review() { return { content: "Use Node version 22 for this repository", kind: "experience" }; },
     async dispose() {},
   };
-  const harness = makeHarness({ hasUI: true, choices: ["Accept"], candidateReviewer });
+  const harness = makeHarness({ hasUI: true, choices: [], candidateReviewer });
   await harness.handlers.get("session_start")({ type: "session_start" }, harness.ctx);
   harness.handlers.get("input")({ type: "input", text: "This works with node version 22", source: "interactive" }, harness.ctx);
   await harness.handlers.get("before_agent_start")({ prompt: "This works with node version 22", systemPrompt: "base" }, harness.ctx);
   harness.handlers.get("tool_result")({ type: "tool_result", toolName: "shell", toolCallId: "call-shell", input: {}, content: [], isError: false }, harness.ctx);
   harness.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "Verified the fix." }] }, harness.ctx);
   await harness.handlers.get("agent_settled")({ type: "agent_settled" }, harness.ctx);
-  await waitFor(() => harness.selections.length === 1 && /已接受候选记忆/.test(harness.notifications.at(-1)?.message ?? ""));
+  await waitFor(() => /已自动记住/.test(harness.notifications.at(-1)?.message ?? ""));
 
-  assert.equal(harness.selections.length, 1);
-  assert.deepEqual(harness.selections[0].options, ["Accept", "Reject", "Later"]);
-  assert.equal(harness.selections[0].optionsConfig.timeout, 15_000);
-  assert.match(harness.notifications.at(-1).message, /已接受候选记忆/);
+  assert.equal(harness.selections.length, 0);
+  assert.match(harness.notifications.at(-1).message, /已自动记住/);
 
   const search = harness.tools.get("memory_search");
   const result = await search.execute("call-search", { query: "node version 22" }, undefined, undefined, harness.ctx);
   assert.match(result.content[0].text, /active/);
+  await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
+});
+
+test("a failed then recovered tool produces an active Chinese experience", async () => {
+  const candidateReviewer = {
+    async review(turn) {
+      assert.deepEqual(turn.failedToolNames, ["shell"]);
+      assert.deepEqual(turn.recoveredToolNames, ["shell"]);
+      return { content: "构建命令失败后应修正配置并重新运行验证", kind: "experience" };
+    },
+    async dispose() {},
+  };
+  const harness = makeHarness({ hasUI: true, choices: [], candidateReviewer });
+  await harness.handlers.get("session_start")({ type: "session_start" }, harness.ctx);
+  harness.handlers.get("input")({ type: "input", text: "构建失败了，帮我修好", source: "interactive" }, harness.ctx);
+  await harness.handlers.get("before_agent_start")({ prompt: "构建失败了，帮我修好", systemPrompt: "base" }, harness.ctx);
+  harness.handlers.get("tool_result")({ type: "tool_result", toolName: "shell", toolCallId: "call-fail", input: {}, content: [], isError: true }, harness.ctx);
+  harness.handlers.get("tool_result")({ type: "tool_result", toolName: "shell", toolCallId: "call-success", input: {}, content: [], isError: false }, harness.ctx);
+  harness.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "已修正配置，重新运行同一命令成功。" }] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({ type: "agent_settled" }, harness.ctx);
+  await waitFor(() => /已自动记住/.test(harness.notifications.at(-1)?.message ?? ""));
+  assert.equal(harness.selections.length, 0);
+  const result = await harness.tools.get("memory_search").execute("call-search", { query: "构建命令" }, undefined, undefined, harness.ctx);
+  assert.match(result.content[0].text, /active/);
+  await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
+});
+
+test("an unrecovered failure does not become a success experience", async () => {
+  let reviewed = false;
+  const candidateReviewer = {
+    async review() {
+      reviewed = true;
+      return { content: "未恢复专用经验标记不应出现", kind: "experience" };
+    },
+    async dispose() {},
+  };
+  const harness = makeHarness({ hasUI: true, choices: [], candidateReviewer });
+  await harness.handlers.get("session_start")({ type: "session_start" }, harness.ctx);
+  harness.handlers.get("input")({ type: "input", text: "构建还是失败", source: "interactive" }, harness.ctx);
+  await harness.handlers.get("before_agent_start")({ prompt: "构建还是失败", systemPrompt: "base" }, harness.ctx);
+  harness.handlers.get("tool_result")({ type: "tool_result", toolName: "shell", toolCallId: "call-fail", input: {}, content: [], isError: true }, harness.ctx);
+  harness.handlers.get("tool_result")({ type: "tool_result", toolName: "read", toolCallId: "call-read", input: {}, content: [], isError: false }, harness.ctx);
+  harness.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "还没有修好，需要继续排查。" }] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({ type: "agent_settled" }, harness.ctx);
+  await waitFor(() => reviewed);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const result = await harness.tools.get("memory_search").execute("call-search", { query: "未恢复专用经验标记" }, undefined, undefined, harness.ctx);
+  assert.equal(result.details.count, 0);
+  assert.equal(harness.selections.length, 0);
   await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
 });
 

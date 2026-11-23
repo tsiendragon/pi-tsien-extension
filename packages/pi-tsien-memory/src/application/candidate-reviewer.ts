@@ -96,8 +96,16 @@ ${truncate(turn.userText)}
 ASSISTANT COMPLETION:
 ${truncate(turn.assistantText)}
 
+If RECOVERED TOOLS is non-empty, you may return kind="experience" for a concrete failure only when the quoted turn explicitly supports its cause, fix and verification; condense those into one sentence. Never invent a root cause. If FAILED TOOLS is non-empty but RECOVERED TOOLS is empty, do not turn that failure into a successful reusable experience.
+
 VERIFIED TOOLS:
-${turn.verifiedToolNames?.join(", ") ?? ""}`;
+${turn.verifiedToolNames?.join(", ") ?? ""}
+
+FAILED TOOLS:
+${turn.failedToolNames?.join(", ") ?? ""}
+
+RECOVERED TOOLS (failed first, then succeeded):
+${turn.recoveredToolNames?.join(", ") ?? ""}`;
 }
 
 function parseReview(output: string): ReviewedCandidate | undefined {

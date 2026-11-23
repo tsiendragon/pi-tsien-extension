@@ -92,6 +92,9 @@ export interface SettledTurn {
   userText: string;
   assistantText: string;
   verifiedToolNames?: string[];
+  /** Ordered failure/recovery evidence; raw error output is never stored. */
+  failedToolNames?: string[];
+  recoveredToolNames?: string[];
   taskKey?: string;
   scope: MemoryScope;
   settledAt: number;
