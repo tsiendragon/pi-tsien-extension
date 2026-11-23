@@ -940,8 +940,17 @@ export class WorkbenchController {
     const hardWallTimeMs = Math.min(request.timeoutMs ?? config.workHardMs, config.workHardMaxMs);
     const excluded = new Set<string>();
     const attempts: AgentRoutingAttempt[] = [];
+    // Include the raw error, not just its class: "model:unknown" told us nothing
+    // about why 54 runs in one session failed, and the class alone cannot say
+    // whether a fallback would even have helped.
     const describe = (): string =>
-      attempts.map((attempt) => `${attempt.model}:${attempt.errorClass ?? attempt.outcome}`).join(" -> ");
+      attempts
+        .map((attempt) => {
+          const head = `${attempt.model}:${attempt.errorClass ?? attempt.outcome}`;
+          const detail = attempt.error?.replace(/\s+/g, " ").trim().slice(0, 200);
+          return detail ? `${head} (${detail})` : head;
+        })
+        .join(" -> ");
     const withRouting = (result: AgentResult, finalModel: string): AgentResult =>
       Object.freeze({
         ...result,
