@@ -94,7 +94,9 @@ export class MemoryService {
     }
 
     const status: MemoryStatus = options.explicit ? "active" : "candidate";
-    const confidence = options.explicit ? 0.98 : 0.68;
+    // Evidence-backed captures must clear the default auto-triage threshold (0.70).
+    // Unverified inference deliberately stays at 0.68 and needs human review.
+    const confidence = options.explicit ? 0.98 : options.sourceVerified ? 0.8 : 0.68;
     const memory = await this.create(normalized, options.kind ?? extracted.kind, options, key, claim, confidence, source, status);
     await this.searchBackend.synchronize(memory.id);
     const receiptId = await this.createUndoReceipt("create", memory.id);

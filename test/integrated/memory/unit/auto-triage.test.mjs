@@ -87,10 +87,12 @@ test("agent-only auto acceptance leaves an event and skips claim conflicts", asy
 
   const candidate = await service.remember("the release branch uses yarn", { profileId: "profile", scope, explicit: false, explicitGlobal: false, authority: "verified_tool", sourceVerified: true, sourceType: "tool_result", sourceUri: "tool:shell" });
   assert.equal(candidate.memory.status, "candidate");
+  assert.ok(candidate.memory.confidence >= 0.7, "verified evidence must clear the default auto-triage threshold");
   const inspected = await service.inspectCandidate(candidate.memory.id, { profileId: "profile", scopes: [scope] });
   assert.equal(inspected.authority, "verified_tool");
   assert.equal(inspected.verified, true);
   assert.equal(inspected.unresolvedConflicts, 0);
+  assert.equal(triageCandidate({ status: inspected.memory.status, scopeType: inspected.memory.scope.type, confidence: inspected.memory.confidence, authority: inspected.authority, verified: inspected.verified, unresolvedConflicts: inspected.unresolvedConflicts }, { enabled: true, minConfidence: 0.7, allowGlobal: false }).decision, "auto_accept");
 
   const accepted = await service.autoAccept(candidate.memory.id, { profileId: "profile", scopes: [scope], reasonCode: "evidence_backed" });
   assert.equal(accepted.status, "active");
