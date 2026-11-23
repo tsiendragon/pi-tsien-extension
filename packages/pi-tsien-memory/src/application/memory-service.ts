@@ -14,6 +14,7 @@ import type {
 import type { CaptureStrategy, MemoryRepository, ScopeResolver, SearchBackend, SecretFilter, SettledTurn } from "../ports/memory.ts";
 import { memoryId, sha256 } from "../shared/hash.ts";
 import { estimateTokens, fitRecallItems, rankRecall } from "./ranking.ts";
+import { verifyUserExplicitReview } from "./review-evidence.ts";
 
 export interface RememberOptions {
   profileId: string;
@@ -332,17 +333,23 @@ export class MemoryService {
     return created;
   }
 
-  async captureReviewedCandidate(turn: SettledTurn, reviewed: { content: string; kind: MemoryAggregate["kind"] }): Promise<MemoryAggregate> {
-    // A successful tool name alone does not verify the model's wording or root-cause claim. Until a
-    // candidate is tied to specific result evidence, it remains agent inference and needs review.
+  async captureReviewedCandidate(turn: SettledTurn, reviewed: {
+    content: string;
+    kind: MemoryAggregate["kind"];
+    basis?: "user_explicit" | "tool_inference" | "recovery_inference";
+    evidence?: string;
+  }): Promise<MemoryAggregate> {
+    // Only a low-risk preference/decision backed by an exact user quote may take the automatic path.
+    // Tool-derived facts and failure lessons remain inference until a human confirms them.
+    const evidence = verifyUserExplicitReview({ userText: turn.userText, scopeType: turn.scope.type, reviewed });
     const result = await this.remember(reviewed.content, {
       profileId: turn.profileId,
       scope: turn.scope,
       explicit: false,
       explicitGlobal: false,
-      sourceType: "assistant_summary",
-      authority: "agent_inference",
-      sourceVerified: false,
+      sourceType: evidence.verified ? "user_message" : "assistant_summary",
+      authority: evidence.verified ? "user_explicit" : "agent_inference",
+      sourceVerified: evidence.verified,
       sourceUri: `session:${turn.sessionId}`,
       sourceEntryId: turn.userEntryId,
       createdBy: "review",

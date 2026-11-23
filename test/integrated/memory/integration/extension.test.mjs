@@ -237,6 +237,47 @@ test("a delayed review cannot write into a newer turn", async () => {
   await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
 });
 
+test("a simple explicit user preference is accepted automatically", async () => {
+  const candidateReviewer = {
+    async review() {
+      return { content: "回答时使用简体中文", kind: "preference", basis: "user_explicit", evidence: "使用简体中文" };
+    },
+    async dispose() {},
+  };
+  const harness = makeHarness({ hasUI: true, choices: [], candidateReviewer });
+  await harness.handlers.get("session_start")({ type: "session_start" }, harness.ctx);
+  harness.handlers.get("input")({ type: "input", text: "回答时使用简体中文", source: "interactive" }, harness.ctx);
+  await harness.handlers.get("before_agent_start")({ prompt: "回答时使用简体中文", systemPrompt: "base" }, harness.ctx);
+  harness.handlers.get("tool_result")({ type: "tool_result", toolName: "shell", toolCallId: "call-shell", input: {}, content: [], isError: false }, harness.ctx);
+  harness.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "已确认。" }] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({ type: "agent_settled" }, harness.ctx);
+  await waitFor(() => /已自动记住/.test(harness.notifications.at(-1)?.message ?? ""));
+  assert.equal(harness.selections.length, 0);
+  const result = await harness.tools.get("memory_search").execute("call-search", { query: "简体中文" }, undefined, undefined, harness.ctx);
+  assert.match(result.content[0].text, /active/);
+  await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
+});
+
+test("a forged user quote cannot take the automatic path", async () => {
+  const candidateReviewer = {
+    async review() {
+      return { content: "伪造原话的记忆不应自动生效", kind: "preference", basis: "user_explicit", evidence: "用户没有说过这句话" };
+    },
+    async dispose() {},
+  };
+  const harness = makeHarness({ hasUI: true, choices: ["Later"], candidateReviewer });
+  await harness.handlers.get("session_start")({ type: "session_start" }, harness.ctx);
+  harness.handlers.get("input")({ type: "input", text: "随便看看这个项目", source: "interactive" }, harness.ctx);
+  await harness.handlers.get("before_agent_start")({ prompt: "随便看看这个项目", systemPrompt: "base" }, harness.ctx);
+  harness.handlers.get("tool_result")({ type: "tool_result", toolName: "shell", toolCallId: "call-shell", input: {}, content: [], isError: false }, harness.ctx);
+  harness.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "已查看。" }] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({ type: "agent_settled" }, harness.ctx);
+  await waitFor(() => harness.selections.length === 1);
+  const result = await harness.tools.get("memory_search").execute("call-search", { query: "伪造原话的记忆" }, undefined, undefined, harness.ctx);
+  assert.equal(result.content[0].text.includes("伪造原话的记忆不应自动生效"), false);
+  await harness.handlers.get("session_shutdown")({ type: "session_shutdown" }, harness.ctx);
+});
+
 after(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });

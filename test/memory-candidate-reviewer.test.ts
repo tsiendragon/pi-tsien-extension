@@ -25,7 +25,7 @@ function reviewer(output: string) {
 
 test("accepts only a structured candidate from the background reviewer", async () => {
 	const candidate = await reviewer('{"decision":"candidate","content":"此项目已验证可使用 Python 3.11。","kind":"experience"}').review(turn, process.cwd());
-	assert.deepEqual(candidate, { content: "此项目已验证可使用 Python 3.11。", kind: "experience" });
+	assert.deepEqual(candidate, { content: "此项目已验证可使用 Python 3.11。", kind: "experience", basis: "tool_inference", evidence: undefined });
 });
 
 test("skips a one-off request when the reviewer rejects it", async () => {
