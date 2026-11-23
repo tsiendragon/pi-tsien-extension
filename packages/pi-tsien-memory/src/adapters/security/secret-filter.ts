@@ -7,6 +7,7 @@ const patterns: Array<[string, RegExp]> = [
   ["github_token", /\b(?:ghp|gho|ghs|ghr)_[A-Za-z0-9]{20,}\b/],
   ["bearer_token", /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/i],
   ["credential_assignment", /(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*[^\s,;]{8,}/i],
+  ["credential_assignment_zh", /(?:密码|口令|密钥|令牌|访问密钥)\s*[:：=]\s*[^\s,;]{4,}/i],
   ["credential_url", /https?:\/\/[^\s/@]+:[^\s/@]+@/i],
 ];
 

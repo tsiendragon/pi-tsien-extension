@@ -101,3 +101,28 @@ test("agent-only auto acceptance leaves an event and skips claim conflicts", asy
   const restored = await service.undo(accepted.undoReceiptId);
   assert.equal(restored.status, "candidate");
 });
+
+test("automatic acceptance never supersedes an active conflicting memory", async () => {
+  const repository = new InMemoryMemoryRepository();
+  await repository.initialize("profile");
+  await repository.ensureSession({ sessionId: "s", piSessionId: "s", repositoryId: "r", startedAt: Date.now() });
+  const service = new MemoryService(repository, new InMemorySearchBackend(repository), new DefaultSecretFilter(), new DefaultScopeResolver(), new RuleCaptureStrategy());
+  const scope = { type: "repository", key: "repository:r", repositoryId: "r" };
+  const active = await service.remember("use pnpm", { profileId: "profile", scope, explicit: true, explicitGlobal: false });
+  const candidate = await service.remember("use yarn", { profileId: "profile", scope, explicit: false, explicitGlobal: false });
+  assert.equal(candidate.memory.status, "candidate");
+  await assert.rejects(
+    () => service.autoAccept(candidate.memory.id, { profileId: "profile", scopes: [scope], reasonCode: "evidence_backed" }),
+    /Confirmation is required|Automatic acceptance stopped/,
+  );
+  assert.equal((await repository.getById(active.memory.id)).status, "active");
+  assert.equal((await repository.getById(candidate.memory.id)).status, "candidate");
+});
+
+test("Chinese credential assignments are rejected before remote review", () => {
+  const filter = new DefaultSecretFilter();
+  assert.equal(filter.inspect("密码：12345678").action, "reject");
+  assert.equal(filter.inspect("访问密钥 = abcdef123456").action, "reject");
+  assert.equal(filter.inspect("构建使用 pnpm").action, "allow");
+});
+

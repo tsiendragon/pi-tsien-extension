@@ -75,12 +75,19 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
   });
 
   pi.on("input", (event: InputEvent, _ctx) => {
-    if (!runtime || event.source === "extension") return;
-    runtime.inputText = event.text;
+    if (!runtime) return;
+    // Always start with a clean turn, including extension-originated input. Keeping the previous
+    // answer or failure list would combine two different turns into false evidence.
+    runtime.inputText = undefined;
+    runtime.inputEntryId = undefined;
+    runtime.assistantText = undefined;
     runtime.memoryMutated = false;
     runtime.memoryToolAttempted = false;
     runtime.verifiedToolNames = [];
-    runtime.toolOutcomes = [];
+    runtime.recovery.reset();
+    runtime.intent = undefined;
+    if (event.source === "extension") return;
+    runtime.inputText = event.text;
     // Intent detection stays deterministic and in-process; no text is persisted here.
     runtime.intent = new RuleCaptureStrategy().detectExplicitIntent(event.text);
     runtime.inputEntryId = `${Date.now()}-${event.text.length}`;
@@ -132,14 +139,16 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
 
   pi.on("tool_result", (event: ToolResultEvent, _ctx) => {
     if (!runtime) return;
-    if (["memory_remember", "memory_update", "memory_forget", "memory_review"].includes(event.toolName)) {
-      runtime.memoryToolAttempted = true;
-      if (!event.isError) runtime.memoryMutated = true;
-    } else {
-      runtime.toolOutcomes.push({ toolName: event.toolName, isError: event.isError });
-      if (runtime.toolOutcomes.length > 100) runtime.toolOutcomes.shift();
-      if (!event.isError) runtime.verifiedToolNames.push(event.toolName);
+    // Memory tools are never evidence for new memories: that would let old memories prove themselves.
+    if (event.toolName.startsWith("memory_")) {
+      if (["memory_remember", "memory_update", "memory_forget", "memory_review"].includes(event.toolName)) {
+        runtime.memoryToolAttempted = true;
+        if (!event.isError) runtime.memoryMutated = true;
+      }
+      return;
     }
+    runtime.recovery.record({ toolName: event.toolName, isError: event.isError });
+    if (!event.isError) runtime.verifiedToolNames.push(event.toolName);
     // Tool output is intentionally not retained. Rule capture only sees the settled turn.
   });
 
@@ -161,7 +170,7 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
         ctx.ui.setStatus("tsien-memory", `on · candidate ${candidates.length}`);
         await reviewCapturedCandidates(runtime, candidates, ctx);
       }
-      if (!runtime.intent) void reviewSettledTurn(runtime, turn, ctx, pi);
+      if (!runtime.intent) void reviewSettledTurn(runtime, turn, ctx, pi).catch(() => undefined);
       pi.appendEntry("tsien-memory.cursor.v1", { lastProcessedEntryId: turn.userEntryId, turnKey: turn.turnKey });
     } catch (error) {
       ctx.ui.notify(`Memory capture skipped: ${errorText(error)}`, "warning");
@@ -192,10 +201,10 @@ export default function register(pi: PiExtensionAPI, dependencies: RuntimeDepend
 }
 
 async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: ExtensionContext, pi: PiExtensionAPI): Promise<void> {
-  if (!turn || !runtime.candidateReviewer) return;
+  if (!turn || !runtime.candidateReviewer || !turn.verifiedToolNames?.length) return;
   if (runtime.secretFilter.inspect(turn.userText).action !== "allow" || runtime.secretFilter.inspect(turn.assistantText).action !== "allow") return;
   const reviewed = await runtime.candidateReviewer.review(turn, runtime.scope.cwd);
-  if (!reviewed) return;
+  if (!reviewed || runtime.closing || runtime.inputEntryId !== turn.userEntryId) return;
   // A failed tool without a later success of that same tool must not become a success lesson.
   if (reviewed.kind === "experience" && (turn.failedToolNames?.length ?? 0) > 0 && (turn.recoveredToolNames?.length ?? 0) === 0) return;
   try {
@@ -206,7 +215,7 @@ async function reviewSettledTurn(runtime: RuntimeState, turn: SettledTurn, ctx: 
       limit: 5,
     });
     if (existing.some((memory) => normalizeText(memory.currentRevision?.content ?? "") === reviewed.content)) return;
-    const candidate = await runtime.service.captureReviewedCandidate(turn, { ...reviewed, evidenceToolNames: turn.verifiedToolNames });
+    const candidate = await runtime.service.captureReviewedCandidate(turn, reviewed);
     await reviewCapturedCandidates(runtime, [candidate], ctx);
     pi.appendEntry("tsien-memory.model-review.v1", { turnKey: turn.turnKey, decision: "candidate", memoryId: candidate.id, model: runtime.config.capture.reviewer.model });
   } catch {

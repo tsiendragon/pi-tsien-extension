@@ -32,7 +32,8 @@ export interface CandidateReviewerOptions {
 
 export class ModelCandidateReviewer {
   private readonly runner: ReviewRunner;
-  private busy = false;
+  private tail: Promise<unknown> = Promise.resolve();
+  private queued = 0;
 
   constructor(
     private readonly options: CandidateReviewerOptions,
@@ -53,8 +54,16 @@ export class ModelCandidateReviewer {
   }
 
   async review(turn: SettledTurn, cwd: string): Promise<ReviewedCandidate | undefined> {
-    if (this.busy || !turn.verifiedToolNames?.length) return undefined;
-    this.busy = true;
+    if (!turn.verifiedToolNames?.length || this.queued >= 3) return undefined;
+    // Serialize a bounded number of turns instead of silently dropping every turn that arrives
+    // while another review is running.
+    this.queued++;
+    const result = this.tail.then(() => this.reviewNow(turn, cwd));
+    this.tail = result.catch(() => undefined).finally(() => { this.queued--; });
+    return result;
+  }
+
+  private async reviewNow(turn: SettledTurn, cwd: string): Promise<ReviewedCandidate | undefined> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
@@ -74,11 +83,11 @@ export class ModelCandidateReviewer {
       return undefined;
     } finally {
       clearTimeout(timeout);
-      this.busy = false;
     }
   }
 
   async dispose(): Promise<void> {
+    await this.tail;
     await this.runner.dispose?.();
   }
 }

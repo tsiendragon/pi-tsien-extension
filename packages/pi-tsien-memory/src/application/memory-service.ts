@@ -265,10 +265,10 @@ export class MemoryService {
     const candidate = await this.resolveUniqueTarget(target, options.profileId, options.scopes, ["candidate"], "Candidate was not found");
     if (candidate.claimKey) {
       const conflicts = await this.repository.findByClaim(options.profileId, candidate.scope, candidate.claimKey, ["active"]);
-      for (const conflict of conflicts) {
-        if (conflict.id === candidate.id) continue;
-        await this.repository.transition(conflict.id, "superseded", "system", "auto_accepted_replacement");
-        await this.repository.relate(candidate.id, conflict.id, "supersedes");
+      // Automatic acceptance must never replace another active memory: the undo receipt only tracks
+      // the candidate itself and could not restore all replaced memories. Leave conflicts to a human.
+      if (conflicts.some((conflict) => conflict.id !== candidate.id)) {
+        throw new MemoryConfirmationRequiredError("Automatic acceptance stopped because another active memory has the same claim");
       }
     }
     const accepted = await this.repository.transition(candidate.id, "active", "system", options.reasonCode);
@@ -332,19 +332,18 @@ export class MemoryService {
     return created;
   }
 
-  async captureReviewedCandidate(turn: SettledTurn, reviewed: { content: string; kind: MemoryAggregate["kind"]; evidenceToolNames?: string[] }): Promise<MemoryAggregate> {
-    // The reviewer only runs when a tool result verified the turn, so the source
-    // authority stays honest: verified_tool when tools succeeded, inference otherwise.
-    const evidence = reviewed.evidenceToolNames?.filter((name) => name.trim().length > 0) ?? [];
+  async captureReviewedCandidate(turn: SettledTurn, reviewed: { content: string; kind: MemoryAggregate["kind"] }): Promise<MemoryAggregate> {
+    // A successful tool name alone does not verify the model's wording or root-cause claim. Until a
+    // candidate is tied to specific result evidence, it remains agent inference and needs review.
     const result = await this.remember(reviewed.content, {
       profileId: turn.profileId,
       scope: turn.scope,
       explicit: false,
       explicitGlobal: false,
-      sourceType: evidence.length > 0 ? "tool_result" : "assistant_summary",
-      authority: evidence.length > 0 ? "verified_tool" : "agent_inference",
-      sourceVerified: evidence.length > 0,
-      sourceUri: evidence.length > 0 ? `tool:${evidence.join(",")}` : `session:${turn.sessionId}`,
+      sourceType: "assistant_summary",
+      authority: "agent_inference",
+      sourceVerified: false,
+      sourceUri: `session:${turn.sessionId}`,
       sourceEntryId: turn.userEntryId,
       createdBy: "review",
       kind: reviewed.kind,
