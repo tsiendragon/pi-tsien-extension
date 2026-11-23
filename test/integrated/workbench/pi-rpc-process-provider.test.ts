@@ -635,6 +635,7 @@ describe("PiRpcProcessProvider", () => {
       runWallWarningMs: 40,
       warningRepeatMs: 1_000,
       hardRunWallTimeMs: 100,
+      wallDecisionGraceMs: 150,
       timeoutAbortGraceMs: 30,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
@@ -673,6 +674,7 @@ describe("PiRpcProcessProvider", () => {
       runWallWarningMs: 50,
       warningRepeatMs: 1_000,
       hardRunWallTimeMs: 120,
+      wallDecisionGraceMs: 150,
       timeoutAbortGraceMs: 100,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
@@ -693,9 +695,10 @@ describe("PiRpcProcessProvider", () => {
           cwd: process.cwd(),
         }),
       );
-      expect(warnings).toEqual([
-        expect.objectContaining({ warning: "wall", elapsedMs: expect.any(Number) }),
-      ]);
+      // Soft wall warnings also fire, so assert on the hard-limit one specifically:
+      // it arrives at the wall limit and the run is only stopped after the grace window.
+      expect(warnings.every(warning => warning.warning === "wall")).toBe(true);
+      expect(warnings.some(warning => warning.elapsedMs >= 100)).toBe(true);
       expect(timeout.code).toBe("run_wall_timeout");
       expect(timeout.message).toContain("hard wall time 120 ms");
       expect(provider.snapshot()).toMatchObject({

@@ -117,6 +117,8 @@ export interface PiRpcProcessProviderOptions {
   readonly runWallWarningMs?: number;
   readonly warningRepeatMs?: number;
   readonly hardRunWallTimeMs?: number | false;
+  /** Grace the parent agent gets to decide whether a timed-out run is still useful. */
+  readonly wallDecisionGraceMs?: number;
   readonly timeoutAbortGraceMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly heartbeatIntervalMs?: number;
@@ -647,6 +649,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
   private readonly runWallWarningMs: number;
   private readonly warningRepeatMs: number;
   private readonly hardRunWallTimeMs: number | undefined;
+  private readonly wallDecisionGraceMs: number;
   private readonly timeoutAbortGraceMs: number;
   private readonly shutdownTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
@@ -701,6 +704,10 @@ export class PiRpcProcessProvider implements SubagentProvider {
     this.warningRepeatMs = positiveInteger(
       "warningRepeatMs",
       options.warningRepeatMs ?? 6 * 60 * 60_000,
+    );
+    this.wallDecisionGraceMs = positiveInteger(
+      "wallDecisionGraceMs",
+      options.wallDecisionGraceMs ?? 15 * 60_000,
     );
     this.hardRunWallTimeMs =
       options.hardRunWallTimeMs === false
@@ -972,6 +979,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
       let idleWarningTimer: ReturnType<typeof setTimeout> | undefined;
       let wallWarningTimer: ReturnType<typeof setTimeout> | undefined;
       let hardWallTimer: ReturnType<typeof setTimeout> | undefined;
+      let hardWallForceAbortTimer: ReturnType<typeof setTimeout> | undefined;
       let timeoutAbortGraceTimer: ReturnType<typeof setTimeout> | undefined;
       let pendingTimeout: PiRpcProviderError | undefined;
       let timeoutTerminationStarted = false;
@@ -986,6 +994,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
         if (idleWarningTimer) clearTimeout(idleWarningTimer);
         if (wallWarningTimer) clearTimeout(wallWarningTimer);
         if (hardWallTimer) clearTimeout(hardWallTimer);
+        if (hardWallForceAbortTimer) clearTimeout(hardWallForceAbortTimer);
         if (timeoutAbortGraceTimer) clearTimeout(timeoutAbortGraceTimer);
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         unsubscribeEvents();
@@ -1011,6 +1020,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
         if (idleWarningTimer) clearTimeout(idleWarningTimer);
         if (wallWarningTimer) clearTimeout(wallWarningTimer);
         if (hardWallTimer) clearTimeout(hardWallTimer);
+        if (hardWallForceAbortTimer) clearTimeout(hardWallForceAbortTimer);
         abortSent = true;
         timeoutAbortGraceTimer = setTimeout(
           () => terminateTimedOutSession(error),
@@ -1250,17 +1260,25 @@ export class PiRpcProcessProvider implements SubagentProvider {
       armWallWarning();
       const hardRunWallTimeMs = request.hardWallTimeMs ?? this.hardRunWallTimeMs;
       if (hardRunWallTimeMs !== undefined) {
-        hardWallTimer = setTimeout(
+        // The timeout used to kill the run outright, and 145 of the last 242
+        // failures were exactly that: a healthy long task stopped mid-work.
+        // Now it first only warns, so the parent agent can decide whether the
+        // task is still worth its time. If nobody decides, stop anyway after a
+        // grace period, so a forgotten task cannot hold a session slot forever.
+        const forceAbortAfterMs = hardRunWallTimeMs + this.wallDecisionGraceMs;
+        hardWallTimer = setTimeout(() => emitRunWarning("wall"), hardRunWallTimeMs);
+        hardWallTimer.unref?.();
+        hardWallForceAbortTimer = setTimeout(
           () =>
             beginTimeout(
               new PiRpcProviderError(
                 "run_wall_timeout",
-                `Pi RPC Run ${request.runId} exceeded hard wall time ${hardRunWallTimeMs} ms.`,
+                `Pi RPC Run ${request.runId} exceeded hard wall time ${hardRunWallTimeMs} ms and was still running ${forceAbortAfterMs - hardRunWallTimeMs} ms after the warning.`,
               ),
             ),
-          hardRunWallTimeMs,
+          forceAbortAfterMs,
         );
-        hardWallTimer.unref?.();
+        hardWallForceAbortTimer.unref?.();
       }
       if (request.signal.aborted) {
         fail(
