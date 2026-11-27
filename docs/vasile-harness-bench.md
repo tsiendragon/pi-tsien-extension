@@ -81,11 +81,37 @@ Vasile 不等式：对任意实数 x,y,z，证明
 3. **codex 重跑可能沾首次的 kimi 缓存光**（长保留缓存），但其 input 累计仍最高——缓存复用差是 codex harness 的本身特性，与是否重跑无关。
 4. **推理预算不完全一致**：codex 的 reasoning effort 与 pi/claude 的 thinking 量不同（见速度分析）。成果相同说明该差异不影响本题正确性。
 
-## 结论
+## 第二轮：deepseek-v4.1-flash + 统一 medium effort
 
-- **成果**：三方相当（都 VERIFIED）。
-- **成本**：**pi 最省**（缓存复用好、总 token 少），体现缓存/上下文优化的价值。
-- **速度**：codex 最快，但来自**更少的推理量**（reasoning effort），而非 harness 执行效率；且 codex 为此付出了最高的 token 成本（缓存复用差）。
+为消除第一轮"codex 思考少、pi/claude 思考多"的推理预算不一致，第二轮换用 deepseek-v4.1-flash，并**统一三方 reasoning effort 为 medium**（codex `model_reasoning_effort=medium`、pi `--thinking medium`、claude `--effort medium`）。题目、纯推理约束、统一验证方式不变。
+
+| 方 | 成果 | 总 token（每轮累计） | input（全价） | cacheRead | output | 时间 | 轮数 |
+|---|---|---|---|---|---|---|---|
+| **pi** | VERIFIED | **437,149** | **20,125** | 354,176 | 62,848 | **301s** | 19 |
+| **codex** | VERIFIED | 8,200,221 | 4,150,450 | 4,000,128 | 49,643 | 362s | 32 |
+| **claude** | VERIFIED | 963,083 | 179,520 | 724,992 | 58,571 | 309s | 21 |
+
+缓存复用效率（cacheRead/(input+cacheRead)）：**pi 95%**、claude 80%、codex 49%。
+
+### 两轮对照（总 token，每轮累计）
+
+| 方 | kimi | deepseek |
+|---|---|---|
+| pi | 141K（最省） | 437K（最省） |
+| codex | 1,051K（最多） | 8,200K（最多） |
+| claude | 296K | 963K |
+
+### 第二轮暴露的问题与处理
+
+- **pi 首次输出截断**：pi 对 deepseek 的默认输出上限偏小，thinking medium 下 `Response was truncated`。调大 pi 的输出上限后重跑成功（codex 用同模型同 effort 不截断，证实是 pi 配置问题而非模型能力问题）。
+- **claude 两次均权限拒绝**：claude -p 非交互默认拒绝 Write/Bash，证书从日志 permission_denials 提取（未重跑）。这是 claude harness 权限模型严格的体现。
+- **codex 自报 "tokens used" 是去重口径**：deepseek 轮自报 199,965，但每轮累计 8.2M（32 轮每轮重发历史）。每轮累计才是真实计费调用量。
+
+## 结论（两轮）
+
+- **成果**：两轮三方均相当（全部 VERIFIED，独立证出 Vasile 不等式）。
+- **成本**：**pi 最省 token 在两轮均成立**。pi 的全价 input 最少（deepseek 轮仅 20K，codex 高达 4.15M），缓存复用最高（95%）。这是 pi 缓存/上下文优化的直接价值。
+- **速度**：第一轮 codex 最快源于**推理量少**（effort 不一致）；第二轮**统一 effort 后 codex 的速度优势消失，pi 反而最快**（301s < codex 362s）。证实 codex 的速度优势来自推理预算差异，而非 harness 本身更快。
 
 ## 复现
 
