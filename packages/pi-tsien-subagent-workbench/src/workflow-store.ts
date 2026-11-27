@@ -11,8 +11,9 @@ export interface SavedWorkflowTask {
   readonly label?: string;
   readonly cwd?: string;
   readonly model?: string;
-  readonly tier?: "light" | "medium" | "heavy" | "ultra";
-  readonly role?: "read_only" | "code" | "research";
+  readonly tier?: "micro" | "light" | "medium" | "heavy" | "ultra";
+  /** Built-in role or a custom role name from ~/.pi/agent/subagents/. */
+  readonly role?: string;
   readonly timeoutMs?: number;
   readonly thinking?: AgentThinkingLevel;
   readonly context?: string;

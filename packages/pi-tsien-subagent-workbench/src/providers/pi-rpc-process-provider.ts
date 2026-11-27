@@ -1,4 +1,22 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { readFileSync } from "node:fs";
+import {
+  activityKeyForTrace,
+  jobActivityTracker,
+  type ActivityKeyMetadata,
+  type JobActivityEvent,
+} from "../job-activity.ts";
+import {
+  budgetExhaustedMessage,
+  budgetHandoffMessage,
+  BUDGET_NOTICE_RATIO,
+} from "../role-budget.ts";
+import {
+  promptStateAt,
+  roleProfile,
+  rolesDirPath,
+  type PromptState,
+} from "../roles-registry.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -70,6 +88,7 @@ export type PiRpcProviderErrorCode =
   | "run_idle_timeout"
   | "run_wall_timeout"
   | "model_call_budget"
+  | "token_budget"
   | "tool_not_allowed";
 
 export class PiRpcProviderError extends Error {
@@ -104,6 +123,13 @@ export interface PiRpcProcessProviderOptions {
   readonly loadSkills?: boolean;
   readonly loadPromptTemplates?: boolean;
   readonly loadContextFiles?: boolean;
+  /**
+   * Generic subagent prompt used when a role has no usable prompt file.
+   * Defaults to `<agent dir>/rules/subagent-system.md`; tests and alternate
+   * layouts can point it elsewhere. When it is unusable the provider reports a
+   * warning instead of silently starting the child without the shared rules.
+   */
+  readonly genericPromptPath?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly commandTimeoutMs?: number;
   readonly startupTimeoutMs?: number;
@@ -209,6 +235,8 @@ interface PendingRequest {
 
 interface ProviderSession {
   readonly id: string;
+  /** Startup diagnostics (role prompt fallbacks) surfaced with the Run result. */
+  startupWarnings: readonly string[];
   readonly cwd: string;
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
@@ -250,6 +278,23 @@ function positiveInteger(name: string, value: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 软提醒阀值：与 role-budget.ts 的 BUDGET_NOTICE_RATIO 保持一致（回合、token 同比例）。 */
+function noticeAt(limit: number): number {
+  return Math.max(1, Math.floor(limit * BUDGET_NOTICE_RATIO));
+}
+
+/** 任一维度达到软提醒阀值就算“接近预算”，且仅在有该维度限制时判定。 */
+function nearBudget(
+  request: ProviderRunRequest,
+  modelCalls: number,
+  totalTokens: number,
+): boolean {
+  return (
+    (request.maxModelCalls !== undefined && modelCalls >= noticeAt(request.maxModelCalls)) ||
+    (request.maxTokens !== undefined && totalTokens >= noticeAt(request.maxTokens))
+  );
 }
 
 function appendLimited(current: string, chunk: string, limit: number): string {
@@ -423,6 +468,15 @@ class PiRpcClient {
 
   async prompt(message: string): Promise<void> {
     await this.send("prompt", { message });
+  }
+
+  /**
+   * Queue a steering message that the child sees after its current turn's tool
+   * calls, before its next model call. Used for budget handoff nudges; a
+   * failure here must never fail the run itself.
+   */
+  async steer(message: string): Promise<void> {
+    await this.send("steer", { message });
   }
 
   async abort(): Promise<void> {
@@ -623,6 +677,33 @@ class PiRpcClient {
   }
 }
 
+export const GENERIC_SUBAGENT_PROMPT_PATH = join(
+  homedir(),
+  ".pi/agent/rules/subagent-system.md",
+);
+
+function readPromptFile(path: string): string | undefined {
+  try {
+    const text = readFileSync(path, "utf8");
+    return text.trim() ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function describePromptState(state: PromptState): string {
+  switch (state) {
+    case "missing":
+      return "不存在";
+    case "empty":
+      return "为空";
+    case "unreadable":
+      return "不可读";
+    default:
+      return "可用";
+  }
+}
+
 export class PiRpcProcessProvider implements SubagentProvider {
   readonly id = "pi-rpc-process";
   readonly isolation = "process" as const;
@@ -644,6 +725,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
   private readonly loadSkills: boolean;
   private readonly loadPromptTemplates: boolean;
   private readonly loadContextFiles: boolean;
+  private readonly genericPromptPath: string;
   private readonly environment: Readonly<Record<string, string>>;
   private readonly commandTimeoutMs: number;
   private readonly startupTimeoutMs: number;
@@ -682,6 +764,8 @@ export class PiRpcProcessProvider implements SubagentProvider {
     this.loadSkills = options.loadSkills ?? true;
     this.loadPromptTemplates = options.loadPromptTemplates ?? true;
     this.loadContextFiles = options.loadContextFiles ?? true;
+    this.genericPromptPath =
+      options.genericPromptPath ?? GENERIC_SUBAGENT_PROMPT_PATH;
     this.environment = Object.freeze({ ...(options.environment ?? {}) });
     this.commandTimeoutMs = positiveInteger(
       "commandTimeoutMs",
@@ -740,6 +824,16 @@ export class PiRpcProcessProvider implements SubagentProvider {
     readonly model?: string;
     readonly isError: boolean;
     readonly errorMessage?: string;
+    /** Explicit diagnostics (e.g. a missing role prompt) shown to the main agent. */
+    readonly warnings?: readonly string[];
+    readonly toolCalls: number;
+    readonly modelCalls: number;
+    /** Present when a role budget stopped the run; partial output is still returned. */
+    readonly budgetStop?: {
+      readonly kind: "maxTurns" | "maxTokens";
+      readonly used: number;
+      readonly limit: number;
+    };
   }> {
     if (this.disposed) {
       throw new PiRpcProviderError(
@@ -778,6 +872,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
           `Pi RPC session ${request.sessionId} cannot change cwd, model, thinking, or trace context.`,
         );
       }
+      session.startupWarnings = this.refreshStartupWarnings(request);
       session.activeRun = runToken;
     } else {
       session = this.reserveSession(
@@ -791,7 +886,9 @@ export class PiRpcProcessProvider implements SubagentProvider {
 
     try {
       if (needsStartup) await this.startSession(session);
-      return await this.runPrompt(session, request, effectiveModel);
+      const result = await this.runPrompt(session, request, effectiveModel);
+      const warnings = session.startupWarnings;
+      return warnings.length ? { ...result, warnings: [...warnings] } : result;
     } finally {
       if (session.activeRun === runToken) session.activeRun = undefined;
     }
@@ -855,6 +952,118 @@ export class PiRpcProcessProvider implements SubagentProvider {
     return this.disposePromise;
   }
 
+  /**
+   * 子代理用独立角色 prompt（共享公约 + 执行者角色），不加载主 agent 的 AGENTS.md。
+   * PI_SUBAGENT_MAIN_CONTEXT=1 回退到旧行为（加载主 agent 上下文文件）。
+   *
+   * 角色 prompt 缺失/为空/不可读时**不再静默回退**：每条诊断写进 `warnings`，
+   * 由 run() 放进 Run 结果的 `warnings` 交给主 agent，并同时写入 stderr 日志。
+   */
+  private childContextArgs(
+    role: string | undefined,
+    warnings: string[],
+  ): { readonly args: readonly string[]; readonly warnings: readonly string[] } {
+    const fallbackArgs: readonly string[] = this.loadContextFiles
+      ? []
+      : ["--no-context-files"];
+    const fallbackLabel = this.loadContextFiles
+      ? "cwd 上下文文件"
+      : "--no-context-files（不加载任何上下文文件）";
+
+    if (process.env.PI_SUBAGENT_MAIN_CONTEXT === "1") {
+      if (role) {
+        warnings.push(
+          "PI_SUBAGENT_MAIN_CONTEXT=1：角色 " +
+            role +
+            " 的专属 prompt 未使用，回退到" +
+            fallbackLabel +
+            "。",
+        );
+      }
+      return { args: fallbackArgs, warnings };
+    }
+
+    const readPrompt = (path: string): string | undefined => readPromptFile(path);
+    const promptArgs = (body: string): readonly string[] => [
+      "--no-context-files",
+      "--append-system-prompt",
+      body,
+    ];
+    const genericCandidates: string[] = [
+      ...(process.env.PI_SUBAGENT_SYSTEM_PROMPT
+        ? [process.env.PI_SUBAGENT_SYSTEM_PROMPT]
+        : []),
+      this.genericPromptPath,
+    ];
+    const usableGeneric = genericCandidates.find(
+      (candidate) =>
+        promptStateAt(candidate) === "present" && readPrompt(candidate) !== undefined,
+    );
+
+    const profile = role ? roleProfile(role) : undefined;
+    if (role && !profile) {
+      warnings.push(
+        "角色 " +
+          role +
+          " 没有角色定义文件（" +
+          join(rolesDirPath(), role + ".md") +
+          "），角色 prompt 不可用。",
+      );
+    } else if (profile?.invalid) {
+      warnings.push(
+        "角色 " +
+          role +
+          " 定义非法（" +
+          (profile.invalidReason ?? "frontmatter 校验失败") +
+          "），工具集已按最小权限 " +
+          profile.base +
+          " 处理。",
+      );
+    }
+
+    if (profile) {
+      const state = promptStateAt(profile.promptPath);
+      const body = state === "present" ? readPrompt(profile.promptPath) : undefined;
+      if (body !== undefined) {
+        return { args: promptArgs(body), warnings };
+      }
+      const next = usableGeneric
+        ? "回退到 " + usableGeneric
+        : "没有可用的通用子代理 prompt，回退到" + fallbackLabel;
+      warnings.push(
+        "角色 " +
+          role +
+          " 的 prompt 文件 " +
+          profile.promptPath +
+          " " +
+          describePromptState(state) +
+          "，" +
+          next +
+          "。运行 python3 ~/.pi/agent/rules/build.py 生成缺失的角色 prompt。",
+      );
+    }
+
+    if (usableGeneric) {
+      return { args: promptArgs(readPrompt(usableGeneric) ?? ""), warnings };
+    }
+
+    warnings.push(
+      "所有子代理 prompt 来源都不可用（" +
+        genericCandidates.join(", ") +
+        "），回退到" +
+        fallbackLabel +
+        "；子代理将缺少共享公约。",
+    );
+    return { args: fallbackArgs, warnings };
+  }
+  private refreshStartupWarnings(request: ProviderRunRequest): readonly string[] {
+    const { warnings } = this.childContextArgs(request.role, []);
+    for (const warning of warnings) {
+      process.stderr.write(`[pi-subagent-workbench] ${warning}\n`);
+    }
+    return warnings;
+  }
+
   private reserveSession(
     request: ProviderRunRequest,
     model: string | undefined,
@@ -866,6 +1075,11 @@ export class PiRpcProcessProvider implements SubagentProvider {
         "provider_capacity",
         `Pi RPC provider reached its persistent session limit (${this.maxSessions}).`,
       );
+    }
+    const contextArgs = this.childContextArgs(request.role, []);
+    const warnings = contextArgs.warnings;
+    for (const warning of warnings) {
+      process.stderr.write(`[pi-subagent-workbench] ${warning}\n`);
     }
     const args = [
       ...this.baseArgs,
@@ -879,7 +1093,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
       ...(this.loadExtensions ? [] : ["--no-extensions"]),
       ...(this.loadSkills ? [] : ["--no-skills"]),
       ...(this.loadPromptTemplates ? [] : ["--no-prompt-templates"]),
-      ...(this.loadContextFiles ? [] : ["--no-context-files"]),
+      ...contextArgs.args,
       "--no-approve",
       ...(this.allowTools ? [] : ["--no-tools"]),
       // Expose only the role's tools so the child never picks a tool it will be stopped for.
@@ -910,6 +1124,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
     );
     const session: ProviderSession = {
       id: request.sessionId,
+      startupWarnings: warnings,
       cwd: request.cwd,
       model,
       thinking,
@@ -943,6 +1158,77 @@ export class PiRpcProcessProvider implements SubagentProvider {
     }
   }
 
+  /**
+   * Activity-tracking key for a run. `activityKeyForTrace` is shared with the
+   * readers (tools and dashboard), so a workflow task run is keyed by its own
+   * `taskId` (falling back to the job `workId`, then to `runId` for direct
+   * provider calls). Without the fallback chain a workflow would report one key
+   * for all of its tasks and a wedged task would hide behind a busy sibling.
+   */
+  private activityKeyFor(request: ProviderRunRequest): string {
+    return (
+      activityKeyForTrace({
+        trace: request.traceContext,
+        runId: request.runId,
+      }) ?? request.runId
+    );
+  }
+
+  /**
+   * Owning job and task identity for a heartbeat row. `traceContext.workId` is
+   * the job that owns the key (the workflow job for a workflow task run).
+   */
+  private activityMetaFor(request: ProviderRunRequest): ActivityKeyMetadata {
+    const trace = request.traceContext;
+    return {
+      ...(trace?.workflowId ? { kind: "workflow" as const } : { kind: "agent" as const }),
+      ...(trace?.workId ? { workId: trace.workId } : {}),
+      ...(trace?.taskId ? { taskId: trace.taskId } : {}),
+      ...(trace?.taskKey ? { taskKey: trace.taskKey } : {}),
+    };
+  }
+
+  private noteActivityEvent(
+    request: ProviderRunRequest,
+    event: JobActivityEvent,
+  ): void {
+    try {
+      jobActivityTracker().noteEvent(
+        this.activityKeyFor(request),
+        request.runId,
+        event,
+        Date.now(),
+        this.activityMetaFor(request),
+      );
+    } catch {
+      // Observability must never break a run.
+    }
+  }
+
+  private noteActivityRunStarted(request: ProviderRunRequest): void {
+    try {
+      jobActivityTracker().noteRunStarted(
+        this.activityKeyFor(request),
+        request.runId,
+        Date.now(),
+        this.activityMetaFor(request),
+      );
+    } catch {
+      // Observability must never break a run.
+    }
+  }
+
+  private clearActivity(request: ProviderRunRequest): void {
+    try {
+      jobActivityTracker().noteRunSettled(
+        this.activityKeyFor(request),
+        request.runId,
+      );
+    } catch {
+      // Observability must never break a run.
+    }
+  }
+
   private runPrompt(
     session: ProviderSession,
     request: ProviderRunRequest,
@@ -955,6 +1241,12 @@ export class PiRpcProcessProvider implements SubagentProvider {
     readonly errorMessage?: string;
     readonly toolCalls: number;
     readonly modelCalls: number;
+    /** Present when a role budget stopped the run; partial output is still returned. */
+    readonly budgetStop?: {
+      readonly kind: "maxTurns" | "maxTokens";
+      readonly used: number;
+      readonly limit: number;
+    };
   }> {
     const prompt =
       request.contextMode === "explicit" && request.context
@@ -972,6 +1264,9 @@ export class PiRpcProcessProvider implements SubagentProvider {
       let providerError: string | undefined;
       let toolCalls = 0;
       let modelCalls = 0;
+      let totalTokens = 0;
+      let budgetNoticeSent = false;
+      let budgetStop: { readonly kind: "maxTurns" | "maxTokens"; readonly used: number; readonly limit: number } | undefined;
       let abortSent = false;
       const runStartedAt = Date.now();
       let lastProgressAt = runStartedAt;
@@ -987,9 +1282,11 @@ export class PiRpcProcessProvider implements SubagentProvider {
       let unsubscribeEvents = (): void => {};
       let unsubscribeExit = (): void => {};
 
+      this.noteActivityRunStarted(request);
       const finish = (action: () => void): void => {
         if (settled) return;
         settled = true;
+        this.clearActivity(request);
         if (idleWarningTimer) clearTimeout(idleWarningTimer);
         if (wallWarningTimer) clearTimeout(wallWarningTimer);
         if (hardWallTimer) clearTimeout(hardWallTimer);
@@ -1028,6 +1325,17 @@ export class PiRpcProcessProvider implements SubagentProvider {
         timeoutAbortGraceTimer.unref?.();
         void session.client.abort().catch(() => terminateTimedOutSession(error));
       };
+      /**
+       * Budget exhaustion must NOT throw away the partial result: stop the child,
+       * then settle with what was produced so the main agent can collect
+       * artifacts and decide the next step.
+       */
+      let settleBudgetStop: (
+        kind: "maxTurns" | "maxTokens",
+        used: number,
+        limit: number,
+        message: string,
+      ) => void = () => {};
       const emitRunWarning = (warning: "idle" | "wall"): void => {
         const now = Date.now();
         const elapsedMs = now - runStartedAt;
@@ -1061,6 +1369,31 @@ export class PiRpcProcessProvider implements SubagentProvider {
         }, delay);
         wallWarningTimer.unref?.();
       };
+      const settleBudget = (
+        kind: "maxTurns" | "maxTokens",
+        used: number,
+        limit: number,
+        message: string,
+      ): void => {
+        if (settled) return;
+        budgetStop = { kind, used, limit };
+        providerError = message;
+        stopReason = "error";
+        void session.client.abort().catch(() => {});
+        finish(() =>
+          resolve({
+            output,
+            usage,
+            ...(model ? { model } : {}),
+            toolCalls,
+            modelCalls,
+            budgetStop: { kind, used, limit },
+            isError: true,
+            errorMessage: message,
+          }),
+        );
+      };
+      settleBudgetStop = settleBudget;
       const markProgress = (): void => {
         lastProgressAt = Date.now();
         armIdleWarning();
@@ -1078,6 +1411,14 @@ export class PiRpcProcessProvider implements SubagentProvider {
       };
       unsubscribeEvents = session.client.onEvent((event) => {
         markProgress();
+        this.noteActivityEvent(request, {
+          type: event.type ?? "unknown",
+          ...(event.toolCallId === undefined ? {} : { toolCallId: event.toolCallId }),
+          ...(event.toolName === undefined ? {} : { toolName: event.toolName }),
+          ...(event.message?.role === undefined
+            ? {}
+            : { message: { role: event.message.role } }),
+        });
         request.emit({ type: "heartbeat" });
         if (
           event.type === "message_start" &&
@@ -1154,13 +1495,44 @@ export class PiRpcProcessProvider implements SubagentProvider {
           output = assistantText(event.message);
           usage = addUsage(usage, event.message);
           modelCalls += 1;
+          totalTokens += (event.message.usage?.input ?? 0) + (event.message.usage?.output ?? 0);
+          // Turn budget: stop hard, but keep partial artifacts for collection.
           if (request.maxModelCalls !== undefined && modelCalls >= request.maxModelCalls) {
-            beginTimeout(
-              new PiRpcProviderError(
-                "model_call_budget",
-                `Pi RPC Run ${request.runId} reached its model call budget (${request.maxModelCalls} calls); stopped so the main agent can decide whether to continue.`,
-              ),
-            );
+            const message = `Pi RPC Run ${request.runId} ${budgetExhaustedMessage("maxTurns", request.maxModelCalls)}`;
+            settleBudgetStop("maxTurns", modelCalls, request.maxModelCalls, message);
+            return;
+          }
+          if (request.maxTokens !== undefined && totalTokens >= request.maxTokens) {
+            const message = `Pi RPC Run ${request.runId} ${budgetExhaustedMessage("maxTokens", request.maxTokens)}`;
+            settleBudgetStop("maxTokens", totalTokens, request.maxTokens, message);
+            return;
+          }
+          if (!budgetNoticeSent && nearBudget(request, modelCalls, totalTokens)) {
+            // Soft notice: warn the main agent AND tell the child to hand off now.
+            budgetNoticeSent = true;
+            const kind = request.maxModelCalls !== undefined && modelCalls >= noticeAt(request.maxModelCalls)
+              ? "maxTurns" as const
+              : "maxTokens" as const;
+            const limit = kind === "maxTurns" ? request.maxModelCalls! : request.maxTokens!;
+            const used = kind === "maxTurns" ? modelCalls : totalTokens;
+            request.emit({
+              type: "run-warning",
+              warning: "budget",
+              elapsedMs: Date.now() - runStartedAt,
+              budget: { kind, used, limit },
+              message:
+                `Pi RPC Run ${request.runId} is near its ${kind} budget (${used}/${limit}); asked the child to hand off partial artifacts.`,
+            });
+            void session.client
+              .steer(budgetHandoffMessage({
+                modelCalls,
+                tokens: totalTokens,
+                ...(request.maxModelCalls === undefined ? {} : { maxTurns: request.maxModelCalls }),
+                ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+              }))
+              .catch(() => {
+                // Steering is advisory; never fail a run because the nudge was rejected.
+              });
           }
           stopReason = event.message.stopReason ?? stopReason;
           providerError = event.message.errorMessage;
@@ -1216,6 +1588,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
               ...(model ? { model } : {}),
               toolCalls,
               modelCalls,
+              ...(budgetStop ? { budgetStop } : {}),
               isError:
                 stopReason === "error" ||
                 stopReason === "aborted" ||
