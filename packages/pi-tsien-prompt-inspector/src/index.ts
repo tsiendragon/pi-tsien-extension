@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -23,6 +23,8 @@ import { join, resolve } from "node:path";
  */
 
 const STORE_VERSION = 1 as const;
+/** 环形留存的请求快照份数；设 PI_PROMPT_INSPECTOR_HISTORY=0 可关闭。 */
+const HISTORY_SIZE = Math.max(0, Number(process.env.PI_PROMPT_INSPECTOR_HISTORY ?? 10) || 0);
 const MAX_EDITOR_CHARS = 120_000;
 const VIEWPORT_ROWS = 20;
 const MAX_OVERLAY_WIDTH = 140;
@@ -52,6 +54,34 @@ function storeDir(): string {
 
 function lastRequestPath(): string {
   return join(storeDir(), "last-request.json");
+}
+
+function historyDir(): string {
+  return join(storeDir(), "history");
+}
+
+/** 进程内序号，避免同一毫秒的两次请求互相覆盖。 */
+let historySeq = 0;
+
+/**
+ * 把同一份载荷再写一份到 history/，并只保留最新 HISTORY_SIZE 份。
+ * 用于对相邻两次请求做 diff（定位每轮缓存失效/隐藏注入）。
+ */
+function writeHistorySnapshot(capturedAt: number, serialized: string): void {
+  if (HISTORY_SIZE <= 0) return;
+  try {
+    const dir = historyDir();
+    mkdirSync(dir, { recursive: true });
+    historySeq += 1;
+    const name = `${capturedAt}-${String(historySeq).padStart(6, "0")}.json`;
+    writeFileSync(join(dir, name), serialized, "utf8");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+    for (const stale of files.slice(0, Math.max(0, files.length - HISTORY_SIZE))) {
+      rmSync(join(dir, stale), { force: true });
+    }
+  } catch {
+    // 调试性留存，绝不影响主流程
+  }
 }
 
 function markdownPath(): string {
@@ -556,7 +586,9 @@ export default function promptInspectorExtension(pi: ExtensionAPI): void {
         payload: event.payload,
       };
       ensureStoreDir();
-      writeFileSync(lastRequestPath(), JSON.stringify(captured, null, 2), "utf8");
+      const serialized = JSON.stringify(captured, null, 2);
+      writeFileSync(lastRequestPath(), serialized, "utf8");
+      writeHistorySnapshot(captured.capturedAt, serialized);
     } catch {
       // 抓取失败不能影响主流程。
     }
@@ -572,6 +604,7 @@ export default function promptInspectorExtension(pi: ExtensionAPI): void {
         const lines = [
           `Markdown：${markdownPath()}`,
           `原始 payload：${lastRequestPath()}${captured ? "（最新）" : "（尚未抓取，先跑一轮对话）"}`,
+          `历史快照：${historyDir()}（保留最近 ${HISTORY_SIZE} 份，可用 diff.py 对比相邻两次）`,
         ];
         ctx.ui.notify(lines.join("\n"), "info");
         return;
