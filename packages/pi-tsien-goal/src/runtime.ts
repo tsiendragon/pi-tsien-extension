@@ -14,7 +14,7 @@ import {
 } from "./prompts.ts";
 
 import type { GoalState } from "./types.ts";
-import { allPathsBlocked, getOpenBlockers, getWorkItems, readyWorkItems } from "./goal-graph.ts";
+import { allPathsBlocked, currentMilestone, getOpenBlockers, getWorkItems, isHardBlocker, readyWorkItems } from "./goal-graph.ts";
 import { askGoalEvaluator, DEFAULT_GOAL_EVALUATORS, evaluateGoal, evaluatorModels, handoffAction, PROOF_JOB_EVENT, WORKBENCH_JOB_EVENT, type EvaluatorFailure } from "./evaluator.ts";
 
 export const GOAL_CONTINUATION_CUSTOM_TYPE = "goal-continuation";
@@ -66,8 +66,12 @@ export interface GoalContinuationRecord {
 	source?: GoalContinuationSource;
 }
 
-export type GoalContinuationSource = "explicit" | "evaluator" | "proof-job" | "workbench-job" | "handoff" | "compaction" | "wait-recheck" | "provider-retry";
+export type GoalContinuationSource = "explicit" | "evaluator" | "proof-job" | "workbench-job" | "handoff" | "compaction" | "wait-recheck" | "provider-retry" | "evaluator-fallback" | "blocker-recheck";
 export const GOAL_WAIT_RECHECK_MS = 5 * 60_000;
+// A bounded turn that may only re-validate open hard blockers. It exists so an
+// `uncertain` verdict with a needs_user/external_wait blocker does not stall the
+// goal silently; it never authorizes the blocked work itself.
+export const GOAL_BLOCKER_RECHECK_ACTION = "Recheck the open hard blockers before anything else: for each one, verify from existing evidence whether its stated condition still holds. If it no longer holds, resolve or supersede the blocker with that evidence and stop there. If it still holds, record that it still holds and stop. Do not perform the blocked work items, do not start work that depends on the missing user decision or external event, and do not repeat the same request to the user.";
 const PROVIDER_RETRY_MS = 30_000;
 export const GOAL_EVALUATOR_RETRY_MS = 60_000;
 type GoalJobKind = "proof" | "workbench";
@@ -96,6 +100,8 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 	let pending: ReturnType<typeof setTimeout> | undefined;
 	let idleTurns = 0;
 	let usedHandoffFallback = false;
+	let ordinaryPrompt: string | undefined;
+	let ordinaryTurn = false;
 	const routesTried = new Set<string>();
 	let progressKey = "";
 	let summary = "";
@@ -112,6 +118,7 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 	let waitTimer: ReturnType<typeof setTimeout> | undefined;
 	let waitDue: GoalJob[] | undefined;
 	let waitRechecks = 0;
+	const blockerRechecked = new Set<string>();
 	const rechecked = new Set<string>();
 	let jobEventVersion = 0;
 	// Keyed by `${kind}:${id}` so proof jobs and workbench jobs never collide.
@@ -150,12 +157,15 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		evaluationRetryUsed = false;
 		clearWait();
 		rechecked.clear();
+		blockerRechecked.clear();
 		waitRechecks = 0;
 		lastRunOutcome = undefined;
 		providerRetryUsed = retryDue = compacting = compacted = false;
 		engaged = undefined;
 		idleTurns = 0;
 		usedHandoffFallback = false;
+		ordinaryPrompt = undefined;
+		ordinaryTurn = false;
 		routesTried.clear();
 		progressKey = "";
 		summary = "";
@@ -228,14 +238,27 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 			void evaluateGoal(models(), snapshot, run.signal, askGoalEvaluator(ctx), undefined, (model, kind) => failures.push({ model, kind })).then(async answer => {
 				if (run.signal.aborted || !ctx.isIdle() || ctx.sessionManager.getLeafId() !== leaf || loadGoalState(ctx)?.status !== "active" || loadGoalState(ctx)?.goalId !== goal.goalId || api.getFlag?.("goal-continuation") === false) return;
 				if (jobEventVersion !== epoch) return;
-				const fallback = !answer && !usedHandoffFallback
-					? handoffAction(summary, ready.map(item => item.id), [...jobs.values()].some(job => job.state === "pending")) : undefined;
+				const hasPendingJobs = [...jobs.values()].some(job => job.state === "pending");
+				const handoff = !answer && !usedHandoffFallback
+					? handoffAction(summary, ready.map(item => item.id), hasPendingJobs) : undefined;
+				const defaultAction = "Resume from the saved checkpoint: take an authorized ready action, or add a concrete next action to the unfinished current milestone. Do not repeat completed work or bypass blockers";
+				const hardBlockers = getOpenBlockers(goal).filter(isHardBlocker);
+				const blockerSignature = hardBlockers.map(blocker => blocker.id).sort().join("|");
+				const canResume = !hasPendingJobs && (ready.length > 0 ||
+					(currentMilestone(goal) !== undefined && hardBlockers.length === 0));
+				// A model cannot veto authorized ready work based solely on its own stop/wait suggestion.
+				const defaultResume = answer?.decision !== "continue" && !handoff && canResume && !routesTried.has(defaultAction.toLowerCase());
+				const blockerRecheck = !defaultResume && !handoff && answer?.decision === "uncertain" && !hasPendingJobs &&
+					hardBlockers.length > 0 && !blockerRechecked.has(blockerSignature);
+				const fallback = handoff ?? (defaultResume ? defaultAction : blockerRecheck ? GOAL_BLOCKER_RECHECK_ACTION : undefined);
 				const action = answer?.decision === "continue" ? answer.action : fallback;
 				const key = action?.toLowerCase().replace(/\s+/g, " ");
-				const repeated = key !== undefined && routesTried.has(key);
-				api.appendEntry("goal-evaluation", { goalId: goal.goalId, model: answer?.model, decision: repeated ? "repeated-action" : answer?.decision ?? "unavailable", reason: answer?.reason, action, wake: answer?.decision === "wait" ? answer.wake : undefined, failures, fallback: fallback && !repeated ? "handoff" : undefined, at: Date.now() });
-				if (answer?.decision === "stop") stopped = true;
-				if (answer?.decision === "wait" || !answer && !fallback) {
+				const recheck = fallback === GOAL_BLOCKER_RECHECK_ACTION;
+				const repeated = key !== undefined && (recheck ? blockerRechecked.has(blockerSignature) : routesTried.has(key));
+				api.appendEntry("goal-evaluation", { goalId: goal.goalId, model: answer?.model, decision: repeated ? "repeated-action" : answer?.decision ?? "unavailable", reason: answer?.reason, action, wake: answer?.decision === "wait" ? answer.wake : undefined, failures, fallback: fallback && !repeated ? (defaultResume ? "default-resume" : recheck ? "blocker-recheck" : "handoff") : undefined, at: Date.now() });
+				if (recheck && !repeated) api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "blocker-recheck", blockers: hardBlockers.map(blocker => ({ id: blocker.id, disposition: blocker.disposition, workItemIds: blocker.workItemIds })) });
+				if (answer?.decision === "stop" && !canResume && !hasPendingJobs) stopped = true;
+				if (hasPendingJobs && (!action || repeated)) {
 					const live = [...jobs.entries()].filter(([id, job]) => job.state === "pending" && !rechecked.has(id));
 					const named = live.filter(([, job]) => answer?.decision === "wait" && answer.wake.includes(job.id));
 					const targets = (named.length ? named : live).map(([, job]) => job);
@@ -249,7 +272,7 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 						waitTimer.unref?.();
 					}
 				}
-				if (!answer && !fallback && ![...jobs.values()].some(job => job.state === "pending")) {
+				if (!answer && !fallback && !hasPendingJobs) {
 					if (!evaluationRetryUsed && ready.length) {
 						evaluationRetryUsed = true;
 						api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "evaluator-backoff", retryAt: Date.now() + GOAL_EVALUATOR_RETRY_MS });
@@ -264,10 +287,11 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 					}
 				} else if (answer) evaluationRetryUsed = false;
 				if (!key || repeated) return;
-				routesTried.add(key);
-				if (fallback) usedHandoffFallback = true;
-				reason = `Proposed next action: ${action}. Reason: ${answer?.reason ?? "Evaluator unavailable; resume the explicit checkpoint action if still authorized and unblocked."}`;
-				await maybeQueueGoalContinuation(api, continuationState, ctx, Date.now(), fallback ? "handoff" : "evaluator");
+				if (recheck) blockerRechecked.add(blockerSignature);
+				else routesTried.add(key);
+				if (handoff) usedHandoffFallback = true;
+				reason = `Proposed next action: ${action}. Reason: ${answer?.reason ?? "Continue only within the active goal's existing authorization."}`;
+				await maybeQueueGoalContinuation(api, continuationState, ctx, Date.now(), defaultResume ? "evaluator-fallback" : recheck ? "blocker-recheck" : handoff ? "handoff" : "evaluator");
 			}).catch(() => {
 				if (!run.signal.aborted) api.appendEntry("goal-scheduler", { goalId: goal.goalId, state: "evaluation-failed" });
 			}).finally(() => {
@@ -334,15 +358,18 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		const goal = loadGoalState(ctx);
 		if (!isActiveGoal(goal)) return;
 		const prompt = event.prompt ?? "";
-		if (isContinuationPrompt(prompt) || prompt.startsWith(GOAL_START_PREFIX)) engaged = goal.goalId;
+		ordinaryTurn = ordinaryPrompt === prompt;
+		ordinaryPrompt = undefined;
+		if (!ordinaryTurn && (isContinuationPrompt(prompt) || prompt.startsWith(GOAL_START_PREFIX))) engaged = goal.goalId;
 		if (deferredStart && prompt.startsWith(GOAL_START_PREFIX)) deferredStart = undefined;
 		// Results that finished while a continuation was already queued are noticed
 		// here once, instead of causing a second wake after this run.
-		const late = engaged === goal.goalId ? completedJobsNotice(takeCompletedJobs()) : "";
-		const hint = [reason, late].filter(Boolean).join(" ") || undefined;
-		reason = undefined;
+		const executing = !ordinaryTurn && engaged === goal.goalId;
+		const late = executing ? completedJobsNotice(takeCompletedJobs()) : "";
+		const hint = executing ? [reason, late].filter(Boolean).join(" ") || undefined : undefined;
+		if (executing) reason = undefined;
 		return {
-			...(engaged === goal.goalId && event.systemPrompt !== undefined && !event.systemPrompt.includes(GOAL_EXECUTION_SYSTEM_PROMPT)
+			...(executing && event.systemPrompt !== undefined && !event.systemPrompt.includes(GOAL_EXECUTION_SYSTEM_PROMPT)
 				? { systemPrompt: `${event.systemPrompt}\n\n${GOAL_EXECUTION_SYSTEM_PROMPT}` } : {}),
 			message: {
 				customType: GOAL_CONTEXT_CUSTOM_TYPE,
@@ -380,8 +407,36 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		}
 		// Schedule follow-ups perform their own work without starting or replacing a goal chain.
 		if (event.source === "extension" && /^\[定时任务触发：schedule-\d+ · (?:一次性任务|周期任务)\]\r?\n/u.test(text)) return;
-		if (!isContinuationPrompt(text)) { continuationState.queuedGoalId = undefined; reset(); return; }
-		if (event.source === "interactive" || event.source === "rpc") { continuationState.queuedGoalId = undefined; reset(); return; }
+		if (event.source === "interactive" || event.source === "rpc") {
+			const goal = loadGoalState(ctx);
+			if (!isActiveGoal(goal) || !text.trim()) return;
+			const stopLocally = isExplicitGoalStop(text);
+			const continueLocally = !stopLocally && isContinuationPrompt(text);
+			control?.abort();
+			const leaf = ctx.sessionManager.getLeafId();
+			const intent = continueLocally || stopLocally || !models().length ? undefined : await evaluateGoal(
+				models(), JSON.stringify({ userMessage: text.slice(0, 4000) }),
+				AbortSignal.timeout(5_000), askGoalEvaluator(ctx, true), 1_500,
+			);
+			if (ctx.sessionManager.getLeafId() !== leaf || loadGoalState(ctx)?.goalId !== goal.goalId) return;
+			if (continueLocally || intent?.decision === "continue") {
+				continuationState.queuedGoalId = undefined;
+				reset();
+				engaged = goal.goalId;
+				api.appendEntry("goal-input-intent", { goalId: goal.goalId, decision: "continue", model: intent?.model });
+			} else {
+				if (stopLocally || intent?.decision === "stop") {
+					continuationState.queuedGoalId = undefined;
+					reset();
+					stopped = true;
+					updateContinuationStatus(ctx, continuationState);
+					api.appendEntry("goal-input-intent", { goalId: goal.goalId, decision: "stop", model: intent?.model });
+				}
+				if (!event.streamingBehavior) ordinaryPrompt = text;
+			}
+			return;
+		}
+		if (!isContinuationPrompt(text)) return;
 		const goal = loadGoalState(ctx);
 		if (!isActiveGoal(goal) || continuationState.queuedGoalId !== goal.goalId) return;
 		if (api.getFlag?.("goal-continuation") === false) return { action: "handled" };
@@ -393,8 +448,7 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (event, ctx) => {
 		const last = [...event.messages].reverse().find(m => m.role === "assistant");
 		if (last?.stopReason === "aborted") deferredStart = undefined;
-		if (!engaged) return;
-		if (!last) return;
+		if (!engaged || ordinaryTurn || !last) return;
 		lastRunOutcome = last.stopReason === "aborted" || last.stopReason === "error" ? last.stopReason : "success";
 		if (lastRunOutcome !== "success") return;
 		providerRetryUsed = retryDue = false;
@@ -632,6 +686,12 @@ export function hydrateGoalContinuationState(state: GoalContinuationState, _ctx:
 
 function getInputText(event: GoalInputEvent): string {
 	return event.text ?? event.input ?? event.prompt ?? "";
+}
+
+function isExplicitGoalStop(prompt: string): boolean {
+	const text = prompt.trim().normalize("NFKC");
+	if (/[?？]/u.test(text)) return false;
+	return /^(?:暂停|停止|取消)(?:当前|这个|该)?(?:目标|研究|自动续跑)|^(?:不要|不用|不必|别|先别|暂不|先不)\s*继续(?:目标|研究|推进|执行)|^(?:do not|don['’]t)\s+(?:resume|continue)(?:\s+the goal)?\b|^(?:stop|pause)(?:\s+(?:the |this )?goal|\s+and explain|[.!]?$)/iu.test(text);
 }
 
 function isContinuationPrompt(prompt: string): boolean {

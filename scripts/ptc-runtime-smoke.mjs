@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const runner = fileURLToPath(new URL("../packages/pi-tsien-code-mode/src/runtime-child.mjs", import.meta.url));
+const { compileProgram } = await import("../packages/pi-tsien-code-mode/src/typescript-strip.ts");
 const child = spawn(process.execPath, [
   "--permission",
   "--no-warnings",
@@ -67,8 +68,9 @@ child.stdin.write(`${JSON.stringify({
   type: "run",
   maxCalls: 4,
   maxComputeTimeMs: 100,
-  code: `
-    const [text, files] = await Promise.all([
+  // The host erases types; the child only ever sees plain JavaScript.
+  code: compileProgram(`
+    const [text, files]: [string, string] = await Promise.all([
       tools.read({ path: "README.md" }),
       tools.find({ path: ".", pattern: "*.ts" }),
     ]);
@@ -77,5 +79,5 @@ child.stdin.write(`${JSON.stringify({
       files: files.split("\\n").length,
       processType: typeof process,
     };
-  `,
+  `),
 })}\n`);

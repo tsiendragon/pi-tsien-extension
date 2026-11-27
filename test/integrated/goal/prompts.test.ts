@@ -45,8 +45,9 @@ describe("goal prompt rendering", () => {
 	it("renders agent drafting prompt with unattended propose_goal_draft instructions", () => {
 		const prompt = renderGoalAgentDraftingPrompt("Review the deep branch and flag risks, no fixes yet");
 
-		expect(prompt).toContain("Call the propose_goal_draft tool exactly once");
-		expect(prompt).toContain("Do not answer in prose");
+		expect(prompt).toContain("revise and retry at most once");
+		expect(prompt).toContain("For other goals omit optimization entirely");
+		expect(prompt).toContain("If essential information is missing or the retry fails");
 		expect(prompt).toContain("Do not call create_goal for this drafting flow");
 		expect(prompt).toContain("This drafting turn is unattended");
 		expect(prompt).toContain("pass autoApprove: true and startImmediately: true");

@@ -64,11 +64,13 @@ if (fallbackPlain.source !== "fallback" || fallbackPlain.normalizeJsonFence !== 
 
 const outerBudget = createBudgetState(readPolicy);
 for (let index = 0; index < readPolicy.maxOuterRunCodeCalls; index += 1) reserveOuterRunCode(outerBudget);
-expectPolicyError(() => reserveOuterRunCode(outerBudget), "PTC_BUDGET_EXCEEDED");
+reserveOuterRunCode(outerBudget);
+if (outerBudget.outerRunCodeCalls !== readPolicy.maxOuterRunCodeCalls + 1) throw new Error("Outer call count is advisory");
 
 const tokenBudget = createBudgetState(readPolicy);
 recordAssistantTokens(tokenBudget, readPolicy.maxAssistantOutputTokens + 1);
-expectPolicyError(() => assertBudgetAvailable(tokenBudget), "PTC_BUDGET_EXCEEDED");
+assertBudgetAvailable(tokenBudget);
+if (!(budgetSnapshot(tokenBudget)?.advisories as string[]).some(text => text.startsWith("output tokens"))) throw new Error("Output threshold should be advisory");
 
 const runBudgetState = createBudgetState(readPolicy);
 recordRunUsage(runBudgetState, { computeTimeMs: 7.6, wallTimeMs: 42.4 });

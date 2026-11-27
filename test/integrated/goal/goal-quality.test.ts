@@ -50,9 +50,13 @@ describe("goal outcome quality gate", () => {
 		);
 	});
 
-	it("rejects optimization without a metric or target", () => {
-		const issues = codes("优化 Frank-Wolfe 的热启动算法。", ["在 CPU 上完成可复现比较"]);
-		expect(issues).toContain("optimization_without_target");
+	it("does not infer a required optimization contract from a keyword in a qualitative goal", () => {
+		const issues = auditGoalDraft({
+			objective: "改进启动提示：缺少必要配置时给出配置项名称。",
+			acceptanceCriteria: ["缺少配置时，错误消息列出缺失的配置项，相关回归测试通过。"],
+		});
+		expect(hasBlockingGoalQualityIssues(issues)).toBe(false);
+		expect(issues).toContainEqual(expect.objectContaining({ code: "optimization_without_target", severity: "warning" }));
 	});
 
 	it("rejects open-ended exploration without a quality bar", () => {
@@ -95,6 +99,7 @@ describe("goal outcome quality gate", () => {
 					severity: "error",
 					field: "plan",
 					code: "process_only_criterion",
+					path: "milestones[0].doneWhen[0]",
 				}),
 			]),
 		);

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `pi-tsien-code-mode@0.1.3`：`run_code` 不再要求 Node 构建自带 TypeScript 支持。类型擦除从沙箱子进程搬到**宿主进程**（新增 `amaro`/SWC strip-only，与 Node 内置擦除同源；不可用时回退到 `node:module.stripTypeScriptTypes`），子进程只接收纯 JavaScript，`vm` + `--permission` + 空环境的沙箱约束不变。修复的是这类构建：共享 `libnode` 的发行版包（实测 `/usr/bin/node` v22.22.1，`process.config.variables.node_use_amaro === false`）会让子进程的 `stripTypeScriptTypes` 抛 `Node.js is not compiled with TypeScript support`，导致探测失败、`run_code` 整个被禁用；同一构建此前 `tsx` 也不可用。附带改进：探测失败提示现在带具体原因（子进程退出码 / stderr 末行 / 擦除器缺失说明），不再只有一句「probe failed」；编译错误带行号与代码片段；原本因缺少原生擦除而被跳过的 3 个端到端用例恢复执行。
+
+- `pi-tsien-goal@0.1.3`：草稿评审不再可能把一轮永久挂住——`propose_goal_draft` 在非 TUI 模式（`rpc` / `json` / `print`）不再打开对话框，交互评审 10 分钟无应答则自动取消并返回结果（`reason: review_timeout`，附提醒），因此"工具永不返回 → 会话一直 running → TUI 空转吃满一个核"的链条被切断（真实现场：一个 36 MB / 8893 条记录的会话在 `propose_goal_draft` 上 100% CPU 空转 14 小时以上）。
+
+- `pi-tsien-goal@0.1.3`：`/goal` 的无人值守草拟不再依赖模型记得传 `autoApprove: true`——命令现在自己登记一份会话内的草拟意图，`propose_goal_draft` 即使没收到该参数也按意图直接保存并启动；意图 10 分钟后失效，保存成功后即清除，质量门驳回后的重试仍算同一轮。此前漏传一次参数就会退回评审对话框（没人盯着就永远不返回），结果是**目标根本没被创建**，自然也不会自动续跑（真实案例：`/goal.按照上面的继续推进` 的草拟调用停在 `propose_goal_draft` 上，会话里没有对应 toolResult，`pi-goal.sqlite` 也没有新目标）。
+
+- `pi-tsien-goal@0.1.3`：`uncertain` 不再静默停摆——评估模型给出 `uncertain`、且目标只剩 `needs_user` / `external_wait` 硬阻塞（没有可执行项）时，仍派发一轮**受限复核**：只允许核对阻塞是否仍然成立、必要时带证据解除或替代它，并明确禁止执行被阻塞的工作、禁止重复向用户提同一请求；同一组阻塞只复核一次，阻塞集合变化（解除 / 新增 / 替换）后才再次复核，`blocker-rechecked` 签名同时记入 `goal-scheduler` 便于审计。`continue`、`wait`、`stop` 的既有语义不变：`wait` 仍按明确的唤醒条件等待，`stop` 仍可停止。此前这类目标会停在 `active` 但不再产生任何回合（真实案例：目标因为“需要用户提高沙箱内存预算”的 `needs_user` 阻塞连续四次评估全部无动作，其中一次是 `uncertain`）。
+
 - `pi-tsien-side-chat@0.1.2`（界面与交互）：侧聊浮窗按重要性重排信息——表头改成中文并拆成三行（标题 / `只读 · 模型 · 主上下文 N 条（每次提问前自动同步）` / 状态 + 滚动位置，生成中直接显示正在调用的只读工具）；底部按键提示改成**按当前状态只列出能用的键**（生成中显示 `Esc 取消`，有回答后才出现 `c 复制回答`）；空状态文案改成能直接照做的例子。bridge 同时支持「还没启动就问」——启动期间到达的 `submit` 会等启动完成再执行（原先会因控制器尚不存在而报错）。`pi-dashboard` 的 BTW 面板同步重做（表头/角色中文名、对话区可滚动并自动跟随最新一条、逐条「复制」、关闭后仍可直接提问、主会话回答中不再锁住输入，修掉「正在回答时按 Enter 会清空已输入的问题」），详见 pi-dashboard 仓库的改动。
 
 - `pi-tsien-live-session`：新增只读的 `get_context` 命令与 `context_view` 能力——dashboard 的「上下文」窗口据此展示**这个会话到底把什么发给了模型**。数据有两个来源：`before_provider_request` 钩子（新增，只观察、照原样返回 `undefined`，不改写请求）留下最近一次真实 provider 载荷，按 OpenAI Responses / Chat Completions、Anthropic Messages、Google、Bedrock Converse 归一；没有载荷时（刚启动 / 刚 reload）用当前系统提示 + 已启用工具 + 会话分支重建一份近似视图，并在返回里用 `source: "reconstructed"` 如实区分。返回内容含系统提示（按 pi 标记拆成项目说明文件 / 技能清单 / 准则 / 基础提示）、工具定义、消息序列（含工具调用与结果、各类图片只计数不内联）、以及模型 / 推理强度等请求字段，每项带真实字符数与估算 token（ASCII 4 字符≈1 token、中日韩 1 字符≈1 token）。正文按总量配额裁剪（系统提示 256K 字符、逐项 48K、总量约 1.5M，超出后逐项降为预览），并在每次返回前按 6 MiB 上限逐级收缩预算，避免超过 broker 的 8 MiB 帧限制把连接掐断；被截断的项带 `truncated` 标记，`chars` 仍是真实值。会话切换（新建 / 分叉 / 切会话）会丢弃上一会话的载荷，不让两个会话混在同一份视图里。返回带 `version` 字段：旧版扩展不返回它，dashboard 因此能把「缺字段」和「真的是空」分开说，而不是把缺失当成没有内容。

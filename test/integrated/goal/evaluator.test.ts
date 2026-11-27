@@ -6,6 +6,7 @@ import { saveGoalState } from "pi-tsien-goal/src/state.ts";
 describe("goal evaluator", () => {
 	it("falls back on a quota error and invalid decision in configured order", async () => {
 		const models = evaluatorModels(DEFAULT_GOAL_EVALUATORS);
+		expect(models).toEqual(["openai-codex/gpt-6-luna", "dashscope/deepseek-v4.1-flash", "anthropic/claude-haiku-4-5"]);
 		const ask = vi.fn().mockRejectedValueOnce(new Error("quota")).mockResolvedValueOnce('{"decision":"wait","reason":"no wake condition"}').mockResolvedValueOnce('{"decision":"continue","reason":"new evidence","action":"collect result"}');
 		const answer = await evaluateGoal(models, "{}", new AbortController().signal, ask);
 		expect(ask.mock.calls.map(call => call[0])).toEqual(models);

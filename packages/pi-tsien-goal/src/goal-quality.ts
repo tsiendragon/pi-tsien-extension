@@ -22,6 +22,8 @@ export interface GoalQualityIssue {
 	field: GoalQualityField;
 	/** Zero-based index for a criterion or constraint. */
 	index?: number;
+	/** Exact tool input path (zero-based), when the issue is nested. */
+	path?: string;
 	message: string;
 }
 
@@ -81,24 +83,13 @@ export function auditGoalDraft(input: GoalQualityInput): GoalQualityIssue[] {
 		const planErrors = validateGoalPlanDraft(input.plan);
 		issues.push(...planErrors.map((message) => error("invalid_plan", "plan", message)));
 		input.plan?.milestones.forEach((milestone, index) => {
-			for (const check of milestone.doneWhen) {
-				const blocking = auditCriterion(check, 0).filter((issue) => issue.severity === "error");
-				issues.push(
-					...blocking.map((issue) =>
-						error(issue.code, "plan", `Milestone ${index + 1} doneWhen: ${issue.message}`),
-					),
-				);
-			}
-		});
-		input.plan?.milestones.forEach((milestone, index) => {
-			for (const action of milestone.actions ?? []) {
-				const blocking = auditCriterion(action, 0).filter((issue) => issue.severity === "error");
-				issues.push(
-					...blocking.map((issue) =>
-						error(issue.code, "plan", `Milestone ${index + 1} action: ${issue.message}`),
-					),
-				);
-			}
+			milestone.doneWhen.forEach((check, checkIndex) => {
+				for (const issue of auditCriterion(check, checkIndex)) {
+					if (issue.severity === "error") {
+						issues.push({ ...error(issue.code, "plan", issue.message), path: `milestones[${index}].doneWhen[${checkIndex}]` });
+					}
+				}
+			});
 		});
 	}
 
@@ -158,7 +149,7 @@ export function formatGoalQualityIssues(issues: readonly GoalQualityIssue[]): st
 	return issues
 		.map((issue) => {
 			const location =
-				issue.index === undefined ? issue.field : `${issue.field}[${issue.index + 1}]`;
+				issue.path ?? (issue.index === undefined ? issue.field : `${issue.field}[${issue.index}]`);
 			return `- [${issue.severity}] ${location}: ${issue.message}`;
 		})
 		.join("\n");
@@ -217,10 +208,10 @@ function auditObjective(objective: string): GoalQualityIssue[] {
 
 	if (OPTIMIZATION.test(objective) && !METRIC.test(objective)) {
 		issues.push(
-			error(
+			warning(
 				"optimization_without_target",
 				"objective",
-				"An optimization goal needs a metric, a baseline, and a target value (or a clearly named target level).",
+				"If the request is for measurable optimization, provide optimization with a metric, baseline, and target. Otherwise use a checkable qualitative outcome.",
 			),
 		);
 	}

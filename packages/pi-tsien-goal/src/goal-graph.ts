@@ -135,40 +135,36 @@ export function goalWorkOverview(goal: GoalState): GoalWorkOverview {
 }
 
 export function allPathsBlocked(goal: GoalState): boolean {
-	const items = getWorkItems(goal);
-	if (items.every((item) => item.state === "done" || item.state === "deferred")) return false;
-	if (readyWorkItems(goal).length > 0) return false;
-	if (isHierarchicalGoal(goal)) {
-		const current = currentMilestone(goal);
-		// A milestone without actions is unplanned, not blocked: the agent should add the next action.
-		if (current && !items.some((item) => item.horizon === "short" && item.parentId === current.id)) {
-			return false;
-		}
-	}
-	const hardBlocked = new Set(
+	const unfinished = getWorkItems(goal).filter((item) => item.state !== "done" && item.state !== "deferred");
+	if (!unfinished.length || readyWorkItems(goal).length > 0) return false;
+
+	// Propagate only from real hard blockers on unfinished work. A finished
+	// prerequisite cannot block a milestone, even when it has no ready actions.
+	const unfinishedIds = new Set(unfinished.map((item) => item.id));
+	const blocked = new Set(
 		getOpenBlockers(goal)
 			.filter(isHardBlocker)
-			.flatMap((blocker) => blocker.workItemIds),
+			.flatMap((blocker) => blocker.workItemIds)
+			.filter((id) => unfinishedIds.has(id)),
 	);
-	const byId = new Map(items.map((item) => [item.id, item]));
-	const covered = new Map<string, boolean>();
-	const isCovered = (item: WorkItem, visiting = new Set<string>()): boolean => {
-		if (item.state === "done" || item.state === "deferred") return true;
-		if (hardBlocked.has(item.id)) return true;
-		if (visiting.has(item.id)) return false;
-		const nextVisiting = new Set(visiting).add(item.id);
-		const result =
-			item.dependsOn.length > 0 &&
-			item.dependsOn.every((dependency) => {
-				const parent = byId.get(dependency);
-				return parent !== undefined && isCovered(parent, nextVisiting);
-			});
-		covered.set(item.id, result);
-		return result;
-	};
-	return items
-		.filter((item) => item.state !== "done" && item.state !== "deferred")
-		.every((item) => covered.get(item.id) ?? isCovered(item));
+	const dependents = new Map<string, string[]>();
+	for (const item of unfinished) {
+		for (const dependency of item.dependsOn) {
+			const list = dependents.get(dependency);
+			if (list) list.push(item.id);
+			else dependents.set(dependency, [item.id]);
+		}
+	}
+	const pending = [...blocked];
+	for (let i = 0; i < pending.length; i++) {
+		// All prerequisites are required, so any blocked prerequisite suffices.
+		for (const id of dependents.get(pending[i]) ?? []) {
+			if (blocked.has(id)) continue;
+			blocked.add(id);
+			pending.push(id);
+		}
+	}
+	return blocked.size === unfinished.length;
 }
 
 export function chooseExplorableBlocker(goal: GoalState): GoalBlocker | undefined {

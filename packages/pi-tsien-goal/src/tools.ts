@@ -10,6 +10,7 @@ import {
 } from "./commands.ts";
 import { normalizeResearchFeedback } from "./research-feedback.ts";
 import { loadGoalState, saveGoalState, validateObjective } from "./state.ts";
+import { clearDraftIntent, pendingDraftIntent } from "./draft-intent.ts";
 import { applyGoalUi, renderGoalStatus } from "./ui.ts";
 
 import { auditGoalDraft, formatGoalQualityIssues, hasBlockingGoalQualityIssues } from "./goal-quality.ts";
@@ -287,17 +288,17 @@ export const updateGoalGraphParams = Type.Object(
 );
 
 export const proposeGoalDraftPromptSnippet =
-	"Use propose_goal_draft to draft a reviewable /goal proposal exactly once; do not persist it directly.";
+	"Use propose_goal_draft to draft a /goal proposal; do not persist it directly.";
 
 export const proposeGoalDraftPromptGuidelines = [
 	"Preserve the user's meaning and boundaries; do not invent unrelated scope or silently drop constraints.",
-	"The objective must be a verifiable end state: a proved/disproved statement, a metric target with baseline, or an exploration quality bar.",
-	"Provide 2-4 ordered milestones with doneWhen checks. Put 1-3 concrete actions under the first milestone; later milestones stay locked.",
+	"The objective must be a verifiable end state: a concrete fix or deliverable, a proved/disproved statement, a metric target with baseline, or an exploration quality bar.",
+	"Provide 2-4 ordered milestones with doneWhen checks. Put 1-3 concrete actions under the first milestone; later milestones stay locked. Actions are concrete steps, not outcome checks; doneWhen checks are outcomes.",
 	"acceptanceCriteria are outcome checks, not working rules. Move recording, reporting, independent review, audit, and do-not-submit rules to constraints.",
-	"For an algorithm speed/accuracy/memory/cost request, set optimization {metric, baseline, target, guardrails}; the objective is a single measurable target, not paper completion. Allow any method in constraints.",
+	"For a measurable optimization request, set optimization {metric, baseline, target, guardrails}. For other goals omit optimization entirely; no numeric metric is required.",
 	"Do not add escape clauses that let the goal close when the result is not achieved.",
 	"Do not leave acceptanceCriteria empty; if details are uncertain, state the uncertainty rather than creating unrelated checks.",
-	"Call it once instead of replying with the draft in prose. Use create_goal only for an already-authorized new goal.",
+	"Submit the draft instead of describing it in prose. If unattended validation rejects it, revise and retry at most once without changing scope. Ask the user if essential information is missing or the retry fails. Use create_goal only for an already-authorized new goal.",
 ] as const;
 
 export type CreateGoalToolInput = Static<typeof createGoalParams>;
@@ -309,7 +310,10 @@ export type UpdateGoalGraphToolInput = Static<typeof updateGoalGraphParams>;
 export type UpdateGoalToolInput = Static<typeof updateGoalParams>;
 
 interface GoalToolContext extends Partial<GoalWorkflowContext> {
-	sessionManager: { getBranch(): Array<{ type: string; customType?: string; data?: unknown }> };
+	sessionManager: {
+		getBranch(): Array<{ type: string; customType?: string; data?: unknown }>;
+		getSessionId?: () => string;
+	};
 }
 
 export type GoalToolResult = {
@@ -526,6 +530,37 @@ export function executeCreateGoal(
 	};
 }
 
+export const GOAL_DRAFT_REVIEW_TIMEOUT_MS = 10 * 60_000;
+
+const DRAFT_REVIEW_TIMEOUT = Symbol("goal-draft-review-timeout");
+
+/**
+ * A draft review waits on a terminal dialog. Without a deadline a turn whose draft
+ * was not explicitly unattended can stay running forever — the tool never returns,
+ * so the whole session sits in "running" and repaints an animation loop (observed:
+ * a 36 MB session pinned one core for hours while the UI showed the draft tool).
+ */
+async function withDraftReviewTimeout<T>(pending: Promise<T>): Promise<T | typeof DRAFT_REVIEW_TIMEOUT> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			pending,
+			new Promise<typeof DRAFT_REVIEW_TIMEOUT>((resolve) => {
+				timer = setTimeout(() => resolve(DRAFT_REVIEW_TIMEOUT), GOAL_DRAFT_REVIEW_TIMEOUT_MS);
+				timer.unref?.();
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+/** Interactive review needs a terminal: rpc/json/print modes cannot show the dialog. */
+function canReviewGoalDraft(ctx: GoalToolContext): boolean {
+	if (!ctx.hasUI || !ctx.ui?.select || !ctx.ui.editor) return false;
+	return ctx.mode === undefined || ctx.mode === "tui";
+}
+
 export async function executeProposeGoalDraft(
 	params: ProposeGoalDraftToolInput,
 	ctx: GoalToolContext,
@@ -535,9 +570,12 @@ export async function executeProposeGoalDraft(
 	if (!normalized.ok) throw goalToolError(normalized.message, normalized.code);
 
 	// Unattended /goal command drafts save and start without dialogs. The model
-	// only sets autoApprove when the command drafting prompt asked for it.
-	const autoApprove = params.autoApprove === true;
-	const replan = params.replan === true;
+	// only sets autoApprove when the command drafting prompt asked for it, so the
+	// command's recorded intent is honored as well — a single omitted flag must not
+	// leave the draft waiting for a review dialog nobody is watching.
+	const intent = pendingDraftIntent(ctx);
+	const autoApprove = params.autoApprove === true || intent !== undefined;
+	const replan = params.replan === true || intent?.replan === true;
 	const qualityIssues = auditGoalDraft({ ...normalized.proposal, requirePlan: autoApprove });
 	if (hasBlockingGoalQualityIssues(qualityIssues) && autoApprove) {
 		return {
@@ -547,19 +585,18 @@ export async function executeProposeGoalDraft(
 					text: [
 						"Goal draft rejected by the outcome quality gate. No goal was saved.",
 						formatGoalQualityIssues(qualityIssues),
-						"Revise the objective and acceptance criteria so they name the verifiable end result; move process rules to constraints.",
+						"Fix the flagged fields and retry at most once without changing scope or command flags. If essential information is missing or this was already a retry, ask the user instead.",
 					].join("\n"),
 				},
 			],
 			details: { status: "rejected", reason: "goal_quality", issues: qualityIssues, goal: null },
-			terminate: true,
 		};
 	}
 	if (!autoApprove && qualityIssues.length > 0) {
 		ctx.ui?.notify(formatGoalQualityIssues(qualityIssues), "warning");
 	}
 
-	if (!autoApprove && (!ctx.hasUI || !ctx.ui?.select || !ctx.ui.editor)) {
+	if (!autoApprove && !canReviewGoalDraft(ctx)) {
 		return {
 			content: [
 				{
@@ -611,7 +648,16 @@ export async function executeProposeGoalDraft(
 
 	const review = autoApprove
 		? { proposal: normalized.proposal, start: true }
-		: await reviewGoalProposal(ctx as GoalWorkflowContext, normalized.proposal);
+		: await withDraftReviewTimeout(reviewGoalProposal(ctx as GoalWorkflowContext, normalized.proposal));
+	if (review === DRAFT_REVIEW_TIMEOUT) {
+		const minutes = Math.round(GOAL_DRAFT_REVIEW_TIMEOUT_MS / 60_000);
+		ctx.ui?.notify(`Goal draft review timed out after ${minutes} min; no goal was saved.`, "warning");
+		return {
+			content: [{ type: "text", text: `Goal draft review timed out after ${minutes} min. No goal was saved.` }],
+			details: { status: "cancelled", reason: "review_timeout", goal: current },
+			terminate: true,
+		};
+	}
 	if (!review) {
 		return {
 			content: [{ type: "text", text: "Goal draft cancelled. No goal was saved." }],
@@ -645,12 +691,14 @@ export async function executeProposeGoalDraft(
 	if (!next) {
 		throw goalToolError("Goal changed before saving. No goal was saved.", "stale_goal");
 	}
+	clearDraftIntent(ctx);
 
 	return {
 		content: [{ type: "text", text: `Saved goal draft and queued Start: ${next.objective}` }],
 		details: {
 			status: "saved",
 			action,
+			approvedBy: params.autoApprove === true ? "draft-flag" : intent ? "command-intent" : "review",
 			started: next.status === "active",
 			goal: next,
 			draftId: normalized.draftId,

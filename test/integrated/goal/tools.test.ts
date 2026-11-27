@@ -7,6 +7,7 @@ import {
 	executeCreateGoal,
 	executeGetGoal,
 	executeProposeGoalDraft,
+	GOAL_DRAFT_REVIEW_TIMEOUT_MS,
 	executeUpdateGoalGraph,
 	executeUpdateGoalProgress,
 	executeUpdateGoal,
@@ -26,6 +27,7 @@ import {
 	updateGoalParams,
 } from "pi-tsien-goal/src/tools.ts";
 import { saveGoalState } from "pi-tsien-goal/src/state.ts";
+import { markDraftIntent, resetDraftIntents } from "pi-tsien-goal/src/draft-intent.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { GoalStateEntry } from "pi-tsien-goal/src/types.ts";
 
@@ -411,6 +413,106 @@ describe("goal tool execution", () => {
 		expect(latestGoalEntry(stale.branch).state?.objective).toBe("Concurrent goal");
 	});
 
+	it("honors a recorded /goal command intent when the model omits autoApprove", async () => {
+		resetDraftIntents();
+		const { pi, ctx, branch, ui } = createHarness();
+		const sendUserMessage = vi.fn();
+		markDraftIntent(ctx, { replan: false });
+		const result = await executeProposeGoalDraft(
+			{
+				objective: "Unattended goal via command intent",
+				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "First milestone", doneWhen: ["first check passes"], actions: ["Run the first check"] },
+					{ title: "Second milestone", doneWhen: ["second check passes"] },
+				],
+				startImmediately: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage },
+		);
+		expect(ui.select).not.toHaveBeenCalled();
+		expect(ui.confirm).not.toHaveBeenCalled();
+		expect(latestGoalEntry(branch).state?.objective).toBe("Unattended goal via command intent");
+		expect(sendUserMessage).toHaveBeenCalledWith("Start working toward the active goal now.", { deliverAs: "followUp" });
+		expect(result.details).toMatchObject({ status: "saved", action: "create", approvedBy: "command-intent" });
+	});
+
+	it("ignores an expired command intent and falls back to review", async () => {
+		resetDraftIntents();
+		const { pi, ctx } = createHarness();
+		markDraftIntent(ctx, { replan: false }, Date.now() - 11 * 60_000);
+		(ctx as { hasUI: boolean }).hasUI = false;
+		const result = await executeProposeGoalDraft(
+			{ objective: "Draft after the command intent expired", acceptanceCriteria: ["criterion"] },
+			ctx,
+			pi,
+		);
+		expect(result.details).toMatchObject({ status: "cancelled", reason: "review_ui_unavailable" });
+	});
+
+	it("consumes the command intent after one unattended save", async () => {
+		resetDraftIntents();
+		const { pi, ctx, branch } = createHarness();
+		const sendUserMessage = vi.fn();
+		markDraftIntent(ctx, { replan: false });
+		const first = await executeProposeGoalDraft(
+			{
+				objective: "Goal from the command intent",
+				acceptanceCriteria: ["criterion"],
+				milestones: [
+					{ title: "First milestone", doneWhen: ["first check passes"], actions: ["Run the first check"] },
+					{ title: "Second milestone", doneWhen: ["second check passes"] },
+				],
+			},
+			ctx,
+			{ ...pi, sendUserMessage },
+		);
+		expect(first.details).toMatchObject({ status: "saved", approvedBy: "command-intent" });
+		expect(latestGoalEntry(branch).state?.objective).toBe("Goal from the command intent");
+		(ctx as { hasUI: boolean }).hasUI = false;
+		const second = await executeProposeGoalDraft(
+			{ objective: "Later manual draft", acceptanceCriteria: ["criterion"] },
+			ctx,
+			pi,
+		);
+		expect(second.details).toMatchObject({ status: "cancelled", reason: "review_ui_unavailable" });
+	});
+
+	it("does not wait for a review dialog outside tui mode", async () => {
+		resetDraftIntents();
+		const { pi, ctx, ui } = createHarness();
+		(ctx as { mode?: string }).mode = "rpc";
+		const result = await executeProposeGoalDraft(
+			{ objective: "Draft requested over rpc", acceptanceCriteria: ["criterion"] },
+			ctx,
+			pi,
+		);
+		expect(ui.select).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({ status: "cancelled", reason: "review_ui_unavailable" });
+	});
+
+	it("times out an unanswered review instead of leaving the turn running", async () => {
+		vi.useFakeTimers();
+		try {
+			resetDraftIntents();
+			const { pi, ctx, ui } = createHarness();
+			ui.select.mockImplementation(() => new Promise(() => {}));
+			const pending = executeProposeGoalDraft(
+				{ objective: "Draft nobody reviews", acceptanceCriteria: ["criterion"] },
+				ctx,
+				pi,
+			);
+			await vi.advanceTimersByTimeAsync(GOAL_DRAFT_REVIEW_TIMEOUT_MS + 1);
+			const result = await pending;
+			expect(result.details).toMatchObject({ status: "cancelled", reason: "review_timeout" });
+			expect(result.terminate).toBe(true);
+			expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("timed out"), "warning");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("propose_goal_draft autoApprove saves and starts without any dialog", async () => {
 		const { pi, ctx, branch, ui } = createHarness();
 		const sendUserMessage = vi.fn();
@@ -774,11 +876,11 @@ describe("goal tool execution", () => {
 		});
 	});
 
-	it("propose_goal_draft rejects an unattended draft that is only a process plan", async () => {
+	it("propose_goal_draft returns actionable errors and accepts a corrected qualitative draft", async () => {
 		const { pi, ctx, branch, ui } = createHarness();
 		const result = await executeProposeGoalDraft(
 			{
-				objective: "按规范持续推进这个项目，并定期汇报进展。",
+				objective: "修复启动提示：缺少必要配置时给出配置项名称。",
 				acceptanceCriteria: ["记录每轮进展", "更新 STATUS 文档"],
 				autoApprove: true,
 			},
@@ -788,13 +890,29 @@ describe("goal tool execution", () => {
 		expect(branch).toHaveLength(0);
 		expect(ui.select).not.toHaveBeenCalled();
 		expect(result).toMatchObject({
-			terminate: true,
 			details: { status: "rejected", reason: "goal_quality" },
 		});
+		expect(result.terminate).not.toBe(true);
 		expect(result.content?.[0]).toMatchObject({
 			type: "text",
-			text: expect.stringContaining("outcome quality gate"),
+			text: expect.stringContaining("[error] acceptanceCriteria[0]"),
 		});
+
+		const revised = await executeProposeGoalDraft(
+			{
+				objective: "修复启动提示：缺少必要配置时给出配置项名称。",
+				acceptanceCriteria: ["缺少配置时，错误消息列出缺失的配置项，相关回归测试通过。"],
+				milestones: [
+					{ title: "问题可复现", doneWhen: ["回归测试复现缺配置时没有提示的问题"], actions: ["记录当前启动输出"] },
+					{ title: "提示已修复", doneWhen: ["回归测试通过"], actions: ["记录修复后的启动输出"] },
+				],
+				autoApprove: true,
+			},
+			ctx,
+			{ ...pi, sendUserMessage: vi.fn() },
+		);
+		expect(revised).toMatchObject({ terminate: true });
+		expect(latestGoalEntry(branch).state?.objective).toContain("给出配置项名称");
 	});
 
 	it("propose_goal_draft throws for invalid model-provided draft shape before review", async () => {

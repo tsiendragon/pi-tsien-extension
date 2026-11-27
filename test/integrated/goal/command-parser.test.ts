@@ -142,7 +142,7 @@ describe("/goal command lifecycle", () => {
 		expect(pi.appendEntry).not.toHaveBeenCalled();
 		expect(branch).toHaveLength(0);
 		expect(pi.sendUserMessage).toHaveBeenCalledWith(
-			expect.stringContaining("Call the propose_goal_draft tool exactly once"),
+			expect.stringContaining("revise and retry at most once"),
 		);
 		expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("ship the feature"));
 		expect(ctx.ui.notify).toHaveBeenCalledWith(
