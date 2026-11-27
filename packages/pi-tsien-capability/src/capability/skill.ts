@@ -39,6 +39,16 @@ function renderSkill(capabilities: readonly Capability[]): string {
 		if (capability.when) lines.push(`  - 何时用：${capability.when}`);
 		const steps = capability.steps.map((step) => `${step.id}:${step.kind}`).join(", ");
 		if (steps) lines.push(`  - 步骤：${steps}`);
+		if (capability.sandbox) {
+			const grants = [
+				capability.sandbox.childProcess ? "子进程" : undefined,
+				capability.sandbox.inputFsRoots?.length
+					? `输入路径 ${capability.sandbox.inputFsRoots.join("/")}`
+					: undefined,
+				capability.sandbox.write?.length ? `写 ${capability.sandbox.write.join(",")}` : undefined,
+			].filter((entry): entry is string => entry !== undefined);
+			if (grants.length > 0) lines.push(`  - 沙箱额外授权：${grants.join("；")}`);
+		}
 		return lines.join("\n");
 	});
 
@@ -69,7 +79,8 @@ ${entries.join("\n")}
 
 ## 约束
 
-- 代码在沙箱内执行：无网络，不能读写该能力目录以外的路径
+- 代码在沙箱内执行：默认无网络、只读能力目录、只写 job 临时目录
+- 能力的额外权限必须在 \`CAPABILITY.yaml\` 的 \`sandbox\` 块里显式声明（见上「沙箱额外授权」），未声明的能力没有额外权限
 - 模型调用由宿主代理，密钥不进入沙箱
 - \`status\` 为 \`draft\` 的能力尚未人工晋升，依赖前先确认输出合理
 `;
