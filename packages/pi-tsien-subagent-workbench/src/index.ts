@@ -1418,7 +1418,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               ...(job.workflowId ? { workflowId: job.workflowId } : {}),
             },
           },
-          !handledByGoal && job.status === "failed" && activeContext.isIdle()
+          !handledByGoal && activeContext.isIdle()
             ? { triggerTurn: true, deliverAs: "followUp" }
             : { triggerTurn: false, deliverAs: "nextTurn" },
         );
