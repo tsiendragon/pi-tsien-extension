@@ -1,0 +1,8 @@
+{
+  "name": "pi-tsien-heartbeat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "会话空闲时发极低成本心跳请求刷新 prompt 缓存（复用主会话 sessionId 与上下文前缀，不写入会话历史）"
+}

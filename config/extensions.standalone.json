@@ -125,6 +125,11 @@
       "id": "pi-tsien-live-session",
       "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-live-session",
       "autoload": false
+    },
+    {
+      "id": "pi-tsien-heartbeat",
+      "source": "${PI_TSIEN_EXTENSION_ROOT}/packages/pi-tsien-heartbeat",
+      "autoload": false
     }
   ],
   "loadOrder": [
@@ -226,6 +231,10 @@
     },
     {
       "package": "pi-tsien-capability",
+      "path": "src/index.ts"
+    },
+    {
+      "package": "pi-tsien-heartbeat",
       "path": "src/index.ts"
     }
   ],

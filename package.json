@@ -40,7 +40,8 @@
       "./packages/pi-tsien-observation-pack/src/index.ts",
       "./packages/pi-tsien-trajectory-recorder/src/index.ts",
       "./packages/pi-tsien-capability/src/index.ts",
-      "./packages/pi-tsien-secret-guard/src/index.ts"
+      "./packages/pi-tsien-secret-guard/src/index.ts",
+      "./packages/pi-tsien-heartbeat/src/index.ts"
     ]
   },
   "scripts": {
