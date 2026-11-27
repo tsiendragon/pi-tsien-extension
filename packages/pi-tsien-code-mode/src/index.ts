@@ -4,6 +4,7 @@ import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path"
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { compileProgram, isTypeStripperAvailable } from "./typescript-strip.ts";
 import {
   createFindTool,
   createGrepTool,
@@ -21,6 +22,8 @@ import {
   normalizeAndValidateResult,
   normalizeFencedJsonText,
   recordAssistantTokens,
+  recordNestedUsage,
+  turnBudgetAdvisories,
   recordRunUsage,
   reserveNestedCall,
   reserveOuterRunCode,
@@ -499,23 +502,43 @@ function parseRuntimeMessage(line: string): RuntimeMessage {
   throw new Error("Invalid PTC runtime protocol message");
 }
 
-function supportsPtcRuntime(): boolean {
-  // Some Node builds export stripTypeScriptTypes but throw ERR_NO_TYPESCRIPT on use.
-  // Check the actual sandboxed child with a fixed program, not the host's API shape.
+function supportsPtcRuntime(): { ok: true } | { ok: false; reason: string } {
+  // Some Node builds export stripTypeScriptTypes but throw ERR_NO_TYPESCRIPT on use, so the host
+  // checks that a stripper actually works and then runs the sandboxed child with a fixed program
+  // whose types must be erased before it arrives.
+  if (!isTypeStripperAvailable()) {
+    return {
+      ok: false,
+      reason: "no TypeScript type stripping is available on the host (the `amaro` dependency is missing and this Node build has no built-in TypeScript support)",
+    };
+  }
+  let probeCode: string;
+  try {
+    probeCode = compileProgram("const value: number = 42; return value;");
+  } catch (error) {
+    return { ok: false, reason: `TypeScript type stripping failed: ${error instanceof Error ? error.message : String(error)}` };
+  }
   const probe = spawnSync(process.execPath, RUNTIME_ARGS, {
     env: {},
-    input: `${JSON.stringify({ type: "run", code: "const value: number = 42; return value;", allowedTools: [] })}\n`,
+    input: `${JSON.stringify({ type: "run", code: probeCode, allowedTools: [] })}\n`,
     encoding: "utf8",
     timeout: RUNTIME_PROBE_TIMEOUT_MS,
     killSignal: "SIGKILL",
     maxBuffer: MAX_PROTOCOL_BYTES,
   });
-  if (probe.error || probe.status !== 0) return false;
+  if (probe.error) return { ok: false, reason: `the sandbox child could not be started: ${probe.error.message}` };
+  if (probe.status !== 0) {
+    const stderr = `${probe.stderr ?? ""}`.trim();
+    const reported = `${probe.stdout ?? ""}`.trim().split("\n").at(-1) ?? "";
+    const detail = stderr || reported || "no output";
+    return { ok: false, reason: `the sandbox child exited with code ${probe.status}${probe.signal ? ` (signal ${probe.signal})` : ""}: ${detail.slice(-600)}` };
+  }
   try {
     const final = parseRuntimeMessage(probe.stdout.trim().split("\n").at(-1) ?? "");
-    return final.type === "done" && final.calls === 0 && final.result === 42;
-  } catch {
-    return false;
+    if (final.type === "done" && final.calls === 0 && final.result === 42) return { ok: true };
+    return { ok: false, reason: `the sandbox child returned an unexpected probe answer: ${JSON.stringify(final).slice(0, 300)}` };
+  } catch (error) {
+    return { ok: false, reason: `the sandbox child returned an unreadable probe answer: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
@@ -529,6 +552,21 @@ async function runPtcProgram(
 ): Promise<RuntimeResult> {
   if (Buffer.byteLength(code, "utf8") > MAX_CODE_BYTES) {
     throw new Error(`PTC program exceeds ${MAX_CODE_BYTES} bytes`);
+  }
+  if (!code.trim()) {
+    throw new Error("Code Mode: script compilation failed (no tools ran).\nPTC program is empty");
+  }
+
+  // Types are erased here, on the host, so the sandboxed child only ever evaluates plain
+  // JavaScript and does not depend on Node's built-in TypeScript support.
+  let compiled: string;
+  try {
+    compiled = compileProgram(code);
+  } catch (error) {
+    throw new Error(
+      `Code Mode: script compilation failed (no tools ran).\n${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
   const child = spawn(process.execPath, RUNTIME_ARGS, {
@@ -652,7 +690,7 @@ async function runPtcProgram(
 
   send({
     type: "run",
-    code,
+    code: compiled,
     maxCalls: MAX_SUB_CALLS,
     maxComputeTimeMs: computeTimeoutMs,
     allowedTools: runtimeBindings?.allowedTools ?? (fullMode ? FULL_TOOLS : READ_ONLY_TOOLS),
@@ -727,8 +765,9 @@ function renderRuntimeResult(result: RuntimeResult): string {
 
 function updateStatus(ctx: ExtensionContext, budget?: PtcBudgetState): void {
   if (!ctx.hasUI) return;
-  const calls = budget ? `${budget.outerRunCodeCalls}/${budget.policy.maxOuterRunCodeCalls}` : "0/?";
-  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `Code Mode · calls ${calls}`));
+  const advisories = budget ? turnBudgetAdvisories(budget) : [];
+  const status = `Code Mode · calls ${budget?.outerRunCodeCalls ?? 0}`;
+  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", advisories.length ? `${status} · advisory: ${advisories.join(", ")}` : status));
 }
 
 const RESULT_CONTRACT_SCHEMA = Type.Optional(Type.Object({
@@ -746,12 +785,13 @@ const RESULT_CONTRACT_SCHEMA = Type.Optional(Type.Object({
 }, { additionalProperties: false }));
 
 export default function ptcExtension(pi: ExtensionAPI): void {
-  if (!supportsPtcRuntime()) {
+  const runtimeSupport = supportsPtcRuntime();
+  if (!runtimeSupport.ok) {
     let warned = false;
     pi.on("session_start", (_event, ctx) => {
       if (warned) return;
       warned = true;
-      const message = `Code Mode (run_code) is disabled: the TypeScript sandbox probe failed under ${process.execPath} (${process.version}). Other tools are available. Restart the Pi process using a compatible Node runtime; /reload does not switch Node.`;
+      const message = `Code Mode (run_code) is disabled: the TypeScript sandbox probe failed under ${process.execPath} (${process.version}): ${runtimeSupport.reason}. Other tools are available. Restart the Pi process using a compatible Node runtime; /reload does not switch Node.`;
       if (ctx.hasUI) ctx.ui.notify(message, "warning");
       else process.stderr.write(`${message}\n`);
     });
@@ -789,6 +829,17 @@ export default function ptcExtension(pi: ExtensionAPI): void {
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const activeBudget = ensureBudget(ctx);
       reserveOuterRunCode(activeBudget);
+      const runBudget = createBudgetState(activeBudget.policy);
+      const completed: string[] = [];
+      const failed: string[] = [];
+      const notDispatched: string[] = [];
+      const withReceipts = (error: unknown): never => {
+        if (!completed.length && !notDispatched.length && failed.length <= 1) throw error;
+        const summary = (calls: string[]) => calls.length
+          ? `${calls.slice(0, 12).join(", ")}${calls.length > 12 ? ` (+${calls.length - 12} more)` : ""}`
+          : "none";
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\nNested calls in this run — succeeded: ${summary(completed)}; dispatched but failed or uncertain: ${summary(failed)}; not dispatched: ${summary(notDispatched)}. Check persisted effects before retrying only the unfinished work.`, { cause: error });
+      };
       updateStatus(ctx, activeBudget);
 
       const allowedTools = pi.getActiveTools().filter((name) => name !== TOOL_NAME);
@@ -796,26 +847,38 @@ export default function ptcExtension(pi: ExtensionAPI): void {
       const runtimeBindings: RuntimeBindings = {
         allowedTools,
         async execute(call, nestedSignal) {
-          if (!allowed.has(call.name)) throw new Error(`Code Mode tool is not active: ${call.name}`);
-          reserveNestedCall(activeBudget, call.name);
-          if (typeof toolApi.executeTool !== "function") {
-            throw new Error("Code Mode requires a Pi runtime with executeTool support");
+          const receipt = `#${call.id} ${call.name}`;
+          let dispatched = false;
+          try {
+            if (!allowed.has(call.name)) throw new Error(`Code Mode tool is not active: ${call.name}`);
+            reserveNestedCall(runBudget, call.name);
+            if (typeof toolApi.executeTool !== "function") {
+              throw new Error("Code Mode requires a Pi runtime with executeTool support");
+            }
+            dispatched = true;
+            const nested = await toolApi.executeTool(call.name, call.args, {
+              toolCallId: `${toolCallId}:code:${call.id}`,
+              signal: nestedSignal,
+            });
+            const text = textFromToolResult(nested.result);
+            if (nested.isError) throw new Error(text);
+            completed.push(receipt);
+            return truncateBindingResult(text);
+          } catch (error) {
+            (dispatched ? failed : notDispatched).push(receipt);
+            throw error;
           }
-          const nested = await toolApi.executeTool(call.name, call.args, {
-            toolCallId: `${toolCallId}:code:${call.id}`,
-            signal: nestedSignal,
-          });
-          const text = textFromToolResult(nested.result);
-          if (nested.isError) throw new Error(text);
-          return truncateBindingResult(text);
         },
       };
 
       const runStartedAt = performance.now();
       let result: RuntimeResult | undefined;
       try {
-        result = await runPtcProgram(params.code, ctx.cwd, signal, true, activeBudget, runtimeBindings);
+        result = await runPtcProgram(params.code, ctx.cwd, signal, true, runBudget, runtimeBindings);
+      } catch (error) {
+        withReceipts(error);
       } finally {
+        recordNestedUsage(activeBudget, runBudget);
         recordRunUsage(activeBudget, {
           computeTimeMs: result?.computeTimeMs,
           wallTimeMs: performance.now() - runStartedAt,
@@ -824,11 +887,13 @@ export default function ptcExtension(pi: ExtensionAPI): void {
       }
       if (!result) throw new Error("Code Mode runtime completed without a result");
 
-      const validated = normalizeAndValidateResult(
-        result.result,
-        activeBudget.policy.normalizeJsonFence,
-        params.resultContract,
-      );
+      const validated = (() => {
+        try {
+          return normalizeAndValidateResult(result.result, runBudget.policy.normalizeJsonFence, params.resultContract);
+        } catch (error) {
+          return withReceipts(error);
+        }
+      })();
       return {
         content: [{ type: "text", text: renderRuntimeResult({ ...result, result: validated.value }) }],
         details: {

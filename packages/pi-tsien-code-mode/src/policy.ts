@@ -166,9 +166,7 @@ export function resolvePtcPolicy(
       modeRecommended?.maxRunWallTimeMs ?? modeRecommended?.maxWallTimeMs,
       PTC_UNLIMITED,
     ),
-    // Keep reading the benchmark config's legacy maxTotalTokens field, but enforce it
-    // only against newly generated assistant output. Input already present in a long
-    // session is not PTC workload and must not consume this per-task budget.
+    // Legacy per-turn thresholds are retained for advisory telemetry only.
     maxAssistantOutputTokens: positiveInteger(modeRecommended?.maxTotalTokens, 60_000),
     maxTotalSubCalls: mode === "readOnly"
       ? positiveInteger(
@@ -201,9 +199,7 @@ export class PtcPolicyError extends Error {
         code,
         ...details,
         suggestedAction: code === "PTC_BUDGET_EXCEEDED"
-          ? details.budget === "runComputeTimeMs" || details.budget === "runWallTimeMs"
-            ? "Reduce this program or split it across run_code calls."
-            : "Reduce the workload or split it into a new user turn."
+          ? "This limit applies to one run_code call. Check what already ran, then split off the remaining work into a fresh call; do not replay side effects blindly."
           : "Return JSON matching resultContract, or correct the expected count/checksum values.",
       },
     }));
@@ -264,27 +260,25 @@ export function createRunBudgetError(
 
 export function assertBudgetAvailable(state: PtcBudgetState): void {
   if (state.violation) throw state.violation;
-  if (state.assistantOutputTokens > state.policy.maxAssistantOutputTokens) {
-    throw budgetError(
-      state,
-      "assistantOutputTokens",
-      state.assistantOutputTokens,
-      state.policy.maxAssistantOutputTokens,
-    );
-  }
 }
 
 export function reserveOuterRunCode(state: PtcBudgetState): void {
-  assertBudgetAvailable(state);
   state.outerRunCodeCalls += 1;
-  if (state.outerRunCodeCalls > state.policy.maxOuterRunCodeCalls) {
-    throw budgetError(
-      state,
-      "outerRunCodeCalls",
-      state.outerRunCodeCalls,
-      state.policy.maxOuterRunCodeCalls,
-    );
-  }
+}
+
+export function recordNestedUsage(turn: PtcBudgetState, run: PtcBudgetState): void {
+  turn.totalSubCalls += run.totalSubCalls;
+  turn.nestedWrites += run.nestedWrites;
+  turn.nestedRuns += run.nestedRuns;
+}
+
+export function turnBudgetAdvisories(state: PtcBudgetState): string[] {
+  return [
+    ["calls", state.outerRunCodeCalls, state.policy.maxOuterRunCodeCalls],
+    ["output tokens", state.assistantOutputTokens, state.policy.maxAssistantOutputTokens],
+    ["writes", state.nestedWrites, state.policy.maxNestedWrites],
+  ].flatMap(([name, used, threshold]) => typeof used === "number" && typeof threshold === "number" &&
+    threshold < PTC_UNLIMITED && used >= threshold * 0.8 ? [`${name} ${used}/${threshold}`] : []);
 }
 
 export function reserveNestedCall(state: PtcBudgetState, name: string): void {
@@ -334,7 +328,7 @@ export function budgetSnapshot(state: PtcBudgetState | undefined): Record<string
     model: state.policy.modelKey,
     policySource: state.policy.source,
     mode: state.policy.mode,
-    outerRunCodeCalls: { used: state.outerRunCodeCalls, limit: state.policy.maxOuterRunCodeCalls },
+    outerRunCodeCalls: { used: state.outerRunCodeCalls, advisoryThreshold: state.policy.maxOuterRunCodeCalls },
     runComputeTimeMs: {
       lastUsed: state.lastRunComputeTimeMs ?? null,
       totalUsed: state.totalRunComputeTimeMs,
@@ -347,12 +341,12 @@ export function budgetSnapshot(state: PtcBudgetState | undefined): Record<string
     },
     assistantOutputTokens: {
       used: state.assistantOutputTokens,
-      limit: state.policy.maxAssistantOutputTokens,
+      advisoryThreshold: state.policy.maxAssistantOutputTokens,
     },
-    totalSubCalls: { used: state.totalSubCalls, limit: state.policy.maxTotalSubCalls ?? null },
-    nestedWrites: { used: state.nestedWrites, limit: state.policy.maxNestedWrites ?? null },
-    nestedRuns: { used: state.nestedRuns, limit: state.policy.maxNestedRuns ?? null },
-    violated: state.violation?.details ?? null,
+    totalSubCalls: { used: state.totalSubCalls, limitPerRun: state.policy.maxTotalSubCalls ?? null },
+    nestedWrites: { used: state.nestedWrites, limitPerRun: state.policy.maxNestedWrites ?? null },
+    nestedRuns: { used: state.nestedRuns, limitPerRun: state.policy.maxNestedRuns ?? null },
+    advisories: turnBudgetAdvisories(state),
   };
 }
 

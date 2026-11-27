@@ -1,4 +1,6 @@
-import { stripTypeScriptTypes } from "node:module";
+// The host erases TypeScript types before sending a program here (see src/typescript-strip.ts), so
+// this sandbox stays independent of Node's built-in TypeScript support and only evaluates plain
+// JavaScript. `message.code` is therefore JavaScript, not TypeScript.
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import vm from "node:vm";
@@ -168,11 +170,8 @@ async function runProgram(message) {
   let script;
   try {
     if (!code.trim()) throw new Error("PTC program is empty");
-    const wrapped = `async function __ptc_main(tools, console) {\n${code}\n}`;
-    const stripped = stripTypeScriptTypes(wrapped, { mode: "strip" });
-    script = new vm.Script(`${stripped}\n__ptc_main(tools, console)`, {
-      filename: "ptc-program.ts",
-    });
+    // The host already wrapped the program in `__ptc_main` and erased its TypeScript types.
+    script = new vm.Script(code, { filename: "ptc-program.ts" });
   } catch (error) {
     compileFailures.add(error);
     throw error;
