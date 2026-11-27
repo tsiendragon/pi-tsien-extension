@@ -58,8 +58,17 @@ import { dirname, join, resolve } from "node:path";
  *        不是发送周期。这样每 TTL 窗口只发一次心跳，而不是每个 tick 发一次。
  *    TTL 查表见 MODEL_TTL_SEC / PROVIDER_TTL_SEC / MODEL_TTL_PREFIX_SEC。
  *
+ * 5. 先判"这个 provider 的缓存类型"，再谈间隔（三模型实测的结论）。
+ *    心跳只在缓存是**固定 TTL**（写入后按寿命过期、续期有效）时才有意义：
+ *      - fixed-ttl      deepseek-v4.1-flash：TTL≈45min，0.8×TTL≈36min 续期有效。
+ *      - long-retention kimi-k3.1-pro：TTL>2h（120min 等待后仍 91.8%），一般无需心跳。
+ *      - probabilistic  sol (openai-codex)：命中率由 LRU/容量/路由决定，与"写入多久"
+ *                       弱相关且非单调（5/10min 0%、15min 53.6%）；对照组实测心跳组与
+ *                       纯等待组命中率完全相同 → 心跳无效。默认**不发**，只有用户用
+ *                       PI_HEARTBEAT_TTL / PI_HEARTBEAT_INTERVAL 显式指定才强制开。
+ *
  * 环境变量：
- *   PI_HEARTBEAT=1                启用（默认关闭）
+ *   PI_HEARTBEAT=1                启用（默认关闭；probabilistic 缓存模型仍不发，见上）
  *   PI_HEARTBEAT_INTERVAL=240     显式覆盖：改成"空闲每 N 秒发一次"的固定节奏
  *                                 （优先于自适应，便于实验/手动调优）
  *   PI_HEARTBEAT_TTL=2700         显式指定某模型 TTL（秒），覆盖内置 TTL 表；
@@ -78,6 +87,19 @@ export const HEARTBEAT_PROMPT = "Reply with exactly: ok";
 
 /** 心跳间隔 = TTL × 该系数：太早发浪费，太晚发缓存已过期。 */
 export const HEARTBEAT_TTL_FRACTION = 0.8;
+
+/**
+ * 缓存类型 —— 比 TTL 数值更根本：决定"心跳对这个 provider 到底有没有用"。
+ *
+ * - `fixed-ttl`      缓存从写入/命中起按固定寿命过期，续期有效。心跳的正常工作对象。
+ * - `long-retention` 寿命很长（实测 ≥2h），会话里的等待通常等不到过期 → 心跳基本不需要；
+ *                    自适应间隔 0.8×TTL 本身就已经很长，等于"默认几乎不发"。
+ * - `probabilistic`  命中与否由 provider 侧 LRU/容量/路由决定，与"上次写入多久"弱相关
+ *                    （实测甚至非单调）。心跳既不能保证命中、又自己产生费用，默认**不发**
+ *                    并写一条日志说明原因；只有用户显式指定 PI_HEARTBEAT_TTL /
+ *                    PI_HEARTBEAT_INTERVAL 才视为"我知道自己在干什么"而强制开。
+ */
+export type CacheKind = "fixed-ttl" | "long-retention" | "probabilistic";
 
 /**
  * 未知模型（查表查不到、也没设 PI_HEARTBEAT_TTL）的保守默认 TTL。
@@ -101,46 +123,105 @@ type EnvLike = Record<string, string | undefined>;
 // ---------------------------------------------------------------------------
 
 /**
- * deepseek-v4.1-flash 实测（2025-11，dashscope）：
- *   空闲 30min → 命中 99.7%；60min → 96%；120min → 30.7%（大幅过期）。
- * 拟合出的 TTL ≈ 45min。0.8 × 45min = 36min = 2160s 即推荐心跳间隔。
+ * deepseek-v4.1-flash 实测（dashscope，三模型对照实验）：
+ *   纯等待 30min → 命中 99.7%；60min → 96%；120min → 30.7%（大幅过期）→ 拟合 TTL ≈ 45min。
+ *   同一实验的**心跳组**（0.8×TTL≈36min 续期一次）120min 后仍保持 99.4% 命中 → 续期有效。
+ * 0.8 × 45min = 36min = 2160s 即推荐心跳间隔。
  * 同一实验里用固定 4min 间隔 → 每条消息 10 次心跳，成本放大 10 倍，不划算。
  */
 export const TTL_DEEPSEEK_SEC = 2700;
 
-/** 占位值 —— 待实测确认（openai-codex/gpt-6.2-sol）。 */
-export const TTL_SOL_PLACEHOLDER_SEC = 1800;
+/**
+ * kimi-k3.1-pro 实测（dashscope）：等待 120min 后命中率仍 91.8%、没有掉崖 → TTL > 2h。
+ * 表里取 7200s 作为"下界估计"（真实值只会更长）；0.8×TTL = 5760s ≈ 96min 才发一次，
+ * 会话里几乎等不到，所以缓存类型标 `long-retention`：基本无需心跳。
+ */
+export const TTL_KIMI_SEC = 7200;
 
-/** 占位值 —— 待实测确认（dashscope/kimi-k3.1-pro）。 */
-export const TTL_KIMI_PLACEHOLDER_SEC = 3600;
+/**
+ * sol（openai-codex/gpt-6.2-sol）实测：**不是固定 TTL**，是概率性/不稳定缓存
+ * （疑似 LRU、容量或路由驱动）。证据：
+ *   - 纯等待命中率 5min → 0%、10min → 0%、15min → 53.6%（非单调，5min 比 15min 还差）；
+ *   - 心跳对照：15min 时心跳组与纯等待组命中率完全相同（53.6%）；
+ *   - 心跳请求自身 4 次里只有 1 次命中。
+ * 结论：心跳对 sol 无效，默认不启用。这个数值只是"若用户强制开启"的标称 TTL。
+ */
+export const TTL_SOL_SEC = 1800;
+
+/** TTL 表项：数值 + 缓存类型 + 实测依据（note 是数据来源，写 README/评论时照抄）。 */
+export interface TtlTableEntry {
+	ttlSec: number;
+	cacheKind: CacheKind;
+	note?: string;
+}
 
 /**
  * 精确匹配：`<provider>/<modelId>`（小写）。优先级最高。
- * 新增实测数据时改这里，并同步 README 的 TTL 表。
+ * 新增实测数据时改这里，并同步 README 的三模型对照表。
  */
-export const MODEL_TTL_SEC: Record<string, { ttlSec: number; note?: string }> = {
+export const MODEL_TTL_SEC: Record<string, TtlTableEntry> = {
 	"dashscope/deepseek-v4.1-flash": {
 		ttlSec: TTL_DEEPSEEK_SEC,
-		note: "实测：30min 命中 99.7% / 60min 96% / 120min 30.7%，估计 TTL≈45min",
-	},
-	"openai-codex/gpt-6.2-sol": {
-		ttlSec: TTL_SOL_PLACEHOLDER_SEC,
-		note: "占位值，待实测确认",
+		cacheKind: "fixed-ttl",
+		note: "实测：固定 TTL≈45min（等待 30min 99.7% / 60min 96% / 120min 30.7%）；" +
+			"0.8×TTL≈36min 续期有效（心跳组 120min 仍 99.4%）",
 	},
 	"dashscope/kimi-k3.1-pro": {
-		ttlSec: TTL_KIMI_PLACEHOLDER_SEC,
-		note: "占位值，待实测确认",
+		ttlSec: TTL_KIMI_SEC,
+		cacheKind: "long-retention",
+		note: "实测：TTL>120min（等待 120min 后仍 91.8% 未掉）→ 长保留，一般无需心跳",
+	},
+	"openai-codex/gpt-6.2-sol": {
+		ttlSec: TTL_SOL_SEC,
+		cacheKind: "probabilistic",
+		note: "实测：概率性/不稳定缓存，非固定 TTL（等待 5/10min 0%、15min 53.6% 非单调；" +
+			"15min 心跳组与等待组命中率相同 = 53.6%；心跳自身 4 次仅 1 次命中）→ 心跳无效，默认不启用",
 	},
 };
 
-/** provider 名包含该子串即命中（用于一家 provider 全是同一 TTL 的情况）。 */
-export const PROVIDER_TTL_SEC: Array<{ match: string; ttlSec: number }> = [
-	{ match: "deepseek", ttlSec: TTL_DEEPSEEK_SEC },
+/**
+ * provider 名包含该子串即命中（一家 provider 全是同一种缓存行为时用）。
+ * 顺序有意义：`openai-codex` 必须排在 `openai` 前。
+ */
+export const PROVIDER_TTL_SEC: Array<{ match: string } & TtlTableEntry> = [
+	{
+		match: "deepseek",
+		ttlSec: TTL_DEEPSEEK_SEC,
+		cacheKind: "fixed-ttl",
+		note: "按 deepseek-v4.1-flash 实测结论外推同系列",
+	},
+	{
+		match: "kimi",
+		ttlSec: TTL_KIMI_SEC,
+		cacheKind: "long-retention",
+		note: "按 kimi-k3.1-pro 实测：TTL>2h",
+	},
+	{
+		match: "openai-codex",
+		ttlSec: TTL_SOL_SEC,
+		cacheKind: "probabilistic",
+		note: "codex 后端实测概率性缓存（sol），心跳无效",
+	},
+	{
+		match: "openai",
+		ttlSec: TTL_SOL_SEC,
+		cacheKind: "probabilistic",
+		note: "官方 openai 直连缓存由 provider 侧管理（短命/自动），未实测出固定 TTL；" +
+			"与 sol 同按保守策略默认不跳，需实测可用 PI_HEARTBEAT_TTL 强制",
+	},
 ];
 
-/** 模型 id 前缀命中：dashscope 下 deepseek 系列都走同一条实测结论。 */
-export const MODEL_TTL_PREFIX_SEC: Array<{ prefix: string; ttlSec: number }> = [
-	{ prefix: "deepseek", ttlSec: TTL_DEEPSEEK_SEC },
+/** 模型 id 前缀命中（跨 provider 的模型系列，例如同一模型走代理）。 */
+export const MODEL_TTL_PREFIX_SEC: Array<{ prefix: string } & TtlTableEntry> = [
+	{ prefix: "deepseek", ttlSec: TTL_DEEPSEEK_SEC, cacheKind: "fixed-ttl" },
+	{ prefix: "kimi", ttlSec: TTL_KIMI_SEC, cacheKind: "long-retention" },
+	{
+		prefix: "gpt-6.2-sol",
+		ttlSec: TTL_SOL_SEC,
+		cacheKind: "probabilistic",
+		note: "sol 实测概率性缓存，心跳无效",
+	},
+	{ prefix: "gpt-6.2", ttlSec: TTL_SOL_SEC, cacheKind: "probabilistic" },
 ];
 
 export type TtlSource = "env" | "table" | "provider" | "prefix" | "default";
@@ -150,6 +231,14 @@ export interface TtlResolution {
 	source: TtlSource;
 	/** 命中的表项 / env 名 / 默认值说明，写日志用。 */
 	matched: string;
+	/** 该模型的缓存类型（查不到表项时按 fixed-ttl 处理，即"保守地当作可用"）。 */
+	cacheKind: CacheKind;
+	/** probabilistic 且用户没有显式强制 → 不发心跳。 */
+	suppressed: boolean;
+	/** suppressed 的原因码，未抑制时为 undefined。 */
+	suppressedReason?: string;
+	/** 让 probabilistic 模型强制发心跳的 env 名（PI_HEARTBEAT_TTL / PI_HEARTBEAT_INTERVAL）。 */
+	forcedBy?: string;
 }
 
 function readPositiveSec(env: EnvLike, name: string): number | undefined {
@@ -160,7 +249,9 @@ function readPositiveSec(env: EnvLike, name: string): number | undefined {
 }
 
 /** 查表（不含 env 覆盖）：精确 provider/model → provider 子串 → model id 前缀。 */
-export function lookupTtlSec(model: Model<any> | undefined): { ttlSec: number; source: TtlSource; matched: string } | undefined {
+export function lookupTtlSec(
+	model: Model<any> | undefined,
+): { ttlSec: number; cacheKind: CacheKind; source: TtlSource; matched: string; note?: string } | undefined {
 	if (!model) return undefined;
 	const provider = String(model.provider ?? "").toLowerCase();
 	const id = String(model.id ?? "").toLowerCase();
@@ -168,31 +259,67 @@ export function lookupTtlSec(model: Model<any> | undefined): { ttlSec: number; s
 
 	const key = `${provider}/${id}`;
 	const exact = MODEL_TTL_SEC[key];
-	if (exact) return { ttlSec: exact.ttlSec, source: "table", matched: key };
+	if (exact) return { ttlSec: exact.ttlSec, cacheKind: exact.cacheKind, source: "table", matched: key, note: exact.note };
 
 	for (const entry of PROVIDER_TTL_SEC) {
 		if (provider.includes(entry.match)) {
-			return { ttlSec: entry.ttlSec, source: "provider", matched: `provider~${entry.match}` };
+			return {
+				ttlSec: entry.ttlSec,
+				cacheKind: entry.cacheKind,
+				source: "provider",
+				matched: `provider~${entry.match}`,
+				note: entry.note,
+			};
 		}
 	}
 	for (const entry of MODEL_TTL_PREFIX_SEC) {
 		if (id.startsWith(entry.prefix)) {
-			return { ttlSec: entry.ttlSec, source: "prefix", matched: `id~${entry.prefix}*` };
+			return {
+				ttlSec: entry.ttlSec,
+				cacheKind: entry.cacheKind,
+				source: "prefix",
+				matched: `id~${entry.prefix}*`,
+				note: entry.note,
+			};
 		}
 	}
 	return undefined;
 }
 
+/** 用户显式指定了间隔/TTL 吗？这是"我自己承担后果"的强制信号（对 probabilistic 模型生效）。 */
+function forceEnvName(env: EnvLike): string | undefined {
+	if (readPositiveSec(env, "PI_HEARTBEAT_TTL") !== undefined) return "PI_HEARTBEAT_TTL";
+	if (readPositiveSec(env, "PI_HEARTBEAT_INTERVAL") !== undefined) return "PI_HEARTBEAT_INTERVAL";
+	return undefined;
+}
+
 /**
- * 该模型的有效 TTL：`PI_HEARTBEAT_TTL` 显式覆盖 > 查表 > 保守默认 1800s。
+ * 该模型的有效 TTL：`PI_HEARTBEAT_TTL` 显式覆盖 > 查表 > 保守默认 1800s；
+ * 同时给出缓存类型与"是否该抑制心跳"。
  * 未知模型不会静默用 0（那会让心跳永不停发），也不会用超大值（形同关闭）。
+ * 注意 cacheKind 始终取**查表结果**（即使 TTL 被 env 覆盖），这样日志不会因为用户
+ * 设了 PI_HEARTBEAT_TTL 就把 sol 谎报成 fixed-ttl。
  */
 export function resolveTtlSec(model: Model<any> | undefined, env: EnvLike): TtlResolution {
-	const envTtl = readPositiveSec(env, "PI_HEARTBEAT_TTL");
-	if (envTtl !== undefined) return { ttlSec: envTtl, source: "env", matched: "PI_HEARTBEAT_TTL" };
 	const hit = lookupTtlSec(model);
-	if (hit) return hit;
-	return { ttlSec: DEFAULT_TTL_SEC, source: "default", matched: "default(fallback)" };
+	const forcedBy = forceEnvName(env);
+	const cacheKind: CacheKind = hit?.cacheKind ?? "fixed-ttl";
+	const suppressed = cacheKind === "probabilistic" && forcedBy === undefined;
+
+	const build = (ttlSec: number, source: TtlSource, matched: string): TtlResolution => ({
+		ttlSec,
+		source,
+		matched,
+		cacheKind,
+		suppressed,
+		suppressedReason: suppressed ? "probabilistic-cache" : undefined,
+		forcedBy,
+	});
+
+	const envTtl = readPositiveSec(env, "PI_HEARTBEAT_TTL");
+	if (envTtl !== undefined) return build(envTtl, "env", "PI_HEARTBEAT_TTL");
+	if (hit) return build(hit.ttlSec, hit.source, hit.matched);
+	return build(DEFAULT_TTL_SEC, "default", "default(fallback)");
 }
 
 export interface HeartbeatTiming {
@@ -205,6 +332,13 @@ export interface HeartbeatTiming {
 	refreshAfterMs: number;
 	/** 检查定时器周期（毫秒）。只是"来看一眼"，不发请求。 */
 	cadenceMs: number;
+	/** 缓存类型：fixed-ttl 正常心跳；long-retention 间隔自然很长；probabilistic 默认不发。 */
+	cacheKind: CacheKind;
+	/** probabilistic 且未显式强制 → 一律不发（skipReason = "probabilistic-cache"）。 */
+	suppressed: boolean;
+	suppressedReason?: string;
+	/** 用户用哪个 env 强制开了心跳（probabilistic 模型才有意义）。 */
+	forcedBy?: string;
 }
 
 /**
@@ -221,6 +355,12 @@ export interface HeartbeatTiming {
  */
 export function resolveTiming(model: Model<any> | undefined, env: EnvLike): HeartbeatTiming {
 	const ttl = resolveTtlSec(model, env);
+	const policy = {
+		cacheKind: ttl.cacheKind,
+		suppressed: ttl.suppressed,
+		suppressedReason: ttl.suppressedReason,
+		forcedBy: ttl.forcedBy,
+	};
 	const explicitIntervalSec = readPositiveSec(env, "PI_HEARTBEAT_INTERVAL");
 	if (explicitIntervalSec !== undefined) {
 		const ms = explicitIntervalSec * 1000;
@@ -231,6 +371,7 @@ export function resolveTiming(model: Model<any> | undefined, env: EnvLike): Hear
 			ttlMatched: ttl.matched,
 			refreshAfterMs: ms,
 			cadenceMs: ms,
+			...policy,
 		};
 	}
 	const refreshAfterMs = Math.round(ttl.ttlSec * HEARTBEAT_TTL_FRACTION) * 1000;
@@ -253,6 +394,7 @@ export function resolveTiming(model: Model<any> | undefined, env: EnvLike): Hear
 		ttlMatched: ttl.matched,
 		refreshAfterMs,
 		cadenceMs: cadenceSec * 1000,
+		...policy,
 	};
 }
 
@@ -386,6 +528,9 @@ export interface HeartbeatHandle {
 		ttlSec: number;
 		ttlSource: TtlSource;
 		cadenceMs: number;
+		/** 模型缓存类型 / 是否因 probabilistic 被抑制（加载时未知模型 → fixed-ttl, false）。 */
+		cacheKind: CacheKind;
+		suppressed: boolean;
 	};
 	/** 按当前模型实时算一次节流参数（测试/调试用）。 */
 	timing: () => HeartbeatTiming;
@@ -600,17 +745,46 @@ export function createHeartbeatExtension(options: HeartbeatExtensionOptions = {}
 				/* 老版本没有该方法 */
 			}
 			if (!observed.agentMessages || observed.agentMessages.length === 0) return "no-snapshot";
+			const timing = currentTiming();
+			/**
+			 * 缓存类型判据放在所有成本判断之前：sol 这类概率性缓存的命中与"上次写入多久"
+			 * 无关（实测非单调），发心跳既不能续命又要付费（15min 对照组命中率完全相同），
+			 * 所以默认一律不发，只在用户显式 PI_HEARTBEAT_TTL / PI_HEARTBEAT_INTERVAL 时放行。
+			 */
+			if (timing.suppressed) return timing.suppressedReason ?? "probabilistic-cache";
 			const ts = now();
-			if (ts - observed.lastActivityAt < refreshThresholdMs(currentTiming())) return "recent-activity";
+			if (ts - observed.lastActivityAt < refreshThresholdMs(timing)) return "recent-activity";
 			if (ts < nextAllowedAt) return "backoff";
 			return undefined;
 		}
 
+		/** probabilistic 抑制只记一次：用户需要知道"为什么没有心跳"，但不能每个 tick 刷屏。 */
+		let muteNotedFor: string | undefined;
+
 		async function tick(): Promise<void> {
 			const reason = skipReason();
 			if (reason !== undefined) {
-				if (verbose && reason !== "disabled" && reason !== "subagent") {
-					writeLog({ ts: new Date(now()).toISOString(), event: "skip", reason });
+				const timing = currentTiming();
+				const modelLabel = formatModelLabel(safeModel(ctxRef));
+				/** probabilistic 静音是默认策略，不算"调试细节"，所以不看 verbose，一次会话记一次。 */
+				const logMute = reason === "probabilistic-cache" && muteNotedFor !== modelLabel;
+				if (logMute) muteNotedFor = modelLabel;
+				if (logMute || (verbose && reason !== "disabled" && reason !== "subagent")) {
+					writeLog({
+						ts: new Date(now()).toISOString(),
+						event: "skip",
+						reason,
+						model: modelLabel,
+						cacheKind: timing.cacheKind,
+						...(logMute
+							? {
+								note:
+									"概率性缓存（sol 等）：命中由 provider 侧 LRU/容量/路由决定，实测心跳无效" +
+									"（15min 对照组命中率与纯等待组相同）且自己要付整份前缀钱，默认不发；" +
+									"确需实验请显式设 PI_HEARTBEAT_TTL=<秒>",
+							}
+							: {}),
+					});
 				}
 				return;
 			}
@@ -683,6 +857,8 @@ export function createHeartbeatExtension(options: HeartbeatExtensionOptions = {}
 						ttlMatched: timing.ttlMatched,
 						refreshAfterSec: Math.round(timing.refreshAfterMs / 1000),
 						idleSec: Math.round((startedAt - observed.lastActivityAt) / 1000),
+						cacheKind: timing.cacheKind,
+						...(timing.forcedBy ? { forcedBy: timing.forcedBy } : {}),
 					},
 				};
 
@@ -778,6 +954,8 @@ export function createHeartbeatExtension(options: HeartbeatExtensionOptions = {}
 				ttlSec: initialTiming.ttlSec,
 				ttlSource: initialTiming.ttlSource,
 				cadenceMs: initialTiming.cadenceMs,
+				cacheKind: initialTiming.cacheKind,
+				suppressed: initialTiming.suppressed,
 			},
 			timing: currentTiming,
 		};
@@ -785,6 +963,11 @@ export function createHeartbeatExtension(options: HeartbeatExtensionOptions = {}
 
 		startTimer();
 	};
+}
+
+/** `provider/modelId` 标签（日志用）；无模型时 undefined。 */
+function formatModelLabel(model: Model<any> | undefined): string | undefined {
+	return model ? `${model.provider}/${model.id}` : undefined;
 }
 
 function safeModel(ctx: ExtensionContext | undefined): Model<any> | undefined {

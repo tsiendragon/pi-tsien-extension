@@ -15,8 +15,8 @@ import {
 	resolveTtlSec,
 	resolveTiming,
 	TTL_DEEPSEEK_SEC,
-	TTL_KIMI_PLACEHOLDER_SEC,
-	TTL_SOL_PLACEHOLDER_SEC,
+	TTL_KIMI_SEC,
+	TTL_SOL_SEC,
 	type HeartbeatHandle,
 } from "pi-tsien-heartbeat/src/index.ts";
 
@@ -278,7 +278,12 @@ const ADAPTIVE_ENV = { PI_HEARTBEAT: "1" };
 
 /** 喂完一遍 turn，再让时钟走过发送闸门（MIN_IDLE + 固定间隔）。 */
 async function primedIdleHarness(options: HarnessOptions): Promise<Harness> {
-	const h = makeHarness(options);
+	/**
+	 * 内容类用例（前缀/cache key/thinking/不写历史）跟缓存类型无关，默认钉在查表 miss 的
+	 * 未知模型上（→ 保守 fixed-ttl），否则用 EFFORT_MODEL 的 openai-codex provider 会被
+	 * probabilistic 策略静音，测的就不是它们要测的东西了。
+	 */
+	const h = makeHarness({ model: UNKNOWN_MODEL, ...options });
 	await h.prime();
 	h.advance(121_000);
 	return h;
@@ -352,7 +357,8 @@ test("heartbeat passes the main sessionId, so the provider cache key is identica
 // ---------------------------------------------------------------------------
 
 test("heartbeat uses the lowest thinking level the model supports", async () => {
-	const h = await primedIdleHarness({ env: { ...ENABLED_ENV } });
+	
+	const h = await primedIdleHarness({ env: { ...ENABLED_ENV }, model: EFFORT_MODEL });
 	await h.handle.tick();
 
 	assert.equal(h.calls.length, 1);
@@ -429,7 +435,7 @@ test("the context / provider hooks never rewrite the main session's messages", a
 // ---------------------------------------------------------------------------
 
 test("heartbeat is off unless PI_HEARTBEAT=1", async () => {
-	const h = makeHarness({ env: { PI_HEARTBEAT_INTERVAL: "240", PI_HEARTBEAT_MIN_IDLE: "120" } });
+	const h = makeHarness({ env: { PI_HEARTBEAT_INTERVAL: "240", PI_HEARTBEAT_MIN_IDLE: "120" }, model: UNKNOWN_MODEL });
 	await h.prime();
 	h.advance(600_000);
 	await h.handle.tick();
@@ -481,6 +487,7 @@ test("heartbeat waits for MIN_IDLE after the last real activity", async () => {
 test("PI_HEARTBEAT_INTERVAL explicitly overrides the adaptive 0.8×TTL gate", async () => {
 	const h = makeHarness({
 		env: { PI_HEARTBEAT: "1", PI_HEARTBEAT_INTERVAL: "600", PI_HEARTBEAT_MIN_IDLE: "120" },
+		model: UNKNOWN_MODEL,
 	});
 	await h.prime();
 	h.advance(599_000);
@@ -495,7 +502,7 @@ test("PI_HEARTBEAT_INTERVAL explicitly overrides the adaptive 0.8×TTL gate", as
 });
 
 test("heartbeat does nothing before any turn produced a snapshot", async () => {
-	const h = makeHarness({ env: { ...ENABLED_ENV } });
+	const h = makeHarness({ env: { ...ENABLED_ENV }, model: UNKNOWN_MODEL });
 	await h.emit("session_start", { type: "session_start", reason: "startup" });
 	h.advance(600_000);
 	await h.handle.tick();
@@ -544,7 +551,7 @@ test("heartbeat logs usage, cost and the cache-hit flag", async () => {
 	assert.equal(record.event, "heartbeat");
 	assert.equal(record.mode, "sent");
 	assert.equal(record.sessionId, SESSION_ID);
-	assert.equal(record.model, "openai-codex/gpt-6-luna");
+	assert.equal(record.model, "somewhere/mystery-1", "内容类用例钉在未知模型上（查表 miss → 保守 fixed-ttl）");
 	assert.equal(record.usage.input, 12);
 	assert.equal(record.usage.cacheRead, 40_000);
 	assert.equal(record.usage.output, 2);
@@ -649,24 +656,42 @@ const DEEPSEEK_MODEL = {
 
 const SOL_MODEL = { ...EFFORT_MODEL, provider: "openai-codex", id: "gpt-6.2-sol" } as unknown as Model<any>;
 const KIMI_MODEL = { ...DEEPSEEK_MODEL, id: "kimi-k3.1-pro" } as unknown as Model<any>;
+/** 查表 miss → 保守默认。anthropic 也不在表里，内容类用例靠它避开 probabilistic 抑制。 */
 const UNKNOWN_MODEL = { ...DEEPSEEK_MODEL, provider: "somewhere", id: "mystery-1" } as unknown as Model<any>;
 
-test("TTL table: deepseek-v4.1-flash → 45min, sol/kimi placeholders, unknown → default", () => {
+test("TTL table: deepseek fixed-ttl 45min / kimi long-retention >2h / sol probabilistic", () => {
 	assert.equal(lookupTtlSec(DEEPSEEK_MODEL)?.ttlSec, TTL_DEEPSEEK_SEC);
-	assert.equal(TTL_DEEPSEEK_SEC, 2700, "实测估计 TTL≈45min");
+	assert.equal(TTL_DEEPSEEK_SEC, 2700, "实测 TTL≈45min（等待 30min 99.7% / 60min 96% / 120min 30.7%）");
+	assert.equal(lookupTtlSec(DEEPSEEK_MODEL)?.cacheKind, "fixed-ttl");
 
-	// dashscope 下其它 deepseek 型号走同一条实测结论。
+	
 	assert.equal(lookupTtlSec({ ...DEEPSEEK_MODEL, id: "deepseek-v4-pro" } as Model<any>)?.ttlSec, 2700);
 	assert.equal(lookupTtlSec({ ...DEEPSEEK_MODEL, id: "deepseek-v5.0-flash" } as Model<any>)?.ttlSec, 2700);
 
-	// sol / kimi 是占位值，但必须是正数且 > CACHE-MISS 也不算离谱。
-	assert.equal(lookupTtlSec(SOL_MODEL)?.ttlSec, TTL_SOL_PLACEHOLDER_SEC);
-	assert.equal(lookupTtlSec(KIMI_MODEL)?.ttlSec, TTL_KIMI_PLACEHOLDER_SEC);
-	assert.ok(TTL_SOL_PLACEHOLDER_SEC > 0 && TTL_KIMI_PLACEHOLDER_SEC > 0);
+	
+	assert.equal(lookupTtlSec(KIMI_MODEL)?.ttlSec, TTL_KIMI_SEC);
+	assert.equal(TTL_KIMI_SEC, 7200, "实测 TTL>2h（120min 等待后仍 91.8%），表里取下界估计");
+	assert.equal(lookupTtlSec(KIMI_MODEL)?.cacheKind, "long-retention", "长保留：基本无需心跳");
 
-	// 未知模型查表查不到。
+	
+	assert.equal(lookupTtlSec(SOL_MODEL)?.ttlSec, TTL_SOL_SEC);
+	assert.equal(lookupTtlSec(SOL_MODEL)?.cacheKind, "probabilistic", "sol 是概率性缓存，不是固定 TTL");
+	assert.ok((lookupTtlSec(SOL_MODEL)?.note ?? "").includes("心跳无效"));
+
+	
+	assert.equal(lookupTtlSec({ ...EFFORT_MODEL, id: "gpt-6-luna" } as Model<any>)?.cacheKind, "probabilistic");
+	assert.equal(lookupTtlSec({ ...EFFORT_MODEL, provider: "openai", id: "gpt-6.1" } as Model<any>)?.cacheKind, "probabilistic");
+
+	
 	assert.equal(lookupTtlSec(UNKNOWN_MODEL), undefined);
 	assert.equal(lookupTtlSec(undefined), undefined);
+});
+
+test("unknown models stay conservative: default TTL, fixed-ttl, not suppressed", () => {
+	const unknown = resolveTtlSec(UNKNOWN_MODEL, {});
+	assert.equal(unknown.cacheKind, "fixed-ttl", "未知模型不能因为判不准就被永久静音");
+	assert.equal(unknown.suppressed, false);
+	assert.equal(resolveTtlSec(BUDGET_MODEL, {}).suppressed, false, "anthropic 不在表里 → 保守默认");
 });
 
 test("unknown model falls back to the documented default TTL", () => {
@@ -697,7 +722,7 @@ test("adaptive interval = 0.8 × TTL", () => {
 	assert.equal(resolveTiming(UNKNOWN_MODEL, {}).refreshAfterMs, 1440 * 1000);
 	// 闸门 + 一个 cadence 仍落在 TTL 内（留 10% 余量），极小 TTL 也不例外：
 	// 此时 cadence 下限被压到 0.1×TTL 以下，宁可查得密，也不能晚于 TTL 才发。
-	for (const ttl of [DEFAULT_TTL_SEC, 300, 2700, TTL_KIMI_PLACEHOLDER_SEC, 10, 100]) {
+	for (const ttl of [DEFAULT_TTL_SEC, 300, 2700, TTL_KIMI_SEC, TTL_SOL_SEC, 10, 100]) {
 		const t = resolveTiming(undefined, { PI_HEARTBEAT_TTL: String(ttl) });
 		assert.ok(t.refreshAfterMs + t.cadenceMs <= ttl * 1000, `gate+cadence within TTL (ttl=${ttl})`);
 		assert.ok(t.cadenceMs > 0, `cadence stays positive (ttl=${ttl})`);
@@ -766,7 +791,7 @@ test("a switched model immediately gets its own TTL gate", async () => {
 	// 换成 sol 占位 TTL：0.8 × 1800 = 24min，来源是表。
 	(h.ctx as { model: Model<any> }).model = SOL_MODEL;
 	assert.equal(h.handle.timing().ttlSource, "table");
-	assert.equal(h.handle.timing().refreshAfterMs, TTL_SOL_PLACEHOLDER_SEC * 0.8 * 1000);
+	assert.equal(h.handle.timing().refreshAfterMs, TTL_SOL_SEC * 0.8 * 1000);
 });
 
 test("the timer cadence is derived from the TTL, not a fixed 4 minutes", async () => {
@@ -792,4 +817,153 @@ test("the timer cadence is derived from the TTL, not a fixed 4 minutes", async (
 	// 不是旧的固定 240s（那是发送周期而非检查周期）。
 	assert.equal(cadences[0], 180_000);
 	assert.ok(cadences[0] < DEFAULT_TTL_SEC * HEARTBEAT_TTL_FRACTION * 1000, "cadence ≪ gate");
+});
+
+/* ───────────────────────── 缓存类型：概率性缓存默认不心跳 ───────────────────────── */
+
+test("probabilistic cache (sol) never sends a heartbeat even with PI_HEARTBEAT=1", async () => {
+	const h = makeHarness({ env: { ...ADAPTIVE_ENV, PI_HEARTBEAT_VERBOSE: "1" }, model: SOL_MODEL });
+	await h.prime();
+
+	
+	h.advance(6 * 60 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0, "sol: 实测心跳无效（15min 对照组命中率完全相同），默认不发");
+
+	
+	h.advance(6 * 60 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0, "still nothing after another 6h");
+
+	assert.equal(h.handle.timing().cacheKind, "probabilistic");
+	assert.equal(h.handle.timing().suppressed, true);
+	assert.equal(h.handle.config.cacheKind, "fixed-ttl", "加载时模型未知 → config 只能给保守值（按模型实时判的是 timing()）");
+
+	
+	const skip = h.logs.map((l) => JSON.parse(l)).find((r) => r.event === "skip");
+	assert.ok(skip, "verbose 下要能查到为什么没发");
+	assert.equal(skip.reason, "probabilistic-cache");
+	assert.equal(skip.model, "openai-codex/gpt-6.2-sol");
+	assert.match(skip.note, /PI_HEARTBEAT_TTL/);
+});
+
+test("openai / openai-codex providers are all treated as probabilistic", async () => {
+	const h = makeHarness({ env: { ...ADAPTIVE_ENV }, model: { ...EFFORT_MODEL, id: "gpt-6-luna" } as Model<any> });
+	await h.prime();
+	h.advance(3 * 60 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0);
+	assert.equal(h.handle.timing().suppressed, true);
+});
+
+test("PI_HEARTBEAT_TTL force-enables a probabilistic model, and the log says who forced it", async () => {
+	const h = makeHarness({
+		env: { ...ADAPTIVE_ENV, PI_HEARTBEAT_TTL: "600" },
+		model: SOL_MODEL,
+	});
+	await h.prime();
+
+	const timing = h.handle.timing();
+	assert.equal(timing.suppressed, false, "显式 TTL = 用户自己承担后果");
+	assert.equal(timing.forcedBy, "PI_HEARTBEAT_TTL");
+	assert.equal(timing.cacheKind, "probabilistic", "cacheKind 仍是真实的，不被 env 覆盖改写成 fixed-ttl");
+	assert.equal(timing.ttlSec, 600);
+	assert.equal(timing.refreshAfterMs, 480_000);
+
+	h.advance(481_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 1, "forced → 真的发出去");
+
+	const record = JSON.parse(h.logs[0]);
+	assert.equal(record.event, "heartbeat");
+	assert.equal(record.timing.cacheKind, "probabilistic");
+	assert.equal(record.timing.forcedBy, "PI_HEARTBEAT_TTL");
+});
+
+test("PI_HEARTBEAT_INTERVAL also force-enables a probabilistic model", async () => {
+	const h = makeHarness({
+		env: { PI_HEARTBEAT: "1", PI_HEARTBEAT_INTERVAL: "60", PI_HEARTBEAT_MIN_IDLE: "120" },
+		model: SOL_MODEL,
+	});
+	await h.prime();
+	const timing = h.handle.timing();
+	assert.equal(timing.suppressed, false);
+	assert.equal(timing.forcedBy, "PI_HEARTBEAT_INTERVAL");
+
+	h.advance(121_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 1);
+});
+
+test("fixed-ttl (deepseek) heartbeats normally at 0.8×TTL", async () => {
+	const h = makeHarness({ env: { ...ADAPTIVE_ENV }, model: DEEPSEEK_MODEL });
+	await h.prime();
+	assert.equal(h.handle.timing().cacheKind, "fixed-ttl");
+	assert.equal(h.handle.timing().suppressed, false);
+
+	h.advance(2159_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0, "before the gate");
+
+	h.advance(2_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 1, "at 0.8 × 45min");
+});
+
+test("long-retention (kimi) is not muted but its gate is ~96min, so short idleness never fires", async () => {
+	const h = makeHarness({ env: { ...ADAPTIVE_ENV, PI_HEARTBEAT_VERBOSE: "1" }, model: KIMI_MODEL });
+	await h.prime();
+	const timing = h.handle.timing();
+	assert.equal(timing.cacheKind, "long-retention");
+	assert.equal(timing.suppressed, false);
+	assert.equal(timing.ttlSec, TTL_KIMI_SEC);
+	assert.equal(timing.refreshAfterMs, 5760_000, "0.8 × 7200s = 96min");
+
+	
+	h.advance(60 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0, "1h 空闲 < 96min 闸门 → 不发（长保留本来就不需要）");
+
+	
+	const skips = h.logs.map((l) => JSON.parse(l)).filter((r) => r.event === "skip");
+	assert.ok(skips.every((r) => r.reason !== "probabilistic-cache"), "long-retention 不能被打成 probabilistic");
+	assert.ok(skips.some((r) => r.reason === "recent-activity"));
+
+	
+	h.advance(37 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 1, "超过闸门后照常发一次");
+});
+
+test("switching from sol to deepseek turns heartbeats back on", async () => {
+	const h = makeHarness({ env: { ...ADAPTIVE_ENV }, model: SOL_MODEL });
+	await h.prime();
+	h.advance(40 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0, "sol suppressed");
+
+	(h.ctx as { model: Model<any> }).model = DEEPSEEK_MODEL;
+	assert.equal(h.handle.timing().suppressed, false);
+	
+	await h.handle.tick();
+	assert.equal(h.calls.length, 1, "deepseek 闸门已过 → 立即按新模型策略发");
+});
+
+test("the probabilistic mute is explained once, even without PI_HEARTBEAT_VERBOSE", async () => {
+	const h = makeHarness({ env: { ...ADAPTIVE_ENV }, model: SOL_MODEL });
+	await h.prime();
+
+	
+	h.advance(60 * 60_000);
+	await h.handle.tick();
+	h.advance(60 * 60_000);
+	await h.handle.tick();
+	h.advance(60 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 0);
+
+	const skips = h.logs.map((l) => JSON.parse(l)).filter((r) => r.event === "skip");
+	assert.equal(skips.length, 1, "静音原因只记一次，不刷屏");
+	assert.equal(skips[0].reason, "probabilistic-cache");
+	assert.match(skips[0].note, /心跳无效/);
 });
