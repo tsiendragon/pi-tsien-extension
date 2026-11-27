@@ -81,6 +81,15 @@ describe("parseRouterConfig", () => {
     expect(config.maxModelCallsPerTask).toBe(2_000);
   });
 
+  it("defaults to five minutes and accepts a higher, lower, or disabled extension cap", () => {
+    expect(parseRouterConfig(baseConfig).workExtensionMaxMs).toBe(300_000);
+    for (const workExtensionMaxMs of [0, 60_000, 900_000]) {
+      expect(parseRouterConfig({ ...baseConfig, timeouts: { workExtensionMaxMs } }).workExtensionMaxMs).toBe(workExtensionMaxMs);
+    }
+    expect(parseRouterConfig({ ...baseConfig, timeouts: { workHardMaxMs: 60_000, workExtensionMaxMs: 900_000 } }).workExtensionMaxMs).toBe(60_000);
+    expect(() => parseRouterConfig({ ...baseConfig, timeouts: { workExtensionMaxMs: -1 } })).toThrow(/workExtensionMaxMs/);
+  });
+
   it("rejects duplicates and automatic escalation to heavy", () => {
     expect(() =>
       parseRouterConfig({ ...baseConfig, tiers: { light: { candidates: [{ model: "a/x" }] }, medium: { candidates: [{ model: "a/x" }] } } }),

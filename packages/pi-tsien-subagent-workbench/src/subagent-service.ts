@@ -102,7 +102,9 @@ export type ProviderEvent =
   | { readonly type: "heartbeat"; readonly at?: number }
   | {
       readonly type: "run-warning";
-      readonly warning: "idle" | "wall";
+      readonly warning: "idle" | "wall" | "soft-deadline";
+      readonly deadlineAt?: number;
+      readonly maxExtensionMs?: number;
       readonly message: string;
       readonly elapsedMs: number;
       readonly idleMs?: number;
@@ -183,6 +185,8 @@ export interface ProviderRunRequest {
   readonly allowedTools?: readonly string[];
   /** Per-run hard wall time; overrides the provider default when set. */
   readonly hardWallTimeMs?: number;
+  readonly hardWallMaxMs?: number;
+  readonly workExtensionMaxMs?: number;
   /** Stop the run after this many assistant messages. */
   readonly maxModelCalls?: number;
   readonly signal: AbortSignal;
@@ -217,6 +221,8 @@ export interface StartAgentRequest {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly hardWallTimeMs?: number;
+  readonly hardWallMaxMs?: number;
+  readonly workExtensionMaxMs?: number;
   readonly maxModelCalls?: number;
 }
 
@@ -661,6 +667,8 @@ export class SubagentService {
         thinking: request.thinking,
         allowedTools: request.allowedTools,
         ...(request.hardWallTimeMs === undefined ? {} : { hardWallTimeMs: request.hardWallTimeMs }),
+        ...(request.hardWallMaxMs === undefined ? {} : { hardWallMaxMs: request.hardWallMaxMs }),
+        ...(request.workExtensionMaxMs === undefined ? {} : { workExtensionMaxMs: request.workExtensionMaxMs }),
         ...(request.maxModelCalls === undefined ? {} : { maxModelCalls: request.maxModelCalls }),
         signal: abort.signal,
         emit: (event) =>

@@ -306,13 +306,18 @@ describe("Pi extension", () => {
     } as const;
     vi.spyOn(WorkbenchController.prototype, "pendingRunWarnings").mockReturnValue([
       warning,
+      { ...warning, id: "soft-1", warning: "soft-deadline", deadlineAt: Date.now() + 60_000 },
     ]);
+    vi.spyOn(WorkbenchController.prototype, "partialJobOutput").mockReturnValue({
+      workId: "work-long", kind: "workflow", status: "running", omittedSources: 0,
+      sources: [{ label: "Audit", sessionId: "s", runId: "r", status: "running", text: "checkpoint draft", truncated: false, streaming: true }],
+    });
     const markDelivered = vi
       .spyOn(WorkbenchController.prototype, "markRunWarningDelivered")
       .mockReturnValue(true);
     vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
       completed: [],
-      pending: [],
+      pending: [{ workId: "work-long" }],
       missing: [],
     } as any);
     const sendMessage = vi.fn();
@@ -359,6 +364,11 @@ describe("Pi extension", () => {
       "warning",
     );
     expect(markDelivered).toHaveBeenCalledWith("run_warning_1");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringMatching(/Soft deadline.*\n[\s\S]*unverified[\s\S]*checkpoint draft/) }),
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+    expect(markDelivered).toHaveBeenCalledWith("soft-1");
 
     for (const handler of handlers.get("session_shutdown") ?? []) {
       await handler();

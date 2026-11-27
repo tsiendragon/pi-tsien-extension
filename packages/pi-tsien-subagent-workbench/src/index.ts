@@ -63,6 +63,7 @@ import {
 import { compileWorkflowJavaScript } from "./workflow-javascript.ts";
 import { resultPreview } from "./runner-stage.ts";
 import { ModelRouter, formatRouterSnapshot, type ModelCatalog } from "./model-router.ts";
+import { diagnoseFailure, SUBAGENT_RESULTS_GUIDELINES, SUBAGENT_START_GUIDELINES, SUBAGENT_WORKFLOW_GUIDELINES } from "./recovery.ts";
 import type { AgentRouting, SubagentTraceContext } from "./subagent-service.ts";
 import { parseTraceContext } from "pi-tsien-trajectory-recorder/src/index.ts";
 const WORKBENCH_API_VERSION = 1 as const;
@@ -954,7 +955,11 @@ function workflowToolOutput(result: WorkbenchWorkflowResult): string {
               .join("\n"),
         );
       }
-      if (task.error) lines.push(`Error: ${task.error}`);
+      if (task.error) {
+        lines.push(`Error: ${task.error}`);
+        const diagnostic = diagnoseFailure(task.error, task.key);
+        if (diagnostic) lines.push(`Recovery (${diagnostic.code}): ${diagnostic.advice}`);
+      }
     }
   }
   if (result.error) lines.push(`\nWorkflow error: ${result.error}`);
@@ -997,6 +1002,8 @@ function formatJobQuery(
   for (const job of query.completed) {
     lines.push(`${job.workId} · ${job.kind} · ${job.status} · ${job.label}`);
     if (job.error) lines.push(`Error: ${job.error}`);
+    const diagnostic = jobFailureDiagnostic(job);
+    if (diagnostic) lines.push(`Recovery (${diagnostic.code}): ${diagnostic.advice}`);
     const output = includeOutput ? jobOutput(job) : undefined;
     if (output) lines.push(boundedToolOutput(output));
   }
@@ -1043,6 +1050,12 @@ function failedWorkflowTask(
   return undefined;
 }
 
+function jobFailureDiagnostic(job: WorkbenchJobSnapshot) {
+  if (job.status !== "failed") return undefined;
+  const task = failedWorkflowTask(job);
+  return diagnoseFailure(task?.error ?? job.error, task?.key);
+}
+
 function runWarningSummary(warning: WorkbenchRunWarning): string {
   const idle =
     warning.idleMs === undefined
@@ -1060,7 +1073,9 @@ function runWarningSummary(warning: WorkbenchRunWarning): string {
 function completionSummary(job: WorkbenchJobSnapshot): string {
   const failedTask = failedWorkflowTask(job);
   if (failedTask) {
-    return `Workflow failed at ${failedTask.stage} / ${failedTask.key} (${job.workId}).${failedTask.error ? ` Error: ${failedTask.error}.` : ""} Retry only this task with subagent_workflow_control action=retry_task, workId=${job.workId}, taskKey=${failedTask.key}.`;
+    const diagnostic = jobFailureDiagnostic(job);
+    const recovery = diagnostic?.advice ?? `If retry is justified, retry only this task with subagent_workflow_control action=retry_task, workId=${job.workId}, taskKey=${failedTask.key}.`;
+    return `Workflow failed at ${failedTask.stage} / ${failedTask.key} (${job.workId}).${failedTask.error ? ` Error: ${failedTask.error}.` : ""} ${recovery}`;
   }
   const result = jobOutput(job);
   const detail = job.error
@@ -1068,7 +1083,8 @@ function completionSummary(job: WorkbenchJobSnapshot): string {
     : result
       ? ` Result is ready; collect it with subagent_results.`
       : "";
-  return `Subagent ${job.kind} ${job.status}: ${job.label} (${job.workId}).${detail}`;
+  const diagnostic = jobFailureDiagnostic(job);
+  return `Subagent ${job.kind} ${job.status}: ${job.label} (${job.workId}).${detail}${diagnostic ? ` Recovery (${diagnostic.code}): ${diagnostic.advice}` : ""}`;
 }
 
 export default function subagentWorkbench(pi: ExtensionAPI): void {
@@ -1095,7 +1111,15 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     const current = controller;
     if (!activeContext || !current || typeof pi.sendMessage !== "function") return;
     for (const warning of current.pendingRunWarnings()) {
-      const content = runWarningSummary(warning);
+      const soft = warning.warning === "soft-deadline";
+      const partial = soft && warning.workId ? current.partialJobOutput(warning.workId, 1_200) : undefined;
+      if (soft && warning.workId && !current.getJobs([warning.workId]).pending.length) {
+        current.markRunWarningDelivered(warning.id);
+        continue;
+      }
+      const content = soft
+        ? `Soft deadline for ${warning.kind} ${warning.workId ?? warning.runId}: ${warning.label}. The child is still running; hard deadline: ${warning.deadlineAt === undefined ? "unchanged" : new Date(warning.deadlineAt).toISOString()}. Let the same run continue, or cancel with subagent_cancel using its workId if no longer useful. ${warning.workId && warning.maxExtensionMs ? `If the evidence justifies more time, call subagent_extend with workId=${warning.workId}, runId=${warning.runId}, extendMs (up to ${warning.maxExtensionMs}), and a reason before the deadline.` : "No extension available for this run."} No automatic extension or retry. Verify any saved artifact before relying on it.\n${partial?.sources.some(source => source.text) ? boundedToolOutput(formatPartialOutputs([partial])) : "No assistant progress text captured yet; this does not establish whether artifacts exist."}`
+        : runWarningSummary(warning);
       try {
         pi.sendMessage(
           {
@@ -1106,7 +1130,8 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
           },
           activeContext.isIdle()
             ? { triggerTurn: true, deliverAs: "followUp" }
-            : { triggerTurn: false, deliverAs: "nextTurn" },
+            : soft ? { triggerTurn: false, deliverAs: "steer" }
+              : { triggerTurn: false, deliverAs: "nextTurn" },
         );
         if (activeContext.hasUI) {
           activeContext.ui.notify(content, "warning");
@@ -1244,6 +1269,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
         "Run a bounded process-isolated subagent task. Defaults to background and returns a workId. Use it for one independently verifiable surface; call it several times in one message for independent parallel work, or use subagent_workflow when later stages depend on earlier results. Choose a tier (light/medium/heavy/ultra) by task difficulty; the Workbench picks the first usable model of that tier from subagent-models.json and switches to the next candidate on rate-limit, quota, overload, or availability errors. Set role so the child only gets the tools it needs: read_only for analysis, code for edits and commands (including background_command_* for long runs), research for web and knowledge search; omitting role grants write access. Omit tier to use the role default. Pass model only to pin a configured model. Use /subagent-models to inspect tiers.",
       promptSnippet:
         "Delegate bounded independent work to a full-capability process subagent, normally in background.",
+      promptGuidelines: SUBAGENT_START_GUIDELINES,
       executionMode: "parallel",
       parameters: AgentToolParams,
       async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -1341,6 +1367,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
         "Run a recoverable single task, staged workflow, or an explicitly requested restricted JavaScript workflow plan. Stages are sequential, tasks within a stage run in parallel, and later stages consume earlier conclusions and artifact paths through task inputs. Use subagent_workflow when the user explicitly requests a workflow, or when a small or large task benefits from tracking, artifacts, or retry; task creates a one-stage workflow. Use stages for explicit sequential/parallel plans. Use javascript only for a bounded, data-independent plan shape that cannot be expressed clearly with stages, when, and foreach. Give reusable producer tasks a key; later Stages may use inputs or bounded tasks.<key> templates. Use outputSchema for machine-consumed JSON, and keep when/foreach expressions minimal and bounded. Give each task a tier (light/medium/heavy/ultra) and role; the Workbench routes it to the first usable model of that tier from subagent-models.json and switches candidates on rate-limit/quota/availability errors. Pass model only to pin a configured model. Use dryRun to preview dynamic or saved definitions without creating work. Use record=metadata for output-free audit state; use record=full only when sensitive-output persistence and cross-session retry are explicitly needed. Use name to run a saved project workflow; use saveAs only when reuse is explicitly useful. Prefer background; wait only when correctness or delivery depends on the result.",
       promptSnippet:
         "Run recoverable single-task or staged subagent workflows with explicit prior-task handoffs.",
+      promptGuidelines: SUBAGENT_WORKFLOW_GUIDELINES,
       executionMode: "parallel",
       parameters: WorkflowToolParams,
       async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -1768,6 +1795,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
       description:
         "Get status or results for subagent work IDs. Use bounded wait only at a real dependency point. Use status or collect while other independent work can continue. Use wait only when the next correct action depends on a result; timeout leaves jobs running. Include workIds whenever known; each call accepts at most eight. Set includePartial=true with workIds to inspect bounded in-progress or failed output.",
       promptSnippet: "Inspect or collect background subagent results by workId.",
+      promptGuidelines: SUBAGENT_RESULTS_GUIDELINES,
       executionMode: "sequential",
       parameters: WorkbenchResultsParams,
       async execute(_toolCallId, params, _signal, onUpdate, ctx) {
@@ -1838,11 +1866,15 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
                   })),
                 }
               : {}),
-            completed: query.completed.map((job) => ({
-              workId: job.workId,
-              kind: job.kind,
-              status: job.status,
-            })),
+            completed: query.completed.map((job) => {
+              const failure = jobFailureDiagnostic(job);
+              return {
+                workId: job.workId,
+                kind: job.kind,
+                status: job.status,
+                ...(failure ? { failure } : {}),
+              };
+            }),
             pending: query.pending.map((job) => ({
               workId: job.workId,
               kind: job.kind,
@@ -1850,6 +1882,35 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             })),
             missing: query.missing,
           },
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: "subagent_extend",
+      label: "Extend Subagent Deadline",
+      description: "Extend one live child run once, before its current hard deadline. Use the workId and exact runId from the soft deadline notice, and explain what evidence warrants the extension. Extends only that child, never restarts work or changes sibling budgets. Subject to the configured per-run extension limit and original total hard cap; the soft-deadline notice reports the available amount.",
+      promptSnippet: "Give one justified, bounded deadline extension to a live subagent run.",
+      executionMode: "sequential",
+      parameters: Type.Object({
+        workId: Type.String({ minLength: 1, maxLength: 128 }),
+        runId: Type.String({ minLength: 1, maxLength: 128 }),
+        extendMs: Type.Integer({ minimum: 1, maximum: 2_147_483_647 }),
+        reason: Type.String({ minLength: 1, maxLength: 500 }),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        activeContext = ctx;
+        const reason = params.reason.trim();
+        const result = reason
+          ? ensureController().extendJobDeadline(params.workId, params.runId, params.extendMs)
+          : { ok: false as const, reason: "An extension reason is required." };
+        const details = { workId: params.workId, runId: params.runId, ...result };
+        if (result.ok) pi.appendEntry("subagent-deadline-extension", { ...details, reason, at: Date.now() });
+        return {
+          content: [{ type: "text", text: result.ok
+            ? `Same run extended once. New hard deadline: ${new Date(result.deadlineAt).toISOString()}.`
+            : `Deadline unchanged: ${result.reason}` }],
+          details,
         };
       },
     });

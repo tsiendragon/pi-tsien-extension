@@ -117,8 +117,6 @@ export interface PiRpcProcessProviderOptions {
   readonly runWallWarningMs?: number;
   readonly warningRepeatMs?: number;
   readonly hardRunWallTimeMs?: number | false;
-  /** Grace the parent agent gets to decide whether a timed-out run is still useful. */
-  readonly wallDecisionGraceMs?: number;
   readonly timeoutAbortGraceMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly heartbeatIntervalMs?: number;
@@ -320,6 +318,10 @@ function addUsage(total: AgentUsage, message: RpcAssistantMessage): AgentUsage {
     cost: total.cost + (usage.cost?.total ?? 0),
   };
 }
+
+type DeadlineExtension =
+  | { readonly ok: true; readonly previousDeadlineAt: number; readonly deadlineAt: number; readonly extendMs: number }
+  | { readonly ok: false; readonly reason: string };
 
 class PiRpcClient {
   private process: ChildProcessWithoutNullStreams | undefined;
@@ -649,7 +651,6 @@ export class PiRpcProcessProvider implements SubagentProvider {
   private readonly runWallWarningMs: number;
   private readonly warningRepeatMs: number;
   private readonly hardRunWallTimeMs: number | undefined;
-  private readonly wallDecisionGraceMs: number;
   private readonly timeoutAbortGraceMs: number;
   private readonly shutdownTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
@@ -657,7 +658,12 @@ export class PiRpcProcessProvider implements SubagentProvider {
   private readonly maxSessions: number;
   private readonly sessions = new Map<string, ProviderSession>();
   private readonly deadSessions = new Map<string, DeadSession>();
+  private readonly deadlineControls = new Map<string, (extendMs: number) => DeadlineExtension>();
   private acceptedRuns = 0;
+
+  extendRunDeadline(runId: string, extendMs: number): DeadlineExtension {
+    return this.deadlineControls.get(runId)?.(extendMs) ?? { ok: false, reason: "No live extendable deadline for this run." };
+  }
   private disposed = false;
   private disposePromise: Promise<void> | undefined;
 
@@ -704,10 +710,6 @@ export class PiRpcProcessProvider implements SubagentProvider {
     this.warningRepeatMs = positiveInteger(
       "warningRepeatMs",
       options.warningRepeatMs ?? 6 * 60 * 60_000,
-    );
-    this.wallDecisionGraceMs = positiveInteger(
-      "wallDecisionGraceMs",
-      options.wallDecisionGraceMs ?? 15 * 60_000,
     );
     this.hardRunWallTimeMs =
       options.hardRunWallTimeMs === false
@@ -979,7 +981,7 @@ export class PiRpcProcessProvider implements SubagentProvider {
       let idleWarningTimer: ReturnType<typeof setTimeout> | undefined;
       let wallWarningTimer: ReturnType<typeof setTimeout> | undefined;
       let hardWallTimer: ReturnType<typeof setTimeout> | undefined;
-      let hardWallForceAbortTimer: ReturnType<typeof setTimeout> | undefined;
+      let softDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
       let timeoutAbortGraceTimer: ReturnType<typeof setTimeout> | undefined;
       let pendingTimeout: PiRpcProviderError | undefined;
       let timeoutTerminationStarted = false;
@@ -994,7 +996,8 @@ export class PiRpcProcessProvider implements SubagentProvider {
         if (idleWarningTimer) clearTimeout(idleWarningTimer);
         if (wallWarningTimer) clearTimeout(wallWarningTimer);
         if (hardWallTimer) clearTimeout(hardWallTimer);
-        if (hardWallForceAbortTimer) clearTimeout(hardWallForceAbortTimer);
+        if (softDeadlineTimer) clearTimeout(softDeadlineTimer);
+        this.deadlineControls.delete(request.runId);
         if (timeoutAbortGraceTimer) clearTimeout(timeoutAbortGraceTimer);
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         unsubscribeEvents();
@@ -1020,7 +1023,6 @@ export class PiRpcProcessProvider implements SubagentProvider {
         if (idleWarningTimer) clearTimeout(idleWarningTimer);
         if (wallWarningTimer) clearTimeout(wallWarningTimer);
         if (hardWallTimer) clearTimeout(hardWallTimer);
-        if (hardWallForceAbortTimer) clearTimeout(hardWallForceAbortTimer);
         abortSent = true;
         timeoutAbortGraceTimer = setTimeout(
           () => terminateTimedOutSession(error),
@@ -1260,25 +1262,46 @@ export class PiRpcProcessProvider implements SubagentProvider {
       armWallWarning();
       const hardRunWallTimeMs = request.hardWallTimeMs ?? this.hardRunWallTimeMs;
       if (hardRunWallTimeMs !== undefined) {
-        // The timeout used to kill the run outright, and 145 of the last 242
-        // failures were exactly that: a healthy long task stopped mid-work.
-        // Now it first only warns, so the parent agent can decide whether the
-        // task is still worth its time. If nobody decides, stop anyway after a
-        // grace period, so a forgotten task cannot hold a session slot forever.
-        const forceAbortAfterMs = hardRunWallTimeMs + this.wallDecisionGraceMs;
-        hardWallTimer = setTimeout(() => emitRunWarning("wall"), hardRunWallTimeMs);
-        hardWallTimer.unref?.();
-        hardWallForceAbortTimer = setTimeout(
-          () =>
-            beginTimeout(
-              new PiRpcProviderError(
-                "run_wall_timeout",
-                `Pi RPC Run ${request.runId} exceeded hard wall time ${hardRunWallTimeMs} ms and was still running ${forceAbortAfterMs - hardRunWallTimeMs} ms after the warning.`,
-              ),
-            ),
-          forceAbortAfterMs,
-        );
-        hardWallForceAbortTimer.unref?.();
+        let budgetMs = hardRunWallTimeMs;
+        let deadlineAt = runStartedAt + budgetMs;
+        let extended = false;
+        const maxExtensionMs = Math.max(0, Math.min(request.workExtensionMaxMs ?? 300_000, (request.hardWallMaxMs ?? budgetMs) - budgetMs));
+        const armHardDeadline = () => {
+          if (hardWallTimer) clearTimeout(hardWallTimer);
+          hardWallTimer = setTimeout(() => beginTimeout(new PiRpcProviderError(
+            "run_wall_timeout", `Pi RPC Run ${request.runId} exceeded hard wall time ${budgetMs} ms.`,
+          )), Math.max(0, deadlineAt - Date.now()));
+          hardWallTimer.unref?.();
+        };
+        if (maxExtensionMs > 0) this.deadlineControls.set(request.runId, (extendMs) => {
+          if (settled || abortSent || pendingTimeout || request.signal.aborted || Date.now() >= deadlineAt) {
+            return { ok: false, reason: "Deadline elapsed or run is terminating." };
+          }
+          if (extended) return { ok: false, reason: "This run has already been extended once." };
+          if (!Number.isSafeInteger(extendMs) || extendMs <= 0 || extendMs > maxExtensionMs) {
+            return { ok: false, reason: `Extension must be a positive integer no larger than ${maxExtensionMs} ms.` };
+          }
+          const previousDeadlineAt = deadlineAt;
+          budgetMs += extendMs;
+          deadlineAt += extendMs;
+          extended = true;
+          armHardDeadline();
+          return { ok: true, previousDeadlineAt, deadlineAt, extendMs };
+        });
+        if (request.hardWallTimeMs !== undefined && hardRunWallTimeMs >= 1000) {
+          const leadMs = Math.min(60_000, Math.floor(hardRunWallTimeMs / 3));
+          softDeadlineTimer = setTimeout(() => {
+            if (settled || pendingTimeout || abortSent || request.signal.aborted) return;
+            request.emit({
+              type: "run-warning", warning: "soft-deadline",
+              elapsedMs: Date.now() - runStartedAt, deadlineAt,
+              maxExtensionMs: extended ? 0 : maxExtensionMs,
+              message: "The work is still running and approaching its hard deadline.",
+            });
+          }, hardRunWallTimeMs - leadMs);
+          softDeadlineTimer.unref?.();
+        }
+        armHardDeadline();
       }
       if (request.signal.aborted) {
         fail(

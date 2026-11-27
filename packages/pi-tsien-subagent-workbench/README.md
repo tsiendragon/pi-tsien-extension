@@ -26,6 +26,14 @@
 - `model` 只能是档位文件里出现过的模型，固定使用、不换，除非 `allowFallback: true`；`inheritModel` 只有 `allowInherit: true` 时可用。
 - 没有档位文件时退回旧变量 `PI_SUBAGENT_EXECUTION_MODEL`（当作只有一个候选的 medium 档）；两者都没有则直接报错，不再有内置默认模型。
 
+## 超时排查与恢复
+
+- 带硬时限的子任务在截止前会发一次软截止提醒（提前三分之一的预算，最多 60 秒）。Workbench 尝试把已有的有限文本片段推送给主 Agent，标记为未验证；没有文本不代表没有落盘产物。主 Agent 可以等待、按 workId 取消，或在当前截止前用 `subagent_extend` 提交 `workId`、提醒里的 `runId`、`extendMs` 和理由。延期只作用于该子进程本轮，最多一次，由主 Agent 选择实际时长。默认上限 5 分钟，可在 `subagent-models.json` 的 `timeouts.workExtensionMaxMs` 配置（毫秒，例如 `900000` 表示 15 分钟，`0` 禁用延期）。可用延期还受 `timeouts.workHardMaxMs` 的剩余预算约束；会话记录保留理由和新旧截止时间。不自动延期，不保证正在调用工具的子 Agent 能及时产出报告；到截止仍未完成时，先尝试正常中止，再按原规则终止。
+
+- `timeoutMs` 是整个子任务的墙钟预算，包含读材料、推理、执行和交付。短时限只派一个可验证的核查点；多步推导可先试 4–6 分钟的预算，但仍应拆阶段，不能仅靠延长时限。长实验分开准备、后台执行和验收，并事先约定可复核的落盘产物。
+- `subagent_results` 对已识别的失败返回 `details.completed[].failure`。`timeout` 的 `checkpoint: "unknown"` 不代表没产物，先核对已有文件和后台进程；`quota_exhausted` / `rate_limited` 则先查 `/subagent-models` 的额度和冷却状态。诊断不会自动重跑或切换成更贵的档位。
+- 比较调整前后时，同时记录可复核交付率和每份交付的时间、成本。不要把失败率降低等同于效率提升，也不要把超时当作对研究假设的反证。
+
 ## 局限
 
 - 第一期只在“启动失败 / 尚未执行工具”时自动换模型；运行中途换模型、跨会话记住限流状态在后续阶段。模型调用次数达到上限时任务直接结束并报错，而不是暂停。

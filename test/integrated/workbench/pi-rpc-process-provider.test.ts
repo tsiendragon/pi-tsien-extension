@@ -635,7 +635,6 @@ describe("PiRpcProcessProvider", () => {
       runWallWarningMs: 40,
       warningRepeatMs: 1_000,
       hardRunWallTimeMs: 100,
-      wallDecisionGraceMs: 150,
       timeoutAbortGraceMs: 30,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
@@ -674,7 +673,6 @@ describe("PiRpcProcessProvider", () => {
       runWallWarningMs: 50,
       warningRepeatMs: 1_000,
       hardRunWallTimeMs: 120,
-      wallDecisionGraceMs: 150,
       timeoutAbortGraceMs: 100,
       shutdownTimeoutMs: 500,
       heartbeatIntervalMs: 20,
@@ -695,10 +693,9 @@ describe("PiRpcProcessProvider", () => {
           cwd: process.cwd(),
         }),
       );
-      // Soft wall warnings also fire, so assert on the hard-limit one specifically:
-      // it arrives at the wall limit and the run is only stopped after the grace window.
-      expect(warnings.every(warning => warning.warning === "wall")).toBe(true);
-      expect(warnings.some(warning => warning.elapsedMs >= 100)).toBe(true);
+      expect(warnings).toEqual([
+        expect.objectContaining({ warning: "wall", elapsedMs: expect.any(Number) }),
+      ]);
       expect(timeout.code).toBe("run_wall_timeout");
       expect(timeout.message).toContain("hard wall time 120 ms");
       expect(provider.snapshot()).toMatchObject({
@@ -707,6 +704,98 @@ describe("PiRpcProcessProvider", () => {
         unavailable: 1,
       });
       expect(runtime.getSnapshot().governor.active).toBe(0);
+    } finally {
+      await provider.dispose();
+      runtime.dispose();
+    }
+  });
+
+  it("emits one soft deadline for a bounded child before enforcing the unchanged hard limit", async () => {
+    const runtime = new WorkbenchRuntimeHost();
+    const provider = new PiRpcProcessProvider({
+      executable: process.execPath, baseArgs: [fakeRpcPath], commandTimeoutMs: 2_000,
+      runIdleWarningMs: 10_000, runWallWarningMs: 10_000, timeoutAbortGraceMs: 100,
+      shutdownTimeoutMs: 500, heartbeatIntervalMs: 20,
+    });
+    const service = new SubagentService(runtime);
+    service.providers.register(provider);
+    const events: unknown[] = [];
+    service.subscribe(event => {
+      if (event.type === "provider-event" && event.event.type === "run-warning") events.push(event.event);
+    });
+    try {
+      const timeout = await executionCause(service.start({
+        task: "continuous-progress:20", isolation: "process", cwd: process.cwd(), hardWallTimeMs: 1_200,
+      }));
+      expect(events).toEqual([expect.objectContaining({ warning: "soft-deadline", deadlineAt: expect.any(Number) })]);
+      expect(timeout.code).toBe("run_wall_timeout");
+      expect(timeout.message).toContain("hard wall time 1200 ms");
+    } finally {
+      await provider.dispose();
+      runtime.dispose();
+    }
+  });
+
+  it("extends the same live RPC run once, rejects excess, and enforces the new cutoff", async () => {
+    const runtime = new WorkbenchRuntimeHost();
+    const provider = new PiRpcProcessProvider({
+      executable: process.execPath, baseArgs: [fakeRpcPath], commandTimeoutMs: 2_000,
+      runIdleWarningMs: 10_000, runWallWarningMs: 10_000, timeoutAbortGraceMs: 100,
+      shutdownTimeoutMs: 500, heartbeatIntervalMs: 20,
+    });
+    const service = new SubagentService(runtime);
+    service.providers.register(provider);
+    let runId: string | undefined;
+    const extensions: unknown[] = [];
+    service.subscribe(event => {
+      if (event.type !== "provider-event" || event.event.type !== "run-warning" || event.event.warning !== "soft-deadline") return;
+      runId = event.runId;
+      extensions.push(provider.extendRunDeadline(runId, 401));
+      extensions.push(provider.extendRunDeadline(runId, 400));
+      extensions.push(provider.extendRunDeadline(runId, 1));
+    });
+    try {
+      const timeout = await executionCause(service.start({
+        task: "continuous-progress:20", isolation: "process", cwd: process.cwd(), hardWallTimeMs: 1_200, hardWallMaxMs: 2_400, workExtensionMaxMs: 400,
+      }));
+      expect(extensions).toEqual([
+        expect.objectContaining({ ok: false, reason: expect.stringContaining("400 ms") }),
+        expect.objectContaining({ ok: true, extendMs: 400 }),
+        expect.objectContaining({ ok: false, reason: expect.stringContaining("already been extended") }),
+      ]);
+      expect(timeout.message).toContain("hard wall time 1600 ms");
+      expect(provider.extendRunDeadline(runId!, 1).ok).toBe(false);
+      expect(provider.snapshot()).toMatchObject({ active: 0 });
+    } finally {
+      await provider.dispose();
+      runtime.dispose();
+    }
+  });
+
+  it("honors a configured extension above five minutes without restarting the run", async () => {
+    const runtime = new WorkbenchRuntimeHost();
+    const provider = new PiRpcProcessProvider({
+      executable: process.execPath, baseArgs: [fakeRpcPath], commandTimeoutMs: 2_000,
+      runIdleWarningMs: 10_000, runWallWarningMs: 10_000, shutdownTimeoutMs: 500,
+    });
+    const service = new SubagentService(runtime);
+    service.providers.register(provider);
+    const abort = new AbortController();
+    let available: number | undefined;
+    let extension: ReturnType<typeof provider.extendRunDeadline> | undefined;
+    service.subscribe(event => {
+      if (event.type !== "provider-event" || event.event.type !== "run-warning" || event.event.warning !== "soft-deadline") return;
+      available = event.event.maxExtensionMs;
+      extension = provider.extendRunDeadline(event.runId, 360_000);
+      abort.abort(new Error("test completed"));
+    });
+    try {
+      await service.start({
+        task: "continuous-progress:20", isolation: "process", cwd: process.cwd(), signal: abort.signal,
+        hardWallTimeMs: 1_200, hardWallMaxMs: 361_200, workExtensionMaxMs: 600_000,
+      }).catch(() => undefined);
+      expect(available).toBe(360_000);
+      expect(extension).toMatchObject({ ok: true, extendMs: 360_000 });
     } finally {
       await provider.dispose();
       runtime.dispose();

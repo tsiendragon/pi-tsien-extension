@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerGoalRuntime } from "pi-tsien-goal/src/runtime.ts";
+import { GOAL_EVALUATOR_RETRY_MS, GOAL_WAIT_RECHECK_MS, registerGoalRuntime } from "pi-tsien-goal/src/runtime.ts";
 import { renderGoalStartPrompt } from "pi-tsien-goal/src/prompts.ts";
 import { saveGoalState } from "pi-tsien-goal/src/state.ts";
-import { WORKBENCH_JOB_EVENT } from "pi-tsien-goal/src/evaluator.ts";
+import { PROOF_JOB_EVENT, WORKBENCH_JOB_EVENT } from "pi-tsien-goal/src/evaluator.ts";
 import type { GoalState } from "pi-tsien-goal/src/types.ts";
 
 const SESSION = "session-a";
@@ -32,8 +32,10 @@ function harness(evaluatorText = '{"decision":"wait","reason":"Waiting on subage
 		getFlag: (flag: string) => (flag === "goal-evaluator-models" ? "provider/model" : undefined),
 		sendUserMessage, appendEntry,
 	} as never);
-	const on = (name: string, event: unknown = {}) => handlers.get(name)!(event, ctx);
-	const job = (event: Record<string, unknown>) => events.get(WORKBENCH_JOB_EVENT)!({ sessionId: SESSION, label: "Review branch", ...event });
+	const on = (name: string, event = {}) => handlers.get(name)!(name === "session_before_compact" ? {
+		branchEntries: branch, preparation: { firstKeptEntryId: "leaf", tokensBefore: 100 }, ...event,
+	} : event, ctx);
+	const job = (event: Record<string, unknown>, kind = WORKBENCH_JOB_EVENT) => events.get(kind)!({ sessionId: SESSION, label: "Review branch", ...event });
 	const endTurn = (text = "GOAL_HANDOFF\nReady now: none until w1 finishes", stopReason = "stop") =>
 		on("agent_end", { messages: [{ role: "assistant", stopReason, content: [{ type: "text", text }] }] });
 	const engage = async () => {
@@ -48,6 +50,122 @@ let active: ReturnType<typeof harness> | undefined;
 afterEach(async () => {
 	await active?.on("session_shutdown");
 	active = undefined;
+	vi.useRealTimers();
+});
+
+describe("goal recovery after a turn yields", () => {
+	it("retries an unavailable evaluator once when there is no job to wait for", async () => {
+		vi.useFakeTimers();
+		const h = (active = harness("invalid response"));
+		await h.engage();
+		await h.endTurn();
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(10);
+		expect(h.stream).toHaveBeenCalledOnce();
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-scheduler", expect.objectContaining({ state: "evaluator-backoff" }));
+		await vi.advanceTimersByTimeAsync(3 * GOAL_EVALUATOR_RETRY_MS);
+		expect(h.stream).toHaveBeenCalledTimes(2);
+		expect(h.sendUserMessage).not.toHaveBeenCalled();
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-scheduler", expect.objectContaining({ state: "evaluator-unavailable-no-retry", reason: "retry-exhausted" }));
+	});
+
+	it("can resume normally when the evaluator returns on its second attempt", async () => {
+		vi.useFakeTimers();
+		const h = (active = harness('{"decision":"continue","reason":"The next step is ready.","action":"Run the next checkpoint check"}'));
+		h.stream.mockImplementationOnce(() => ({ result: async () => ({ stopReason: "stop", content: [{ type: "text", text: "invalid response" }] }) }));
+		await h.engage();
+		await h.endTurn();
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(GOAL_EVALUATOR_RETRY_MS + 10);
+		expect(h.stream).toHaveBeenCalledTimes(2);
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ action: "queued", source: "evaluator" }));
+		expect(h.sendUserMessage).toHaveBeenCalledOnce();
+	});
+	it("wakes on proof completion after Pi successfully retries a provider error", async () => {
+		const h = (active = harness());
+		await h.engage();
+		h.job({ id: "pj-werner", state: "pending" }, PROOF_JOB_EVENT);
+		await h.endTurn("provider error", "error");
+		await h.endTurn();
+		await h.on("agent_settled");
+		h.job({ id: "pj-werner", state: "finished" }, PROOF_JOB_EVENT);
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledOnce());
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ action: "queued", source: "proof-job" }));
+		expect(h.appendEntry).not.toHaveBeenCalledWith("goal-scheduler", expect.objectContaining({ state: "provider-backoff" }));
+	});
+
+	it("allows one bounded retry for a settled provider failure, then stops retrying", async () => {
+		vi.useFakeTimers();
+		const h = (active = harness());
+		await h.engage();
+		await h.endTurn("provider error", "error");
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(31_000);
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ source: "provider-retry" }));
+		await h.on("input", { source: "extension", text: "继续目标" });
+		await h.endTurn("provider error again", "error");
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(h.sendUserMessage).toHaveBeenCalledOnce();
+	});
+
+	it("does not resume an aborted goal or wake it on a later result", async () => {
+		const h = (active = harness());
+		await h.engage();
+		h.job({ id: "w1", state: "pending" });
+		await h.endTurn("", "aborted");
+		await h.on("agent_settled");
+		h.job({ id: "w1", state: "finished" });
+		await h.settle();
+		expect(h.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("resumes an engaged goal after requested manual compaction exactly once, prioritizing terminal evidence", async () => {
+		const h = (active = harness());
+		await h.engage();
+		h.job({ id: "w1", state: "pending" });
+		await h.endTurn();
+		await h.on("agent_settled");
+		await h.on("session_before_compact", { reason: "manual", willRetry: false });
+		h.job({ id: "w1", state: "finished" });
+		await h.settle();
+		expect(h.sendUserMessage).not.toHaveBeenCalled();
+		await h.on("session_compact", { reason: "manual", willRetry: false });
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledOnce());
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ source: "workbench-job" }));
+	});
+
+	it("continues from a manual compression checkpoint without a job, but not outside an engaged goal", async () => {
+		const h = (active = harness());
+		await h.on("session_start");
+		await h.on("session_before_compact");
+		await h.on("session_compact", { reason: "manual" });
+		await h.settle();
+		expect(h.sendUserMessage).not.toHaveBeenCalled();
+		await h.engage();
+		await h.on("session_before_compact");
+		await h.on("session_compact", { reason: "manual" });
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledOnce());
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ source: "compaction" }));
+	});
+
+	it("reconciles a missing terminal notification once, without an unbounded wait loop", async () => {
+		vi.useFakeTimers();
+		const h = (active = harness());
+		await h.engage();
+		h.job({ id: "w1", state: "pending" });
+		await h.endTurn();
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(GOAL_WAIT_RECHECK_MS + 10);
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ source: "wait-recheck" }));
+		await h.on("input", { source: "extension", text: "继续目标" });
+		const next = await h.on("before_agent_start", { prompt: "继续目标" });
+		expect(next.message.content).toContain("workbench:w1");
+		await h.endTurn();
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(GOAL_WAIT_RECHECK_MS + 10);
+		expect(h.sendUserMessage).toHaveBeenCalledOnce();
+	});
 });
 
 describe("goal start drafting chain", () => {
