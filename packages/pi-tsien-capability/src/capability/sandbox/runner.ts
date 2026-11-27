@@ -21,7 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
-import type { CapabilitySandbox } from "./core.ts";
+import type { CapabilitySandbox } from "../core.ts";
 
 export interface LlmRequest {
 	readonly id: number;
