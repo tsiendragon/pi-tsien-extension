@@ -16,7 +16,7 @@ Pi 的系统提示段格式随版本变了，本扩展两代都认：
 ### 两个容易踩的点
 
 - **Pi ≥ 1.6 会自己读 `DefaultSystemPrompt.md`**，所以扩展替换开头那一步在新版下是重复动作。此时不报警，只做规则段调整。
-- **只认标记、不认版本号**：`pi-tsien-session-ui-fork` 也复用这里的两个纯函数，段格式再变时只需要更新 `TOOLS_SECTION_MARKERS` / `GUIDELINES_SECTION_MARKERS` 两份候选列表。改成标记失效时**不要**静默跳过——会像 1.6 升级那次一样，规则调整整整失放而无人发现。
+- **只认标记、不认版本号**：`pi-tsien-session-ui-fork` 也复用这里的两个纯函数，段格式再变时只需要更新 `TOOLS_SECTION_MARKERS` / `GUIDELINES_SECTION_MARKERS` 两份候选列表。改成标记失效时**不要**静默跳过——会像 1.6 升级那次一样，规则调整整整失效而无人发现。
 
 ## 事件钩子
 
