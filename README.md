@@ -75,6 +75,19 @@
 
 如果另一个 Extension 已接管自定义 Editor，命令状态仍会显示，但按键聚焦会停用并给出警告，避免静默覆盖。
 
+### `pi-tsien-big-path-guard`
+
+拦住「在超大网络盘上做无界递归遍历」的 bash 调用，避免命令卡几分钟到几十分钟后被 timeout 杀掉。
+
+- 受保护根默认 `/mnt`、`/mnt/nas`、`/mnt/data`（自动覆盖 data / workspace 等子目录）；`PI_BIG_PATH_GUARD_ROOTS=/a,/b` 可覆盖。
+- 管 `find`、`du`、`tree`、`fd`、`rg`、`grep`、`ls -R`：目标落在受保护根内时**必须显式限深且 ≤ 2**，没写深度或写了 ≥ 3 一律拦。
+- 放行 `git` 子命令（`git ls-files` 读索引，实测 0.5 秒）、非递归命令、以及受保护根之外的路径。
+- 拦截前会解析变量赋值、`cd` 切换和相对路径，复合命令里任一段命中即拦。
+- 拦截说明直接给出替代写法（`git ls-files` / `find <子目录> -maxdepth 2` / `rg --files --max-depth 2`）。
+- `PI_BIG_PATH_GUARD=off` 临时停用。
+
+背景：这批网络盘冷缓存下单个目录首次打开实测 15 秒，`pi` timing 里撞满超时预算的命令 92% 失败。
+
 ### `pi-tsien-usage-analytics`
 
 在本地统计 Tool 与 Skill 的使用频率，不上传提示词、参数或输出，也不会自动卸载任何能力。

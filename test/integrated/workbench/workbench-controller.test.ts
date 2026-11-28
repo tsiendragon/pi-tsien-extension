@@ -2042,3 +2042,79 @@ describe("heartbeat sink ownership", () => {
     }
   }, 40_000);
 });
+describe("WorkbenchController idle subagent reclamation", () => {
+  it("closes a child process that stays idle past the configured window", async () => {
+    const runtime = new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 });
+    const provider = new PiRpcProcessProvider({
+      executable: process.execPath,
+      baseArgs: [fixture],
+      commandTimeoutMs: 2_000,
+      startupTimeoutMs: 2_000,
+      runTimeoutMs: 5_000,
+      shutdownTimeoutMs: 500,
+      heartbeatIntervalMs: 50,
+    });
+    const controller = new WorkbenchController(runtime, {
+      provider,
+      router: testRouter(),
+      jobLedger: null,
+      // Short windows so the test does not wait on the production defaults.
+      sessionIdleMs: 200,
+      sessionIdleSweepMs: 100,
+    });
+    controllers.push(controller);
+
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "idle worker",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe("completed");
+    });
+    // A completed conversation keeps its child alive for follow-ups...
+    expect(provider.snapshot().sessions).toBe(1);
+
+    // ...until it stays idle past the window, then the child is gone.
+    await vi.waitFor(() => {
+      expect(provider.snapshot().sessions).toBe(0);
+    }, { timeout: 10_000 });
+    const conversation = runtime.getSnapshot().conversations.items[0]!;
+    expect(conversation.availability).toBe("disposed");
+    expect(conversation.error).toMatch(/idle/);
+  }, 20_000);
+
+  it("leaves a conversation alone until the idle window has passed", async () => {
+    const runtime = new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 8 });
+    const provider = new PiRpcProcessProvider({
+      executable: process.execPath,
+      baseArgs: [fixture],
+      commandTimeoutMs: 2_000,
+      startupTimeoutMs: 2_000,
+      runTimeoutMs: 5_000,
+      shutdownTimeoutMs: 500,
+      heartbeatIntervalMs: 50,
+    });
+    const controller = new WorkbenchController(runtime, {
+      provider,
+      router: testRouter(),
+      jobLedger: null,
+      // Far longer than the test: the sweep must run and leave the child be.
+      sessionIdleMs: 60_000,
+      sessionIdleSweepMs: 100,
+    });
+    controllers.push(controller);
+
+    await runtime.dispatch({
+      type: "start-agent",
+      task: "fresh worker",
+      cwd: process.cwd(),
+    });
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().conversations.items[0]?.status).toBe("completed");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(provider.snapshot().sessions).toBe(1);
+    expect(runtime.getSnapshot().conversations.items[0]?.availability).toBe("ready");
+  }, 20_000);
+});

@@ -85,6 +85,28 @@ export const DEFAULT_TRANSCRIPT_BYTES = 1 * 1024 * 1024;
 const PUBLISH_INTERVAL_MS = 50;
 const DEFAULT_STALLED_AFTER_MS = 15_000;
 const FOLLOW_UP_RETRY_MS = 25;
+/**
+ * How long a finished conversation keeps its `pi` child alive before it is closed.
+ *
+ * Children are kept on purpose so the parent can follow up, but nothing closed
+ * them once the parent moved on: cancelling a job only marks it and interrupts
+ * the run, so an idle child stayed for days, held ~120 MB, and kept a live-session
+ * row in the dashboard (one measured parent had eight of them for a day). The
+ * parent spawns a fresh child when it really needs one, so an idle conversation
+ * past this window is history.
+ *
+ * `PI_SUBAGENT_SESSION_IDLE_MS=0` disables the reclamation.
+ */
+export const DEFAULT_SESSION_IDLE_MS = 30 * 60_000;
+const SESSION_IDLE_SWEEP_MS = 60_000;
+
+function sessionIdleMsFromEnv(): number {
+  const raw = process.env.PI_SUBAGENT_SESSION_IDLE_MS?.trim();
+  if (!raw) return DEFAULT_SESSION_IDLE_MS;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return DEFAULT_SESSION_IDLE_MS;
+  return Math.floor(value);
+}
 const CANONICAL_MODEL_REFERENCE = /^[^/\s]+\/\S+$/;
 
 function serializedBytes(value: unknown): number {
@@ -171,6 +193,10 @@ export interface WorkbenchControllerOptions {
   readonly providerOptions?: PiRpcProcessProviderOptions;
   readonly maxTranscriptBytes?: number;
   readonly stalledAfterMs?: number;
+  /** Idle time after which a finished conversation's child process is closed; 0 disables. */
+  readonly sessionIdleMs?: number;
+  /** Sweep cadence for the idle reclaimer; defaults to one minute. */
+  readonly sessionIdleSweepMs?: number;
   /** Invoked after a background submission reaches a terminal state. */
   readonly onJobSettled?: (job: WorkbenchJobSnapshot) => void;
   /** Invoked when a Run crosses a soft idle or wall-time threshold. */
@@ -932,6 +958,9 @@ export class WorkbenchController {
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly maxTranscriptBytes: number;
   private readonly stalledAfterMs: number;
+  private readonly sessionIdleMs: number;
+  private readonly sessionIdleSweepMs: number;
+  private idleReclaimTimer?: ReturnType<typeof setInterval>;
   private reservedWorkflowSessions = 0;
   private capacityReclaimTail: Promise<void> = Promise.resolve();
   private readonly onJobSettled: ((job: WorkbenchJobSnapshot) => void) | undefined;
@@ -952,6 +981,12 @@ export class WorkbenchController {
     this.stalledAfterMs = positiveInteger(
       "stalledAfterMs",
       options.stalledAfterMs ?? DEFAULT_STALLED_AFTER_MS,
+    );
+    this.sessionIdleMs =
+      options.sessionIdleMs ?? sessionIdleMsFromEnv();
+    this.sessionIdleSweepMs = positiveInteger(
+      "sessionIdleSweepMs",
+      options.sessionIdleSweepMs ?? SESSION_IDLE_SWEEP_MS,
     );
     this.onJobSettled = options.onJobSettled;
     this.onRunWarning = options.onRunWarning;
@@ -980,6 +1015,48 @@ export class WorkbenchController {
     this.uninstallHandler = runtime.setCommandHandler((command) =>
       this.handleCommand(command),
     );
+    this.startIdleReclaimer();
+  }
+
+  /**
+   * Close conversations that have been idle past the configured window.
+   *
+   * `reclaimableDirectConversations()` already encodes every safety condition
+   * (no run, no queued message, not a workflow, provider still holds it), so the
+   * sweep only adds the time dimension and the same close sequence the capacity
+   * reclaim uses.
+   */
+  private startIdleReclaimer(): void {
+    if (this.sessionIdleMs <= 0 || this.idleReclaimTimer) return;
+    this.idleReclaimTimer = setInterval(() => {
+      void this.reclaimIdleConversations();
+    }, this.sessionIdleSweepMs);
+    this.idleReclaimTimer.unref?.();
+  }
+
+  private async reclaimIdleConversations(): Promise<void> {
+    if (this.disposed) return;
+    const now = Date.now();
+    const stale = this.reclaimableDirectConversations().filter(
+      (conversation) => now - conversation.updatedAt >= this.sessionIdleMs,
+    );
+    for (const conversation of stale) {
+      const minutes = Math.round(this.sessionIdleMs / 60_000);
+      const reason = `Closed after ${minutes} minutes idle; a new subagent gets a fresh process when it is needed.`;
+      conversation.availability = "disposed";
+      conversation.error = reason;
+      conversation.updatedAt = now;
+      this.clearStallWatchdog(conversation);
+      this.publish(conversation);
+      try {
+        await this.provider.closeSession(conversation.id, reason);
+      } catch (error) {
+        conversation.availability = "unavailable";
+        conversation.error = `Failed to close idle RPC Session: ${errorMessage(error)}`;
+        conversation.updatedAt = Date.now();
+        this.publish(conversation);
+      }
+    }
   }
 
   /**
@@ -2667,6 +2744,8 @@ export class WorkbenchController {
     this.unsubscribeService();
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = undefined;
+    if (this.idleReclaimTimer) clearInterval(this.idleReclaimTimer);
+    this.idleReclaimTimer = undefined;
     this.dirtyConversations.clear();
     for (const conversation of this.conversations.values()) {
       if (conversation.stallTimer) clearTimeout(conversation.stallTimer);

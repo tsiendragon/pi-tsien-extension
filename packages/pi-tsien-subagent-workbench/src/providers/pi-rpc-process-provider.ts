@@ -1120,6 +1120,17 @@ export class PiRpcProcessProvider implements SubagentProvider {
           ? { PI_TRACE_CONTEXT: serializedTraceContext }
           : {}),
         PI_SUBAGENT_WORKBENCH_CHILD: "1",
+        // Children outlive jobs on purpose, so a parent that dies without
+        // disposing them used to leave a whole `pi` process running forever.
+        // The child watches this pid and exits when it disappears.
+        PI_SUBAGENT_PARENT_PID: String(process.pid),
+        // Headless machines have no session bus, and CLIs inside a child (acli,
+        // keyring) autolaunch one per call. When the child exits the daemon is
+        // orphaned (measured: 2400 of them, 1.3 GB). Fill the gap only — a bus
+        // the parent really provides is passed through untouched.
+        ...(this.environment.DBUS_SESSION_BUS_ADDRESS
+          ? {}
+          : { DBUS_SESSION_BUS_ADDRESS: "disabled:" }),
       },
       this.commandTimeoutMs,
       this.shutdownTimeoutMs,

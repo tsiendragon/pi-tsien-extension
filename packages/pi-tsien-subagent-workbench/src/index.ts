@@ -97,6 +97,32 @@ let ratings: RatingLedger | undefined;
 function ratingLedger(): RatingLedger {
   return (ratings ??= new RatingLedger());
 }
+/** How often a child checks that the parent Pi process still exists. */
+const PARENT_WATCH_INTERVAL_MS = 15_000;
+
+/**
+ * Exit when the parent Pi process is gone.
+ *
+ * A subagent child is kept alive between runs so the parent can follow up, which
+ * also means a parent that dies (crash, SIGKILL, closed terminal) never gets the
+ * chance to dispose it. Without this watch the child sat idle for days holding
+ * memory and a live-session row in the dashboard. `process.kill(pid, 0)` is the
+ * cheapest liveness probe; ESRCH is the only answer that means "parent is gone".
+ */
+function watchParentProcess(): void {
+  const raw = process.env.PI_SUBAGENT_PARENT_PID;
+  const parentPid = raw ? Number(raw) : Number.NaN;
+  if (!Number.isInteger(parentPid) || parentPid <= 1) return;
+  const timer = setInterval(() => {
+    try {
+      process.kill(parentPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") process.exit(0);
+    }
+  }, PARENT_WATCH_INTERVAL_MS);
+  timer.unref?.();
+}
+
 
 type WorkbenchRuntimeSnapshot = ReturnType<WorkbenchRuntime["getSnapshot"]>;
 
@@ -1320,6 +1346,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
   const extensionHost = (useProcessDedupe ? globalThis : pi) as unknown as Record<PropertyKey, unknown>;
   if (extensionHost[extensionMarker]) return;
   extensionHost[extensionMarker] = true;
+  if (isChildProcess) watchParentProcess();
   // Child transcripts grow ~0.5 GB a day; trim old ones once per plugin load.
   const sessionDir = defaultSubagentSessionDir();
   if (sessionDir && !isChildProcess) {
