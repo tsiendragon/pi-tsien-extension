@@ -3,6 +3,8 @@ const history = [];
 let pendingSlow = false;
 let abortMode = "success";
 let progressTimer;
+/** Steering messages received mid-run (used by budget handoff tests). */
+const steered = [];
 
 const sigtermDelay = Number(process.env.FAKE_RPC_SIGTERM_DELAY_MS ?? 0);
 if (sigtermDelay > 0) {
@@ -150,6 +152,42 @@ function timelineAssistant() {
   send({ type: "agent_settled" });
 }
 
+/**
+ * Emits N assistant turns, each with `tokens` input+output tokens. Used to test
+ * role budgets (maxTurns / maxTokens) and the near-limit handoff notice.
+ */
+function multiTurn(count, tokens) {
+  send({ type: "agent_start" });
+  let emitted = 0;
+  const step = () => {
+    if (emitted >= count) {
+      send({ type: "agent_settled" });
+      return;
+    }
+    emitted += 1;
+    send({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `turn ${emitted}` }],
+        provider: "fake",
+        model: "fake-rpc",
+        usage: {
+          input: Math.ceil(tokens / 2),
+          output: Math.floor(tokens / 2),
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { total: 0 },
+        },
+        stopReason: "stop",
+      },
+    });
+    // Yield between turns so a concurrent steer can land before the next one.
+    setTimeout(step, 5);
+  };
+  step();
+}
+
 function progressingTool(totalMs, intervalMs) {
   pendingSlow = true;
   abortMode = "success";
@@ -208,9 +246,11 @@ function progressingTool(totalMs, intervalMs) {
   }, intervalMs);
 }
 
-function promptOutput(message) {
-  if (message.startsWith("json-output:")) {
-    return message.slice("json-output:".length);
+function promptOutput(message) {  if (message.includes("json-output:")) {
+    // Structured-output tasks may carry an appended <structured_output_required>
+    // block, so take the payload after the marker and cut at that block.
+    const payload = message.slice(message.indexOf("json-output:") + "json-output:".length);
+    return payload.split("<structured_output_required>")[0].trim();
   }
   if (message === "report-argv") {
     return JSON.stringify(process.argv.slice(2));
@@ -269,6 +309,18 @@ function handle(command) {
       progressingTool(Number(progressing[1]), Number(progressing[2]));
       return;
     }
+    // Emits exactly N assistant turns, so a turn/token budget can be exercised.
+    const turns = command.message.match(/^turns:(\d+)(?::(\d+))?$/);
+    if (turns) {
+      multiTurn(Number(turns[1]), Number(turns[2] ?? 10));
+      return;
+    }
+    // Reports whatever steer messages arrived, for budget-notice assertions.
+    const steeredReport = command.message.match(/^report-steer:([\s\S]*)$/);
+    if (steeredReport) {
+      queueMicrotask(() => assistant(JSON.stringify({ steered })));
+      return;
+    }
     const continuousProgress = command.message.match(
       /^continuous-progress:(\d+)$/,
     );
@@ -299,6 +351,16 @@ function handle(command) {
     } else {
       queueMicrotask(() => assistant(promptOutput(command.message)));
     }
+    return;
+  }
+  if (command.type === "steer") {
+    steered.push(command.message);
+    send({
+      id: command.id,
+      type: "response",
+      command: "steer",
+      success: true,
+    });
     return;
   }
   if (command.type === "abort") {

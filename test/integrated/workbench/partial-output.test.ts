@@ -327,4 +327,84 @@ describe("subagent_results partial output", () => {
 
     for (const handler of handlers.get("session_shutdown") ?? []) await handler();
   });
+
+  it("auto-attaches a bounded stalled preview through subagent_results, without duplicating includePartial", async () => {
+    const stalledJob = {
+      workId: "work-stalled-tool",
+      kind: "agent",
+      label: "Stalled agent",
+      status: "running",
+      background: true,
+      createdAt: Date.now(),
+    } as any;
+    vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
+      completed: [],
+      pending: [stalledJob],
+      missing: [],
+    } as any);
+    const partialJobOutput = vi
+      .spyOn(WorkbenchController.prototype, "partialJobOutput")
+      .mockReturnValue({
+        workId: "work-stalled-tool",
+        kind: "agent",
+        status: "running",
+        sources: [
+          {
+            label: "Stalled agent",
+            sessionId: "s",
+            runId: "r",
+            status: "running",
+            text: `${"z".repeat(2_000)} latest: draft conclusion saved to experiments/x/result.json`,
+            truncated: true,
+            streaming: true,
+          },
+        ],
+        omittedSources: 0,
+      });
+
+    // Seed a wedged bash call that outlived the busy ceiling.
+    const { jobActivityTracker } = await import(
+      "pi-tsien-subagent-workbench/src/job-activity.ts"
+    );
+    const startedAt = Date.now() - 700_000;
+    jobActivityTracker().noteRunStarted("work-stalled-tool", "run-1", startedAt);
+    jobActivityTracker().noteEvent(
+      "work-stalled-tool",
+      "run-1",
+      { type: "tool_execution_start", toolCallId: "call-1", toolName: "bash" },
+      startedAt,
+    );
+
+    const { tools, handlers, ctx } = install();
+    const signal = new AbortController().signal;
+    try {
+      const auto = await tools
+        .get("subagent_results")
+        .execute("stalled-plain", { mode: "status" }, signal, undefined, ctx);
+      const autoText: string = auto.content[0].text;
+      expect(autoText).toContain("stalled?");
+      expect(autoText).toContain("↳ partial (unverified, may be incomplete):");
+      expect(autoText).toContain("latest: draft conclusion saved to");
+      // Bounded: the whole preview line stays inside the stalled budget.
+      const previewLine = autoText.split("\n").find((line) => line.includes("↳ partial"))!;
+      expect(previewLine.length).toBeLessThan(700);
+
+      partialJobOutput.mockClear();
+      const explicit = await tools
+        .get("subagent_results")
+        .execute(
+          "stalled-explicit",
+          { mode: "status", workIds: ["work-stalled-tool"], includePartial: true, partialMaxChars: 400 },
+          signal,
+          undefined,
+          ctx,
+        );
+      const explicitText: string = explicit.content[0].text;
+      expect(explicitText).toContain("## Partial output · work-stalled-tool");
+      expect(explicitText.split("↳ partial").length - 1).toBe(0);
+    } finally {
+      jobActivityTracker().clear("work-stalled-tool");
+      for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+    }
+  });
 });

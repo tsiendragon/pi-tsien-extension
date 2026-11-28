@@ -2,11 +2,11 @@ import { readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { roleProfile } from "./roles-registry.ts";
 import type { AgentThinkingLevel } from "./subagent-service.ts";
 
-export const TIERS = ["light", "medium", "heavy", "ultra"] as const;
+export const TIERS = ["micro", "light", "medium", "heavy", "ultra"] as const;
 export type Tier = (typeof TIERS)[number];
-
 /**
  * When every candidate of a tier is unusable (all disabled, or none registered),
  * run one tier lower instead of failing outright. A weaker model that finishes
@@ -17,7 +17,7 @@ const DOWNGRADE_TIER: Partial<Record<Tier, Tier>> = {
   heavy: "medium",
   medium: "light",
 };
-export type RouterRole = "read_only" | "code" | "research";
+export type RouterRole = string;
 export type ExhaustedAction = "wait" | "wait_then_escalate" | "escalate" | "fail";
 
 export type ErrorClass =
@@ -69,7 +69,7 @@ export const DEFAULT_WORK_EXTENSION_MAX_MS = 5 * 60_000;
 export const DEFAULT_MAX_MODEL_CALLS = 2_000;
 export const MAX_SWITCHES_PER_TASK = 3;
 const DEFAULT_MAX_CONCURRENCY = 4;
-const AUTO_ESCALATION_TIERS: readonly Tier[] = ["light", "medium"];
+const AUTO_ESCALATION_TIERS: readonly Tier[] = ["micro", "light", "medium"];
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MODEL_REF = /^[^/\s]+\/\S+$/;
 
@@ -99,7 +99,7 @@ export const STARTUP_CLASSES: ReadonlySet<ErrorClass> = DISABLING;
 
 const PATTERNS: readonly (readonly [ErrorClass, RegExp])[] = [
   ["cancelled", /run interrupted|interrupted by user|cancelled by user|workbench controller is disposed/i],
-  ["budget", /model_call_budget|model call budget/i],
+  ["budget", /model_call_budget|model call budget|token budget|token_budget/i],
   ["timeout", /run_wall_timeout|exceeded hard wall time/i],
   ["quota_exhausted", /insufficient_quota|quota|usage limit|billing|credit balance|余额|额度/i],
   ["rate_limited", /\b429\b|rate.?limit|too many requests|requests per minute|tpm limit|rpm limit/i],
@@ -154,6 +154,7 @@ function objectAt(value: unknown, field: string): Record<string, unknown> {
 }
 
 const DEFAULT_EXHAUSTED: Readonly<Record<Tier, TierConfig["onExhausted"]>> = {
+  micro: { action: "fail", maxWaitMs: 0 },
   light: { action: "wait_then_escalate", maxWaitMs: 120_000, escalateTo: "medium" },
   medium: { action: "wait", maxWaitMs: 600_000 },
   heavy: { action: "fail", maxWaitMs: 0 },
@@ -165,9 +166,10 @@ export function parseRouterConfig(raw: unknown): RouterConfig {
   const root = objectAt(raw, "config");
   if (root.version !== 1) throw new TypeError("config.version must be 1.");
   const rawTiers = objectAt(root.tiers ?? {}, "config.tiers");
-  const seen = new Set<string>();
   const tiers = {} as Record<Tier, TierConfig>;
   for (const tier of TIERS) {
+    // 同一模型允许跨档使用（例如 heavy 与 ultra 都用 astra，thinking 可不同），但同档内不许重复。
+    const seen = new Set<string>();
     const entry = rawTiers[tier] === undefined ? {} : objectAt(rawTiers[tier], `tiers.${tier}`);
     const candidatesRaw = entry.candidates ?? [];
     if (!Array.isArray(candidatesRaw)) throw new TypeError(`tiers.${tier}.candidates must be an array.`);
@@ -178,7 +180,7 @@ export function parseRouterConfig(raw: unknown): RouterConfig {
       if (typeof model !== "string" || !MODEL_REF.test(model)) {
         throw new TypeError(`${field}.model must be an exact provider/model reference.`);
       }
-      if (seen.has(model)) throw new TypeError(`Model ${model} appears in more than one place.`);
+      if (seen.has(model)) throw new TypeError(`Model ${model} appears more than once in tier ${tier}.`);
       seen.add(model);
       if (candidate.thinking !== undefined && !THINKING_LEVELS.includes(String(candidate.thinking))) {
         throw new TypeError(`${field}.thinking is not a valid thinking level.`);
@@ -203,7 +205,7 @@ export function parseRouterConfig(raw: unknown): RouterConfig {
     const escalateTo = exhaustedRaw?.escalateTo ?? (action === fallback.action ? fallback.escalateTo : undefined);
     if (action === "wait_then_escalate" || action === "escalate") {
       if (!isTier(escalateTo) || !AUTO_ESCALATION_TIERS.includes(escalateTo) || escalateTo === tier) {
-        throw new TypeError(`tiers.${tier}.onExhausted.escalateTo must be light or medium and differ from ${tier}; heavy and ultra are never reached automatically.`);
+        throw new TypeError(`tiers.${tier}.onExhausted.escalateTo must be micro, light, or medium and differ from ${tier}; heavy and ultra are never reached automatically.`);
       }
     }
     const maxWaitMs =
@@ -262,7 +264,7 @@ export function legacyRouterConfig(environment: NodeJS.ProcessEnv = process.env)
     defaultTier: "medium",
     roles: { read_only: "medium" as Tier, research: "medium" as Tier, code: "medium" as Tier },
     allowInherit: true,
-    tiers: { light: empty("light"), medium: empty("medium"), heavy: empty("heavy"), ultra: empty("ultra") },
+    tiers: { micro: empty("micro"), light: empty("light"), medium: empty("medium"), heavy: empty("heavy"), ultra: empty("ultra") },
     workHardMs: DEFAULT_WORK_HARD_MS,
     workHardMaxMs: DEFAULT_WORK_HARD_MAX_MS,
     workExtensionMaxMs: DEFAULT_WORK_EXTENSION_MAX_MS,
@@ -446,7 +448,9 @@ export class ModelRouter {
       if (!input.allowFallback) return { tier: "pinned", pinned: found.candidate, ...(thinking ? { thinking } : {}) };
       return { tier: found.tier, preferred: input.model, ...(thinking ? { thinking } : {}) };
     }
-    const tier = input.tier ?? (input.role ? config.roles[input.role] : config.defaultTier);
+    const tier = input.tier ?? (input.role
+      ? (config.roles[input.role] ?? roleProfile(input.role)?.tier ?? config.defaultTier)
+      : config.defaultTier);
     if (!isTier(tier)) throw new TypeError(`Unknown tier ${String(tier)}.`);
     if (config.legacy && config.tiers[tier].candidates.length === 0 && config.tiers.medium.candidates.length > 0) {
       return { tier: "medium", ...(thinking ? { thinking } : {}) };
@@ -624,7 +628,7 @@ export class ModelRouter {
 
 export function formatRouterSnapshot(router: ModelRouter): string {
   const config = router.config();
-  const label: Record<Tier, string> = { light: "轻量", medium: "普通", heavy: "强", ultra: "超强" };
+  const label: Record<Tier, string> = { micro: "极轻", light: "轻量", medium: "普通", heavy: "强", ultra: "超强" };
   const lines = [
     config.legacy ? `配置文件不存在：${router.configPath}（旧模式：只用 PI_SUBAGENT_EXECUTION_MODEL 或显式 model）` : `配置文件：${router.configPath}`,
   ];

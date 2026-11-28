@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { SudoApprovals, runSudo, prepareSudoSpec, preflightSudoSpec } from "./sudo.ts";
 import { existsSync } from "node:fs";
 import { Type } from "typebox";
 import {
@@ -67,6 +68,8 @@ type PendingFeatureSnapshot = {
 };
 
 type QueuedInput = {
+  /** Stable id for the dashboard: a queued prompt can be withdrawn by this id. */
+  id: string;
   channel: LiveSessionInputChannel;
   text: string;
   images?: InputEvent["images"];
@@ -478,8 +481,8 @@ export function registerLiveSessionExtension(
     });
   };
 
-  const enqueueInput = (input: QueuedInput): void => {
-    inputQueue.push(input);
+  const enqueueInput = (input: Omit<QueuedInput, "id">): void => {
+    inputQueue.push({ ...input, id: randomUUID() });
     drainInputQueue();
   };
 
@@ -617,7 +620,7 @@ export function registerLiveSessionExtension(
    *   reads the live command registry, so the claim is checked, not assumed.
    */
   const liveSessionCapabilities = (ctx: ExtensionContext): readonly string[] => {
-    const capabilities: string[] = ["session_tree", "context_view"];
+    const capabilities: string[] = ["session_tree", "context_view", "sudo_approval", "input_queue"];
     if (ctx.mode === "tui" && typeof ctx.shutdown === "function") capabilities.push("session_shutdown");
     try {
       if (pi.getCommands().some((command) => command.name === "clear")) capabilities.push("session_clear");
@@ -811,6 +814,32 @@ export function registerLiveSessionExtension(
       if (command.type === "get_context") {
         return { ok: true, result: contextViewJson(contextView(ctx)) };
       }
+      if (command.type === "get_queue") {
+        // Only prompts the bridge still holds. A prompt already handed to pi (activeInput)
+        // is out of reach, so it is reported separately and cannot be cancelled.
+        return {
+          ok: true,
+          result: {
+            items: inputQueue.map(item => ({
+              id: item.id,
+              text: item.text.slice(0, 4000),
+              channel: item.channel,
+              ...(item.deliverAs ? { deliverAs: item.deliverAs } : {}),
+              imageCount: item.images?.length ?? 0,
+            })),
+            active: activeInput ? { id: activeInput.id, text: activeInput.text.slice(0, 4000) } : null,
+          },
+        };
+      }
+      if (command.type === "cancel_queue_item") {
+        if (activeInput?.id === command.id) {
+          return commandError("queue_item_active", "This prompt has already been sent to pi and cannot be withdrawn");
+        }
+        const index = inputQueue.findIndex(item => item.id === command.id);
+        if (index < 0) return commandError("queue_item_not_found", "This prompt is no longer queued");
+        inputQueue.splice(index, 1);
+        return { ok: true, result: { cancelled: true, remaining: inputQueue.length } };
+      }
       if (command.type === "set_model") {
         const model = ctx.modelRegistry.find(command.provider, command.modelId);
         if (!model) return commandError("model_not_found", `${command.provider}/${command.modelId} is not available`);
@@ -832,6 +861,10 @@ export function registerLiveSessionExtension(
         const result = await dispatchLiveFeatureCommand(command.feature, command.command);
         return { ok: true, result: result as JsonObject };
       }
+      if (command.type === "answer_sudo") {
+        const accepted = sudoApprovals.answer(command.id, command.password, command.cancelled);
+        return { ok: true, result: { accepted } };
+      }
       if (command.type === "answer_ui") {
         // 首答胜出，任意渠道可应答，故不做 lease 校验。
         const accepted = pi.respondExtensionUi(command.id, {
@@ -851,6 +884,44 @@ export function registerLiveSessionExtension(
       return commandError("command_failed", error instanceof Error ? error.message : String(error));
     }
   };
+
+  const sudoApprovals = new SudoApprovals(payload => {
+    if ("closed" in payload) {
+      pendingUi.delete(payload.id);
+      publish("extension_ui_closed", { id: payload.id }, currentContext);
+    } else {
+      pendingUi.set(payload.id, { ...payload });
+      publish("extension_ui", payload, currentContext);
+    }
+  });
+  pi.registerTool({
+    name: "sudo_exec", label: "Sudo · 单次授权",
+    description: "Run an absolute executable as root after the user authorizes it in PiDash. Never ask for a password in chat or tool arguments. No shell expansion; supply argv explicitly plus a meaningful reason describing the command and its impact for the approval dialog. Requires a connected Live bridge and HTTPS client. Output tail is limited to 48000 characters. Command stdin is disabled; interactive programs are unsupported.",
+    promptSnippet: "Request single-command sudo approval in PiDash",
+    promptGuidelines: ["Use sudo_exec instead of bash sudo for privileged commands; never request or supply a password in chat.", "Always give sudo_exec a reason in the user's language explaining the exact command, root necessity and affected state. If sudo_exec returns invalid_sudo_parameters, correct the named fields before retrying; do not repeat the same invalid request."],
+    parameters: Type.Object({
+      executable: Type.String({ minLength: 1, description: "Absolute path of the executable file, not a shell command string. No ~, aliases or shell expansion." }),
+      args: Type.Array(Type.String(), { maxItems: 256, description: "Literal argv strings, one argument per array item. Do not concatenate shell syntax. Never include the sudo password." }),
+      cwd: Type.Optional(Type.String({ minLength: 1, description: "Absolute existing working directory; defaults to the current Pi session directory." })),
+      reason: Type.String({ minLength: 1, maxLength: 800, description: "Explain in the user's language what this exact command will do, why root is needed, and which service/files/system state it affects. Do not merely say 'run sudo' or claim it is safe. Shown to the user before approval." }),
+    }, { additionalProperties: false }),
+    async execute(_id, params, signal, _update, ctx) {
+      const spec = prepareSudoSpec(params, ctx.cwd);
+      if (!client || !clientIsReady() || reconnecting) throw new Error("sudo_exec requires a connected Live Pi bridge");
+      const generation = sudoApprovals.generation;
+      await preflightSudoSpec(spec);
+      if (generation !== sudoApprovals.generation || !client || !clientIsReady() || reconnecting) {
+        throw new Error("sudo_exec cancelled during validation because the bridge/session changed; no approval was requested and no command was executed. Check the connection before retrying.");
+      }
+      let password = await sudoApprovals.request(spec, signal);
+      if (password === undefined) throw new Error("Sudo authorization cancelled, expired, or disconnected");
+      try {
+        const result = await runSudo(spec, password, signal);
+        if (result.code !== 0) throw new Error(`sudo failed (exit ${result.code})\n${result.output}`);
+        return { content: [{ type: "text", text: `Exit code: ${result.code}\n${result.output}` }], details: { exitCode: result.code } };
+      } finally { password = undefined; }
+    },
+  });
 
   pi.registerCommand("dashboard-release", {
     description: "立即释放 Dashboard 对当前 session 的强控制权限",
@@ -1061,6 +1132,7 @@ export function registerLiveSessionExtension(
   });
 
   pi.on("session_start", async (event, ctx) => {
+    sudoApprovals.cancelAll();
     resetProofJobs();
     currentContext = ctx;
     // A new/forked/switched session has not sent anything yet; the old payload
@@ -1149,6 +1221,7 @@ export function registerLiveSessionExtension(
         queueMicrotask(flushFeatureSnapshots);
       },
       onDisconnected: () => {
+        sudoApprovals.cancelAll();
         reconnecting = true;
         projector?.markChanged();
         lease.markBrokerDisconnected();
@@ -1207,7 +1280,30 @@ export function registerLiveSessionExtension(
   pi.on("session_compact", (_event, ctx) => finishCompaction(ctx));
   pi.on("session_compact_failed", (_event, ctx) => finishCompaction(ctx));
   pi.on("turn_start", (event, ctx) => publish("turn_start", event, ctx));
-  pi.on("turn_end", (event, ctx) => publish("turn_end", event, ctx));
+  pi.on("turn_end", (event, ctx) => {
+    // Keep an explicit allowlist so future pi event fields cannot silently add large payloads.
+    // In particular, `context` duplicates the full context prefix on every turn; the dashboard
+    // reads its read-only context view on demand through get_context instead.
+    // The workspace's pinned pi types predate the newer boundary fields, so read
+    // those through a narrow compatibility type while keeping the same allowlist.
+    const boundaryEvent = event as typeof event & {
+      messageEntryId?: string;
+      toolResultEntryIds?: string[];
+      entries?: unknown[];
+      outcome?: unknown;
+      continue?: boolean;
+    };
+    publish("turn_end", {
+      turnIndex: event.turnIndex,
+      message: event.message,
+      toolResults: event.toolResults,
+      messageEntryId: boundaryEvent.messageEntryId,
+      toolResultEntryIds: boundaryEvent.toolResultEntryIds,
+      entries: boundaryEvent.entries,
+      outcome: boundaryEvent.outcome,
+      continue: boundaryEvent.continue,
+    }, ctx);
+  });
   pi.on("message_start", (event, ctx) => {
     if (isVisibleMessage(event.message)) publish("message_start", { message: event.message }, ctx);
   });
@@ -1333,6 +1429,7 @@ export function registerLiveSessionExtension(
   });
 
   pi.on("session_shutdown", (event) => {
+    sudoApprovals.cancelAll();
     resetProofJobs();
     lease.dispose(event.reason === "quit" ? "session_shutdown" : "session_switch");
     featureCleanup?.();

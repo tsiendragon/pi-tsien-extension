@@ -1843,3 +1843,202 @@ describe("WorkbenchController job ledger", () => {
     expect(typeof foreground[0].toolCalls).toBe("number");
   }, 20_000);
 });
+
+describe("WorkbenchController activity keys and heartbeat ledger", () => {
+  it("keys workflow task activity by taskId and persists heartbeats readable after a restart", async () => {
+    const { jobActivityTracker } = await import(
+      "pi-tsien-subagent-workbench/src/job-activity.ts"
+    );
+    const { readJobLedgerActivity } = await import(
+      "pi-tsien-subagent-workbench/src/job-ledger.ts"
+    );
+    const dir = mkdtempSync(path.join(os.tmpdir(), "pi-activity-e2e-"));
+    const file = path.join(dir, "jobs.jsonl");
+    const controller = new WorkbenchController(
+      new WorkbenchRuntimeHost({ activeLimit: 4, queueLimit: 8 }),
+      {
+        provider: new PiRpcProcessProvider({
+          executable: process.execPath,
+          baseArgs: [fixture],
+          shutdownTimeoutMs: 500,
+          heartbeatIntervalMs: 20,
+        }),
+        router: testRouter(),
+        jobLedger: new JobLedger(file),
+      },
+    );
+    controllers.push(controller);
+
+    // One task keeps emitting progress; its sibling starts and then stays
+    // silent. Activity must be tracked per task id, not per parent job.
+    const submission = controller.submitWorkflow({
+      label: "Parallel activity",
+      cwd: process.cwd(),
+      stages: [
+        {
+          tasks: [
+            { key: "noisy", task: "progress-for:6:300", cwd: process.cwd() },
+            { key: "quiet", task: "wait-for-abort", cwd: process.cwd() },
+          ],
+        },
+      ],
+    });
+
+    const workflowId = await vi.waitFor(
+      () => {
+        const job = controller.getJobs([submission.handle.workId]).pending[0];
+        expect(job?.workflowId).toBeTruthy();
+        return job!.workflowId!;
+      },
+      { timeout: 15_000, interval: 20 },
+    );
+    const taskKeys = [`${workflowId}:task:1:1`, `${workflowId}:task:1:2`];
+    await vi.waitFor(
+      () => {
+        expect(
+          controller
+            .workflowTaskActivity(submission.handle.workId)
+            .map((task) => task.taskId),
+        ).toEqual(expect.arrayContaining(taskKeys));
+      },
+      { timeout: 15_000, interval: 20 },
+    );
+    // The parent job key is never used for workflow task runs.
+    expect(jobActivityTracker().get(submission.handle.workId)).toBeUndefined();
+
+    // Heartbeats reach the ledger under the task keys, tagged with the owning
+    // workflow job and without a `status`, so settlement consumers ignore them.
+    await vi.waitFor(
+      async () => {
+        await controller.ledger?.flush();
+        const rows = await readJobLedgerActivity(file);
+        expect(
+          [...rows.values()].filter(
+            (row) => taskKeys.includes(row.activityKey) && !row.settled,
+          ).length,
+        ).toBeGreaterThan(0);
+      },
+      { timeout: 20_000, interval: 200 },
+    );
+    const rows = await readJobLedgerActivity(file);
+    for (const row of rows.values()) {
+      if (!taskKeys.includes(row.activityKey)) continue;
+      expect(row.workId).toBe(submission.handle.workId);
+      expect(row.kind).toBe("workflow");
+    }
+    const raw = readFileSync(file, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const heartbeatLines = raw.filter((row) => row.event === "heartbeat");
+    expect(heartbeatLines.length).toBeGreaterThan(0);
+    expect(heartbeatLines.every((row) => row.status === undefined)).toBe(true);
+    expect(
+      heartbeatLines.some((row) => row.activityKey === `${workflowId}:task:1:1`),
+    ).toBe(true);
+    expect(
+      heartbeatLines.some((row) => row.activityKey === `${workflowId}:task:1:2`),
+    ).toBe(true);
+
+    controller.cancelJob(submission.handle.workId);
+    await submission.completion.catch(() => undefined);
+    await controller.ledger?.flush();
+  }, 40_000);
+
+  it("restores a heartbeat from the controller's ledger into a fresh tracker", async () => {
+    const { JobActivityTracker, classifyJobActivity } = await import(
+      "pi-tsien-subagent-workbench/src/job-activity.ts"
+    );
+    const { readJobLedgerActivity } = await import(
+      "pi-tsien-subagent-workbench/src/job-ledger.ts"
+    );
+    const dir = mkdtempSync(path.join(os.tmpdir(), "pi-activity-restore-"));
+    const file = path.join(dir, "jobs.jsonl");
+    const ledger = new JobLedger(file);
+    const lastActivityAt = Date.now() - 900_000;
+    ledger.recordActivity({
+      v: 1,
+      at: lastActivityAt,
+      event: "heartbeat",
+      activityKey: "workflow_x:task:2:1",
+      workId: "work_x",
+      lastActivityAt,
+      eventCount: 4,
+      lastEventType: "message_end",
+      busy: false,
+      runningTools: 0,
+      pendingModelRequests: 0,
+      kind: "workflow",
+      taskKey: "slow",
+    });
+    await ledger.flush();
+
+    const fresh = new JobActivityTracker();
+    expect(fresh.get("workflow_x:task:2:1")).toBeUndefined();
+    const restored = fresh.restoreFromLedger((await readJobLedgerActivity(file)).values());
+    expect(restored).toBe(1);
+    const classification = classifyJobActivity(fresh.get("workflow_x:task:2:1"))!;
+    expect(classification.phase).toBe("stalled");
+    expect(classification.idleMs).toBeGreaterThanOrEqual(900_000);
+  });
+});
+
+describe("heartbeat sink ownership", () => {
+  it("does not uninstall another live controller's sink when one is disposed", async () => {
+    const { jobActivityTracker } = await import(
+      "pi-tsien-subagent-workbench/src/job-activity.ts"
+    );
+    const makeController = (name: string) => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), `pi-activity-own-${name}-`));
+      const file = path.join(dir, "jobs.jsonl");
+      const controller = new WorkbenchController(
+        new WorkbenchRuntimeHost({ activeLimit: 2, queueLimit: 4 }),
+        {
+          provider: new PiRpcProcessProvider({
+            executable: process.execPath,
+            baseArgs: [fixture],
+            shutdownTimeoutMs: 500,
+          }),
+          router: testRouter(),
+          jobLedger: new JobLedger(file),
+        },
+      );
+      return { controller, file };
+    };
+
+    const first = makeController("a");
+    const second = makeController("b");
+    expect(jobActivityTracker().persisting).toBe(true);
+
+    // Disposing the older controller must leave the newer sink installed.
+    await first.controller.dispose();
+    expect(jobActivityTracker().persisting).toBe(true);
+
+    // And the surviving controller still persists heartbeats. The run is
+    // awaited (never left floating) and the tier is pinned because the hermetic
+    // router only serves the legacy light model.
+    const submission = second.controller.submitAgent(
+      {
+        task: "progress-for:2:200",
+        cwd: process.cwd(),
+        role: "read_only",
+        tier: "light",
+      },
+      true,
+    );
+    const completed = submission.completion.catch(() => undefined);
+    try {
+      await vi.waitFor(
+        async () => {
+          await second.controller.ledger?.flush();
+          expect(readFileSync(second.file, "utf8")).toContain("heartbeat");
+        },
+        { timeout: 20_000, interval: 200 },
+      );
+    } finally {
+      second.controller.cancelJob(submission.handle.workId);
+      await completed;
+      await second.controller.dispose();
+    }
+  }, 40_000);
+});

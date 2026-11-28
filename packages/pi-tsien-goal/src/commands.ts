@@ -6,6 +6,7 @@ import { mergeReplannedWorkItems, planFromWorkItems, workItemsFromPlan } from ".
 import { importGoalSources, parseEditableGoalDraft, renderEditableGoalDraft } from "./import.ts";
 import { renderGoalAgentDraftingPrompt, renderGoalStartPrompt } from "./prompts.ts";
 import { loadGoalState, saveGoalState, validateObjective } from "./state.ts";
+import { markDraftIntent } from "./draft-intent.ts";
 import { renderBlockersMarkdown } from "./goal-graph.ts";
 import {
 	applyGoalUi,
@@ -47,7 +48,10 @@ export interface ParsedGoalCommand {
 export interface GoalWorkflowContext {
 	hasUI: boolean;
 	mode?: "tui" | "rpc" | "json" | "print";
-	sessionManager: { getBranch(): Array<{ type: string; customType?: string; data?: unknown }> };
+	sessionManager: {
+		getBranch(): Array<{ type: string; customType?: string; data?: unknown }>;
+		getSessionId?: () => string;
+	};
 	ui: {
 		notify(message: string, level?: "info" | "warning" | "error"): void;
 		confirm(title: string, message: string): Promise<boolean>;
@@ -370,6 +374,7 @@ async function createOrReplaceGoal(
 
 	// The drafting turn is unattended: the agent saves the draft and starts the
 	// goal without user confirmation (replacing a current goal when one exists).
+	markDraftIntent(ctx, { replan: false });
 	pi.sendUserMessage(
 		renderGoalAgentDraftingPrompt(objective, {
 			replacingExistingGoal: Boolean(current),
@@ -398,6 +403,7 @@ async function replanGoal(
 		ctx.ui.notify("Cannot draft goal: follow-up messaging API is unavailable.", "error");
 		return;
 	}
+	markDraftIntent(ctx, { replan: true });
 	pi.sendUserMessage(
 		renderGoalAgentDraftingPrompt(objective, {
 			replanningExistingGoal: true,

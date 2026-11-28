@@ -31,7 +31,25 @@ import {
   roleToolNames,
   type ExecutionRole,
 } from "./runner-stage.ts";
-import { JobLedger, type JobLedgerStatus } from "./job-ledger.ts";
+import { roleBudgetThresholds } from "./role-budget.ts";
+import {
+  assertJsonValue,
+  assertOutputSchema,
+  validateStructuredOutput,
+  withStructuredOutputInstruction,
+} from "./structured-output.ts";
+import {
+  JobLedger,
+  type JobActivityLedgerRecord,
+  type JobLedgerStatus,
+} from "./job-ledger.ts";
+import {
+  clearJobActivityPersistSink,
+  jobActivityTracker,
+  setJobActivityPersistSink,
+  type JobActivityRawEntry,
+  type WorkflowTaskActivityInput,
+} from "./job-activity.ts";
 import {
   MAX_SWITCHES_PER_TASK,
   ModelRouter,
@@ -134,9 +152,15 @@ export interface WorkbenchRunWarning {
   readonly sessionId: string;
   readonly runId: string;
   readonly workflowId?: string;
-  readonly warning: "idle" | "wall" | "soft-deadline";
+  readonly warning: "idle" | "wall" | "soft-deadline" | "budget";
   readonly deadlineAt?: number;
   readonly maxExtensionMs?: number;
+  /** Present for warning="budget": which limit is close and how much is used. */
+  readonly budget?: {
+    readonly kind: "maxTurns" | "maxTokens";
+    readonly used: number;
+    readonly limit: number;
+  };
   readonly message: string;
   readonly elapsedMs: number;
   readonly idleMs?: number;
@@ -244,6 +268,12 @@ export interface WorkbenchAgentRequest {
   readonly context?: string;
   readonly signal?: AbortSignal;
   readonly parentId?: string;
+  /**
+   * Optional JSON Schema for the child's final message. The schema is appended
+   * to the task as a requirement; the result is validated before it reaches the
+   * main agent, and a mismatch is reported as a failed job with a precise error.
+   */
+  readonly outputSchema?: Readonly<Record<string, unknown>>;
   /** Internal scheduling priority; public synchronous calls stay foreground. */
   readonly foreground?: boolean;
 }
@@ -506,6 +536,24 @@ function workflowTaskKey(
   return task.key?.trim() || `stage${stageIndex + 1}_task${taskIndex + 1}`;
 }
 
+/**
+ * Stable activity key of one workflow task run.
+ *
+ * The provider keys activity by `traceContext.taskId`, and workflow task runs
+ * get `id = `${workflowId}:task:${stage}:${index}``. Both sides must agree, so
+ * readers call this helper instead of rebuilding the string (exported for the
+ * tools and for tests).
+ */
+export function workflowTaskActivityKey(workflowId: string, taskId: string): string {
+  const trimmedWorkflow = workflowId.trim();
+  const trimmedTask = taskId.trim();
+  if (!trimmedWorkflow) return trimmedTask;
+  if (!trimmedTask) return trimmedWorkflow;
+  return trimmedTask.startsWith(`${trimmedWorkflow}:task:`)
+    ? trimmedTask
+    : `${trimmedWorkflow}:task:${trimmedTask}`;
+}
+
 function workflowSessionDemand(
   request: WorkbenchWorkflowRequest,
   fromStage = 0,
@@ -694,75 +742,47 @@ function resolvedWorkflowString(
   return resolveWorkflowTemplate(value, context) as string;
 }
 
-function assertJsonValue(
-  value: unknown,
-  location: string,
-  seen = new WeakSet<object>(),
-): void {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`${location} must contain finite JSON numbers.`);
-    }
-    return;
-  }
-  if (typeof value !== "object") {
-    throw new TypeError(`${location} must contain only JSON values.`);
-  }
-  if (seen.has(value)) throw new TypeError(`${location} must not contain cycles.`);
-  seen.add(value);
-  if (Array.isArray(value)) {
-    value.forEach((item, index) =>
-      assertJsonValue(item, `${location}[${index}]`, seen),
-    );
-  } else {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(`${location} must contain only plain JSON objects.`);
-    }
-    for (const [key, item] of Object.entries(value)) {
-      if (["__proto__", "prototype", "constructor"].includes(key)) {
-        throw new TypeError(`${location} contains a forbidden key: ${key}.`);
-      }
-      assertJsonValue(item, `${location}.${key}`, seen);
-    }
-  }
-  seen.delete(value);
-}
-
+/**
+ * Workflow task outputs use the same fail-closed validator as subagent_start
+ * (see structured-output.ts). Kept as a thin wrapper so existing workflow error
+ * messages stay stable.
+ */
 function parseStructuredOutput(
   output: string,
   schema: Readonly<Record<string, unknown>>,
 ): unknown {
-  let text = output.trim();
-  const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenced) text = fenced[1]!.trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (cause) {
-    throw new TypeError("Task output is not valid JSON for outputSchema.", {
-      cause,
-    });
-  }
-  let matches = false;
-  try {
-    matches = Check(schema as TSchema, parsed);
-  } catch (cause) {
-    throw new TypeError("outputSchema is not a supported JSON Schema.", {
-      cause,
-    });
-  }
-  if (!matches) {
+  const result = validateStructuredOutput(output, schema);
+  if (!result.ok) {
+    // Preserve the historical, test-visible messages for each failure class.
+    if (result.code === "invalid_json") {
+      throw new TypeError("Task output is not valid JSON for outputSchema.");
+    }
+    if (result.code === "unsupported_schema") {
+      throw new TypeError("outputSchema is not a supported JSON Schema.");
+    }
     throw new TypeError("Task JSON output does not match outputSchema.");
   }
-  return parsed;
+  return result.value;
+}
+
+/**
+ * subagent_start 的 outputSchema 校验：不合规的子代理结果不能悄悄流到主 agent。
+ * 保留原始 output、usage、会话与路由信息，只把 isError 置真并写入明确原因，
+ * 这样主 agent 既能看到错在哪里，也拿到未验证的原文作为取证。
+ */
+function enforceStructuredOutput(
+  result: AgentResult,
+  schema: Readonly<Record<string, unknown>>,
+): AgentResult {
+  if (result.isError) return result;
+  const checked = validateStructuredOutput(result.output, schema);
+  if (checked.ok) return result;
+  return Object.freeze({
+    ...result,
+    isError: true,
+    errorMessage: checked.error,
+    structuredOutputError: checked.code,
+  });
 }
 
 function positiveInteger(name: string, value: number): number {
@@ -770,6 +790,38 @@ function positiveInteger(name: string, value: number): number {
     throw new TypeError(`${name} must be a positive safe integer.`);
   }
   return value;
+}
+
+/**
+ * Tracker entry → ledger heartbeat row.
+ *
+ * `activityKey` is the tracker key (`taskId` for a workflow task run, else the
+ * job `workId`); `workId` names the owning job so a reader can group workflow
+ * tasks under their job. Deliberately no `status` field: that is what keeps
+ * heartbeat rows invisible to statistics consumers that require a status.
+ */
+function activityHeartbeatRecord(
+  entry: JobActivityRawEntry,
+  settled: boolean,
+): JobActivityLedgerRecord {
+  const meta = entry.meta;
+  return {
+    v: 1,
+    at: Date.now(),
+    event: "heartbeat",
+    activityKey: entry.key,
+    workId: meta?.workId ?? entry.key,
+    lastActivityAt: entry.lastActivityAt,
+    eventCount: entry.eventCount,
+    busy: entry.busy,
+    runningTools: entry.runningTools,
+    pendingModelRequests: entry.pendingModelRequests,
+    ...(entry.lastEventType === undefined ? {} : { lastEventType: entry.lastEventType }),
+    ...(meta?.kind === undefined ? {} : { kind: meta.kind }),
+    ...(meta?.taskId === undefined ? {} : { taskId: meta.taskId }),
+    ...(meta?.taskKey === undefined ? {} : { taskKey: meta.taskKey }),
+    ...(settled ? { settled: true } : {}),
+  };
 }
 
 /** Counts workflow child tasks so the dashboard can express launch volume. */
@@ -869,6 +921,10 @@ export class WorkbenchController {
     string,
     { readonly role?: string; readonly tier?: string }
   >();
+  /** Heartbeat sink installed for this controller's ledger, if any. */
+  private activitySink:
+    | ((entry: JobActivityRawEntry, settled: boolean) => void)
+    | undefined;
 
   private readonly pendingWarnings: WorkbenchRunWarning[] = [];
   private warningSequence = 0;
@@ -908,6 +964,16 @@ export class WorkbenchController {
         : (options.jobLedger ?? new JobLedger());
     this.service = new SubagentService(runtime);
     this.service.providers.register(this.provider);
+    if (this.ledger) {
+      // Heartbeats reach the ledger through the process-wide tracker, which is
+      // also what the provider writes to, so activity survives a restart.
+      const ledger = this.ledger;
+      const sink = (entry: JobActivityRawEntry, settled: boolean): void => {
+        ledger.recordActivity(activityHeartbeatRecord(entry, settled));
+      };
+      this.activitySink = sink;
+      setJobActivityPersistSink(sink);
+    }
     this.unsubscribeService = this.service.subscribe((event) =>
       this.onServiceEvent(event),
     );
@@ -940,6 +1006,9 @@ export class WorkbenchController {
       throw new TypeError("timeoutMs must be a positive integer.");
     }
     const hardWallTimeMs = Math.min(request.timeoutMs ?? config.workHardMs, config.workHardMaxMs);
+    // 角色级预算（roles-registry 的 RoleProfile.budget）：显式任务超时/配置全局上限仍然生效，
+    // 角色预算只会在更紧的时候收紧，不会放宽全局保护。
+    const budget = roleBudgetThresholds(role);
     const excluded = new Set<string>();
     const attempts: AgentRoutingAttempt[] = [];
     // Include the raw error, not just its class: "model:unknown" told us nothing
@@ -980,7 +1049,11 @@ export class WorkbenchController {
             hardWallTimeMs,
             hardWallMaxMs: config.workHardMaxMs,
             workExtensionMaxMs: config.workExtensionMaxMs,
-            maxModelCalls: config.maxModelCallsPerTask,
+            maxModelCalls:
+              budget.maxTurns === undefined
+                ? config.maxModelCallsPerTask
+                : Math.min(budget.maxTurns, config.maxModelCallsPerTask),
+            ...(budget.maxTokens === undefined ? {} : { maxTokens: budget.maxTokens }),
           });
         } catch (error) {
           if (base.signal?.aborted) throw error;
@@ -1035,7 +1108,13 @@ export class WorkbenchController {
     const label = request.label?.trim() || request.task.slice(0, 48);
     const background = request.foreground === false;
     try {
-      const result = await this.executeAgent(request);
+    const schema =
+      request.outputSchema === undefined
+        ? undefined
+        : assertOutputSchema(request.outputSchema, "outputSchema");
+    const result = await this.executeAgent(
+      schema ? { ...request, outputSchema: schema } : request,
+    );
       this.recordLedger({
         workId,
         kind: "agent",
@@ -1076,9 +1155,15 @@ export class WorkbenchController {
    */
   private async executeAgent(request: WorkbenchAgentRequest): Promise<AgentResult> {
     await this.ensureProviderCapacity(1);
-    return this.startRouted(
+    // outputSchema: validate the declaration once, and make the requirement part
+    // of the child's task instead of hoping it guesses the shape.
+    const schema =
+      request.outputSchema === undefined
+        ? undefined
+        : assertOutputSchema(request.outputSchema, "outputSchema");
+    const result = await this.startRouted(
       {
-        task: request.task,
+        task: schema ? withStructuredOutputInstruction(request.task, schema) : request.task,
         label: request.label,
         isolation: "process",
         foreground: request.foreground ?? true,
@@ -1094,6 +1179,7 @@ export class WorkbenchController {
       },
       request,
     );
+    return schema ? enforceStructuredOutput(result, schema) : result;
   }
 
   submitAgent(
@@ -1272,6 +1358,37 @@ export class WorkbenchController {
     return this.getJobs(workIds);
   }
 
+  /**
+   * In-flight tasks of a running workflow job, with the activity key the
+   * provider writes for each task run. Activity is tracked per task (key =
+   * `taskId`), so a wedged task stays visible even while its siblings are busy.
+   * Tasks that have not started yet are omitted: they have no events of their
+   * own and would otherwise look stalled.
+   */
+  workflowTaskActivity(
+    workId: string,
+  ): readonly WorkflowTaskActivityInput[] {
+    const job = this.jobs.get(workId);
+    const workflowId = job?.workflowId;
+    if (!workflowId) return Object.freeze([]);
+    const projection = this.activeWorkflowProjections.get(workflowId);
+    if (!projection) return Object.freeze([]);
+    const tasks: WorkflowTaskActivityInput[] = [];
+    for (const stage of projection.stages) {
+      for (const task of stage.tasks) {
+        if (task.status !== "running") continue;
+        tasks.push(
+          Object.freeze({
+            taskId: workflowTaskActivityKey(workflowId, task.id),
+            ...(task.key === undefined ? {} : { taskKey: task.key }),
+            label: task.label,
+          }),
+        );
+      }
+    }
+    return Object.freeze(tasks);
+  }
+
   async waitForJobs(
     workIds: readonly string[],
     waitFor: "any" | "all",
@@ -1293,9 +1410,11 @@ export class WorkbenchController {
   partialJobOutput(
     workId: string,
     maxChars: number = PARTIAL_OUTPUT_DEFAULT_CHARS,
+    target?: { readonly workflowId?: string; readonly taskKey?: string },
   ): WorkbenchPartialOutput | undefined {
     const job = this.jobs.get(workId);
     if (!job || !PARTIAL_OUTPUT_JOB_STATUSES.has(job.status)) return undefined;
+    if (target?.workflowId && job.workflowId !== target.workflowId) return undefined;
     const budget = Number.isFinite(maxChars)
       ? Math.min(
           PARTIAL_OUTPUT_MAX_CHARS,
@@ -1398,6 +1517,11 @@ export class WorkbenchController {
       evicted: boolean;
     }[] = [];
     for (const candidate of candidates) {
+      // A workflow job may be asked for one specific task (the one whose own
+      // activity went stale) so the preview matches the reported task.
+      if (target?.taskKey !== undefined && candidate.taskKey !== target.taskKey) {
+        continue;
+      }
       const conversation = this.conversations.get(candidate.sessionId);
       if (!conversation) continue;
       if (job.kind === "workflow" && conversation.workflowId !== job.workflowId) {
@@ -1799,20 +1923,8 @@ export class WorkbenchController {
           throw new TypeError("Workflow task maxItems requires foreach.");
         }
         if (task.outputSchema !== undefined) {
-          if (
-            typeof task.outputSchema !== "object" ||
-            task.outputSchema === null ||
-            Array.isArray(task.outputSchema)
-          ) {
-            throw new TypeError("outputSchema must be a JSON Schema object.");
-          }
-          assertJsonValue(task.outputSchema, "outputSchema");
-          if (
-            Buffer.byteLength(JSON.stringify(task.outputSchema), "utf8") >
-            16 * 1024
-          ) {
-            throw new TypeError("outputSchema exceeds 16 KiB.");
-          }
+          // Shared fail-closed validator (object / JSON values / 16 KiB / typebox-supported).
+          assertOutputSchema(task.outputSchema, "outputSchema");
         }
         const key = workflowTaskKey(task, stageIndex, taskIndex);
         if (
@@ -2572,6 +2684,11 @@ export class WorkbenchController {
         "In-memory RPC Session was closed; retained context cannot be resumed.";
       this.publish(conversation);
     }
+    // The sink closes over this controller's ledger; drop it so a disposed
+    // controller cannot keep writing heartbeats. Only our own sink is removed:
+    // another live controller may have installed theirs since.
+    if (this.activitySink) clearJobActivityPersistSink(this.activitySink);
+    this.activitySink = undefined;
     await this.provider.dispose();
   }
 
@@ -3059,6 +3176,7 @@ export class WorkbenchController {
         ? { workflowId: conversation.workflowId }
         : {}),
       warning: event.warning,
+      ...(event.budget === undefined ? {} : { budget: event.budget }),
       ...(event.deadlineAt === undefined ? {} : { deadlineAt: event.deadlineAt }),
       ...(event.maxExtensionMs === undefined ? {} : { maxExtensionMs: event.maxExtensionMs }),
       message: event.message,

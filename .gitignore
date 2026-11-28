@@ -3,6 +3,8 @@ dist/
 coverage/
 .pi/workflow-runs/
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 
 # Pi session exports (never commit these; they are large and contain conversation content)

@@ -3,6 +3,7 @@ import { classifyError } from "./model-router.ts";
 export const SUBAGENT_START_GUIDELINES = [
   "Use subagent_start for one independent, verifiable task: challenge one lemma, check one baseline, or audit one saved result. Run independent checks in parallel only when useful; give writing tasks disjoint paths. Do a trivial read or check directly instead of delegating it.",
   "For subagent_start, name the minimum inputs, exact question, expected evidence, and stopping condition. timeoutMs covers reading, reasoning, tools, and handoff, not just script runtime. Reserve short budgets for single checks; when work cannot fit, narrow the scope or use subagent_workflow instead of merely raising the timeout.",
+  "For subagent_start, pass thinking explicitly when the task is clearly easy or clearly hard: children default to medium and ignore the main session's thinking level and per-model startup defaults, because the Workbench always sends a concrete level. Use off/low/minimal for mechanical extraction or lookup, high or xhigh for hard proof or diagnosis, and max only when the model is known to answer within budget.",
 ];
 
 export const SUBAGENT_WORKFLOW_GUIDELINES = [
@@ -12,6 +13,7 @@ export const SUBAGENT_WORKFLOW_GUIDELINES = [
 
 export const SUBAGENT_RESULTS_GUIDELINES = [
   "Use subagent_results by workId to collect a finished job once; continue independent work instead of polling repeatedly. Use a bounded wait only when the result is the next dependency. Treat partial text as unverified, and distinguish a timeout or quota failure from a negative result.",
+  "Once a delivery is judged, use subagent_results first, then record subagent_rate with a 1-5 score and a few task tags. Rating is write-only performance data for periodic model review; it never changes routing or budgets by itself, so rate honestly rather than to steer the next dispatch.",
 ];
 
 export function diagnoseFailure(error: string | undefined, taskKey?: string) {

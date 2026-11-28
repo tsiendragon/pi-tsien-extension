@@ -15,6 +15,15 @@ import { registerChildMultiTool } from "./multi-tool.ts";
 import { defaultSubagentSessionDir } from "./providers/pi-rpc-process-provider.ts";
 import { pruneSubagentSessions } from "./session-retention.ts";
 import {
+  RATING_MAX_NOTE_LENGTH,
+  RATING_MAX_TAGS,
+  RATING_MAX_TAG_LENGTH,
+  RATING_SCORE_MAX,
+  RATING_SCORE_MIN,
+  RatingLedger,
+  normalizeRating,
+} from "./rating-ledger.ts";
+import {
   WORKBENCH_RUNTIME_SYMBOL,
   createWorkbenchRuntimeHost,
   installWorkbenchRuntime,
@@ -43,6 +52,18 @@ import {
 } from "./workbench-controller.ts";
 import type { WorkbenchJobSnapshot } from "./job-registry.ts";
 import {
+  classifyJobActivity,
+  formatPendingJobLine,
+  jobActivityTracker,
+  resolveSubagentBusyMaxMs,
+  resolveSubagentIdleMs,
+  summarizeWorkflowTaskActivity,
+  type JobActivityClassification,
+  type JobActivitySnapshot,
+  type WorkflowTaskActivityInput,
+} from "./job-activity.ts";
+import { readJobLedgerActivity } from "./job-ledger.ts";
+import {
   installTaskNavigation,
   type TaskNavigationHandle,
   type TaskNavigationTarget,
@@ -69,7 +90,13 @@ import { parseTraceContext } from "pi-tsien-trajectory-recorder/src/index.ts";
 const WORKBENCH_API_VERSION = 1 as const;
 const VIEW_ROWS = 18;
 const TOOL_OUTPUT_CHARS = 64 * 1024;
-const RESULT_WAIT_MAX_MS = 30_000;
+/** wait 的上限：过短会迫使主 agent 反复“wait 30s → 超时 → 再 wait”，每次都白花一轮模型请求。 */
+const RESULT_WAIT_MAX_MS = 300_000;
+/** Append-only rating ledger; recording a score never feeds back into routing. */
+let ratings: RatingLedger | undefined;
+function ratingLedger(): RatingLedger {
+  return (ratings ??= new RatingLedger());
+}
 
 type WorkbenchRuntimeSnapshot = ReturnType<WorkbenchRuntime["getSnapshot"]>;
 
@@ -166,9 +193,9 @@ const AgentToolParams = Type.Object({
     }),
   ),
   tier: Type.Optional(
-    Type.Union([Type.Literal("light"), Type.Literal("medium"), Type.Literal("heavy"), Type.Literal("ultra")], {
+    Type.Union([Type.Literal("micro"), Type.Literal("light"), Type.Literal("medium"), Type.Literal("heavy"), Type.Literal("ultra")], {
       description:
-        "Model tier from subagent-models.json: light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
+        "Model tier from subagent-models.json: micro=trivial mechanical work only, light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
     }),
   ),
   model: Type.Optional(
@@ -188,9 +215,9 @@ const AgentToolParams = Type.Object({
   ),
   inheritModel: Type.Optional(Type.Boolean()),
   role: Type.Optional(
-    Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")], {
+    Type.String({
       description:
-        "What the child may touch. read_only: read + knowledge search, no writes, no shell, no web. code: read/write/edit/bash/run_code + knowledge search + background_command_* (start a long command, keep working, then read it back); no web access. research: read + knowledge search + web, no writes and no shell. Omit for a writing task only; the default is code, which grants write access.",
+        "What the child may touch. read_only: read + knowledge search, no writes, no shell, no web. code: read/write/edit/bash/run_code + knowledge search + background_command_* + web (WebSearch/WebFetch/arxiv_search/openreview_search). research: read + knowledge search + web, no writes and no shell. Omit for a writing task only; the default is code, which grants write access. May also be a custom role name defined in ~/.pi/agent/subagents/ (role file sets base tool set, default tier and system prompt).",
     }),
   ),
   retainSession: Type.Optional(Type.Boolean()),
@@ -205,6 +232,12 @@ const AgentToolParams = Type.Object({
     Type.Boolean({
       description:
         "Return immediately while the subagent continues in the Workbench. Defaults to true; set false only when this turn must wait for the result.",
+    }),
+  ),
+  outputSchema: Type.Optional(
+    Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        "Optional JSON Schema for machine-consumed output. The requirement is appended to the task, and the final message is validated before it reaches you; invalid JSON or a mismatch fails the job with the violations instead of passing it through.",
     }),
   ),
 });
@@ -288,15 +321,15 @@ const WorkflowTaskParams = Type.Object({
   label: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   tier: Type.Optional(
-    Type.Union([Type.Literal("light"), Type.Literal("medium"), Type.Literal("heavy"), Type.Literal("ultra")], {
+    Type.Union([Type.Literal("micro"), Type.Literal("light"), Type.Literal("medium"), Type.Literal("heavy"), Type.Literal("ultra")], {
       description:
-        "Model tier from subagent-models.json: light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
+        "Model tier from subagent-models.json: micro=trivial mechanical work only, light=cheap extraction/triage/read-only lookup, medium=normal analysis/coding/research, heavy=hard diagnosis or architecture, ultra=only when heavy is insufficient. Omit to use the role default. Prefer this over model.",
     }),
   ),
   role: Type.Optional(
-    Type.Union([Type.Literal("read_only"), Type.Literal("code"), Type.Literal("research")], {
+    Type.String({
       description:
-        "What this task may touch. read_only: read + knowledge search, no writes, no shell, no web. code: read/write/edit/bash/run_code + knowledge search + background_command_*, no web access. research: read + knowledge search + web, no writes and no shell. Omit only when the task must write; the default is code.",
+        "What this task may touch. read_only: read + knowledge search, no writes, no shell, no web. code: read/write/edit/bash/run_code + knowledge search + background_command_* + web. research: read + knowledge search + web, no writes and no shell. Omit only when the task must write; the default is code. May also be a custom role name from ~/.pi/agent/subagents/.",
     }),
   ),
   model: Type.Optional(
@@ -994,9 +1027,41 @@ function jobOutput(job: WorkbenchJobSnapshot): string | undefined {
   return typeof record.output === "string" ? withRouting(result, record.output) : undefined;
 }
 
-function formatJobQuery(
+/**
+ * Optional context for `formatJobQuery`. `partialOutput` lets a stalled pending
+ * job carry a bounded preview of the assistant text produced so far, so one
+ * tool call is enough to decide whether to cancel.
+ */
+export interface JobQueryFormatOptions {
+  readonly now?: number;
+  readonly partialOutput?: (
+    workId: string,
+    target?: {
+      readonly workflowId?: string;
+      readonly taskKey?: string;
+    },
+  ) => WorkbenchPartialOutput | undefined;
+  /** Work IDs whose partial output the caller already renders (avoid duplication). */
+  readonly skipPartialWorkIds?: ReadonlySet<string>;
+  /**
+   * In-flight workflow tasks per job workId, with their activity keys. When a
+   * provider is supplied, a workflow job's activity is derived from its tasks
+   * (the provider keys activity by `taskId`) instead of the parent job key, so
+   * one wedged task is reported as stalled even while a sibling is busy.
+   */
+  readonly workflowTasks?: (
+    workId: string,
+  ) => readonly WorkflowTaskActivityInput[] | undefined;
+}
+
+/** Total character budget for the auto-attached stalled preview (label included). */
+export const STALLED_PARTIAL_CHARS = 600;
+
+/** Exported for tests: renders a job query, including pending-job activity suffixes. */
+export function formatJobQuery(
   query: WorkbenchJobQuery,
   includeOutput: boolean,
+  options: JobQueryFormatOptions = {},
 ): string {
   const lines: string[] = [];
   for (const job of query.completed) {
@@ -1008,10 +1073,165 @@ function formatJobQuery(
     if (output) lines.push(boundedToolOutput(output));
   }
   for (const job of query.pending) {
-    lines.push(`${job.workId} · ${job.kind} · ${job.status} · ${job.label}`);
+    // Classify once: the same verdict drives both the suffix and whether a
+    // partial preview is attached.
+    const summary = pendingJobActivity(job, options);
+    const classification = summary?.classification;
+    let line: string;
+    try {
+      line = formatPendingJobLine(job, {
+        snapshot: summary?.snapshot,
+        ...(options.now === undefined ? {} : { now: options.now }),
+        idleThresholdMs: resolveSubagentIdleMs(),
+        busyMaxMs: resolveSubagentBusyMaxMs(),
+        classification,
+        ...(summary?.subject === undefined ? {} : { subject: summary.subject }),
+      });
+    } catch {
+      line = `${job.workId} · ${job.kind} · ${job.status} · ${job.label}`;
+    }
+    lines.push(line);
+    if (classification?.phase !== "stalled") continue;
+    const partial = stalledPartialSummary(job, options, classification);
+    if (partial) lines.push(partial);
   }
   if (query.missing.length) lines.push(`Unknown work IDs: ${query.missing.join(", ")}`);
   return lines.length ? boundedToolOutput(lines.join("\n")) : "No matching Subagent Workbench jobs.";
+}
+
+/** Activity classification for a pending job; never throws. */
+function classifyPendingJob(
+  job: WorkbenchJobSnapshot,
+  now?: number,
+): JobActivityClassification | undefined {
+  try {
+    return classifyJobActivity(jobActivityTracker().get(job.workId), {
+      ...(now === undefined ? {} : { now }),
+      idleThresholdMs: resolveSubagentIdleMs(),
+      busyMaxMs: resolveSubagentBusyMaxMs(),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+interface PendingJobActivity {
+  readonly snapshot?: JobActivitySnapshot;
+  readonly classification?: JobActivityClassification;
+  /** Line prefix naming the deciding workflow task. */
+  readonly subject?: string;
+  readonly taskLabel?: string;
+}
+
+/**
+ * Activity of a pending job. A workflow job is judged by its in-flight tasks
+ * (each keyed by its own `taskId`), so the verdict names the task that is
+ * actually stuck instead of averaging it away behind busy siblings.
+ */
+function pendingJobActivity(
+  job: WorkbenchJobSnapshot,
+  options: JobQueryFormatOptions,
+): PendingJobActivity {
+  if (job.kind === "workflow" && options.workflowTasks) {
+    try {
+      const tasks = options.workflowTasks(job.workId);
+      if (tasks && tasks.length) {
+        const summary = summarizeWorkflowTaskActivity(
+          job.workId,
+          tasks,
+          (key) => jobActivityTracker().get(key),
+          {
+            ...(options.now === undefined ? {} : { now: options.now }),
+            idleThresholdMs: resolveSubagentIdleMs(),
+            busyMaxMs: resolveSubagentBusyMaxMs(),
+          },
+        );
+        if (summary) {
+          return {
+            snapshot: summary.snapshot,
+            classification: summary.classification,
+            subject: `task ${summary.taskKey ?? summary.taskLabel ?? "?"}`,
+            ...(summary.taskLabel === undefined
+              ? {}
+              : { taskLabel: summary.taskLabel }),
+          };
+        }
+      }
+    } catch {
+      // Fall back to the job key below.
+    }
+  }
+  try {
+    const snapshot = jobActivityTracker().get(job.workId);
+    const classification = classifyJobActivity(snapshot, {
+      ...(options.now === undefined ? {} : { now: options.now }),
+      idleThresholdMs: resolveSubagentIdleMs(),
+      busyMaxMs: resolveSubagentBusyMaxMs(),
+    });
+    return { ...(snapshot ? { snapshot } : {}), ...(classification ? { classification } : {}) };
+  } catch {
+    return {};
+  }
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * One bounded line of already-produced assistant text for a stalled job. It is
+ * explicitly labelled unverified: a partial draft is evidence of progress, not
+ * of a finished or correct result.
+ */
+function stalledPartialSummary(
+  job: WorkbenchJobSnapshot,
+  options: JobQueryFormatOptions,
+  classification?: JobActivityClassification,
+): string | undefined {
+  if (!options.partialOutput) return undefined;
+  if (options.skipPartialWorkIds?.has(job.workId)) return undefined;
+  let partial: WorkbenchPartialOutput | undefined;
+  try {
+    // A workflow task can be read on its own; the caller resolves the key to
+    // the task's Run. Older callbacks ignore the second argument.
+    partial = options.partialOutput(
+      job.workId,
+      ...(classification?.taskKey === undefined
+        ? []
+        : [
+            {
+              workflowId: job.workflowId,
+              taskKey: classification.taskKey,
+            },
+          ]),
+    );
+  } catch {
+    return undefined;
+  }
+  if (!partial) return undefined;
+  const parts: string[] = [];
+  for (const source of partial.sources) {
+    const text = collapseWhitespace(source.text);
+    if (text) parts.push(`${source.label}: ${text}`);
+  }
+  const omitted = partial.omittedSources
+    ? ` (+${partial.omittedSources} more task(s) omitted)`
+    : "";
+  if (!parts.length) {
+    return `  ↳ partial: no assistant text captured yet${omitted} (unverified; absence does not prove the task is stuck or empty).`;
+  }
+  const head = "  ↳ partial (unverified, may be incomplete): ";
+  const budget = Math.max(0, STALLED_PARTIAL_CHARS - head.length - omitted.length);
+  const joined = parts.join(" | ");
+  // The ellipsis counts against the budget, so the whole line stays within
+  // STALLED_PARTIAL_CHARS including the prefix and the omitted suffix.
+  const body =
+    joined.length <= budget
+      ? joined
+      : budget > 0
+        ? `…${joined.slice(joined.length - (budget - 1))}`
+        : "";
+  return `${head}${body}${omitted}`;
 }
 
 function formatPartialOutputs(partials: readonly WorkbenchPartialOutput[]): string {
@@ -1057,6 +1277,11 @@ function jobFailureDiagnostic(job: WorkbenchJobSnapshot) {
 }
 
 function runWarningSummary(warning: WorkbenchRunWarning): string {
+  if (warning.warning === "budget" && warning.budget) {
+    const { kind, used, limit } = warning.budget;
+    const what = kind === "maxTurns" ? "turns" : "tokens";
+    return `Subagent ${warning.kind} ${warning.workId ?? warning.runId} is near its budget: ${used}/${limit} ${what} used. It was told to write partial artifacts and hand off progress. Collect what exists with subagent_results; do not assume unfinished parts passed.`;
+  }
   const idle =
     warning.idleMs === undefined
       ? ""
@@ -1112,6 +1337,25 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     if (!activeContext || !current || typeof pi.sendMessage !== "function") return;
     for (const warning of current.pendingRunWarnings()) {
       const soft = warning.warning === "soft-deadline";
+      if (warning.warning === "budget") {
+        // Budget notices are informational: the child keeps running and the
+        // notice already told it to hand off. Never interrupt the main turn.
+        try {
+          pi.sendMessage(
+            {
+              customType: "subagent-workbench-run-warning",
+              content: runWarningSummary(warning),
+              display: false,
+              details: { ...warning },
+            },
+            { triggerTurn: false, deliverAs: "nextTurn" },
+          );
+          current.markRunWarningDelivered(warning.id);
+        } catch {
+          // Delivery is best effort; the hard budget stop still reports itself.
+        }
+        continue;
+      }
       const partial = soft && warning.workId ? current.partialJobOutput(warning.workId, 1_200) : undefined;
       if (soft && warning.workId && !current.getJobs([warning.workId]).pending.length) {
         current.markRunWarningDelivered(warning.id);
@@ -1181,7 +1425,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               ...(job.workflowId ? { workflowId: job.workflowId } : {}),
             },
           },
-          !handledByGoal && job.status === "failed" && activeContext.isIdle()
+          !handledByGoal && activeContext.isIdle()
             ? { triggerTurn: true, deliverAs: "followUp" }
             : { triggerTurn: false, deliverAs: "nextTurn" },
         );
@@ -1199,6 +1443,24 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
     });
     return controller;
   };
+
+  /**
+   * Replays persisted heartbeats once per process, so a restarted Pi process
+   * still reports `lastActivityAt` for pending jobs instead of starting blind.
+   * Best effort: a missing/corrupt ledger just means no history to restore.
+   */
+  let activityRestored = false;
+  const restoreJobActivity = (): void => {
+    if (activityRestored) return;
+    activityRestored = true;
+    void readJobLedgerActivity()
+      .then((rows) => {
+        if (rows.size === 0) return;
+        jobActivityTracker().restoreFromLedger(rows.values());
+      })
+      .catch(() => undefined);
+  };
+  restoreJobActivity();
 
   let dashboardBridgeCleanup: (() => void) | undefined;
   let liveFeatureCleanup: (() => void) | undefined;
@@ -1296,6 +1558,7 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               retainSession: params.retainSession,
               thinking: params.thinking,
               context: params.context,
+              ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
               traceContext: parentTraceContext(ctx, toolCallId),
               signal: background ? undefined : signal,
               parentId: toolCallId,
@@ -1833,7 +2096,14 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
               .map((job) => current.partialJobOutput(job.workId, params.partialMaxChars))
               .filter((partial): partial is WorkbenchPartialOutput => Boolean(partial))
           : [];
-        const summary = formatJobQuery(query, params.includeOutput ?? mode !== "status");
+        // A stalled pending job carries its own short preview; skip the workIds
+        // the caller already renders in full through includePartial.
+        const summary = formatJobQuery(query, params.includeOutput ?? mode !== "status", {
+          partialOutput: (workId, target) =>
+            current.partialJobOutput(workId, STALLED_PARTIAL_CHARS, target),
+          skipPartialWorkIds: new Set(partials.map((partial) => partial.workId)),
+          workflowTasks: (workId) => current.workflowTaskActivity(workId),
+        });
         const partialNote = params.includePartial && !workIds?.length
           ? "\nPartial output requires explicit workIds."
           : "";
@@ -1911,6 +2181,52 @@ export default function subagentWorkbench(pi: ExtensionAPI): void {
             ? `Same run extended once. New hard deadline: ${new Date(result.deadlineAt).toISOString()}.`
             : `Deadline unchanged: ${result.reason}` }],
           details,
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: "subagent_rate",
+      label: "Rate Subagent Delivery",
+      description:
+        "Record one 1-5 quality score for a finished subagent job. This is a write-only performance record: it never changes routing, budgets, retries, or the model used next time. Score 5 = directly usable without rework, 3 = usable after corrections, 1 = unusable or wrong. Add a few short tags (for example proof-check, literature, numeric, refactor) so a periodic review can compare models per task type.",
+      promptSnippet: "Record a 1-5 quality score for a finished subagent delivery.",
+      executionMode: "sequential",
+      parameters: Type.Object({
+        workId: Type.String({ minLength: 1, maxLength: 128 }),
+        score: Type.Integer({ minimum: RATING_SCORE_MIN, maximum: RATING_SCORE_MAX }),
+        tags: Type.Optional(
+          Type.Array(Type.String({ maxLength: RATING_MAX_TAG_LENGTH }), { maxItems: RATING_MAX_TAGS }),
+        ),
+        note: Type.Optional(Type.String({ maxLength: RATING_MAX_NOTE_LENGTH })),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        activeContext = ctx;
+        let normalized;
+        try {
+          normalized = normalizeRating(params);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          return { content: [{ type: "text", text: `Rating not recorded: ${reason}` }], details: { ok: false, reason } };
+        }
+        const query = ensureController().collectJobs([normalized.workId]);
+        const job = [...query.completed, ...query.pending][0];
+        const record = {
+          v: 1 as const,
+          at: Date.now(),
+          ...normalized,
+          ...(job ? { kind: job.kind, status: job.status } : {}),
+        };
+        ratingLedger().record(record);
+        pi.appendEntry("subagent-rating", record);
+        return {
+          content: [{
+            type: "text",
+            text: job
+              ? `Recorded score ${record.score}/5 for ${record.workId} (${job.kind}, ${job.status}).`
+              : `Recorded score ${record.score}/5 for ${record.workId}; the job is no longer in memory, so only the workId and score were kept.`,
+          }],
+          details: { ok: true, record },
         };
       },
     });
@@ -2118,6 +2434,26 @@ export {
   type SubagentServiceEvent,
   type SubagentServiceOptions,
 } from "./subagent-service.ts";
+export {
+  FALLBACK_ROLE_BASE,
+  ROLE_BASES,
+  ROLE_TIERS,
+  clearRoleCache,
+  formatRoleValidationReport,
+  parseRoleProfile,
+  promptStateAt,
+  promptsDirPath,
+  roleProfile,
+  roleValidationReport,
+  rolesDirPath,
+  type PromptState,
+  type RoleBase,
+  type RoleProfile,
+  type RoleTier,
+  type RoleValidationEntry,
+  type RoleValidationIssue,
+  type RoleValidationReport,
+} from "./roles-registry.ts";
 export {
   PiRpcProcessProvider,
   PiRpcProviderError,

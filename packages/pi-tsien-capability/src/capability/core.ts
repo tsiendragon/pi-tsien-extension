@@ -26,6 +26,25 @@ export interface CapabilityLimits {
 	readonly maxOutputBytes?: number;
 }
 
+/**
+ * Explicit sandbox grants, declared in `CAPABILITY.yaml`.
+ *
+ * The sandbox stays closed by default: an undeclared capability keeps the
+ * original behaviour (read its own directory, write the job temp dir, no child
+ * processes). A capability that genuinely needs more says so here, so the extra
+ * reach is visible in the contract rather than implied by the implementation.
+ */
+export interface CapabilitySandbox {
+	/** Allow `child_process`. Needed to run a command or a test suite. */
+	readonly childProcess?: boolean;
+	/** Input fields whose value becomes a read+write root (absolute, or `~`-relative). */
+	readonly inputFsRoots?: readonly string[];
+	/** Static extra read roots. */
+	readonly read?: readonly string[];
+	/** Static extra write roots. */
+	readonly write?: readonly string[];
+}
+
 export interface CapabilityContract {
 	readonly name: string;
 	readonly version: string;
@@ -38,6 +57,7 @@ export interface CapabilityContract {
 	/** Other capabilities this one builds on. L2 may use L1; L1 must not use L2. */
 	readonly uses?: readonly { readonly capability: string; readonly step: string }[];
 	readonly limits?: CapabilityLimits;
+	readonly sandbox?: CapabilitySandbox;
 }
 
 export interface Capability extends CapabilityContract {
@@ -53,6 +73,29 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asStringList(value: unknown): string[] {
+	return (Array.isArray(value) ? value : []).filter(
+		(entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+	);
+}
+
+function normalizeSandbox(raw: unknown): CapabilitySandbox | undefined {
+	const source = asRecord(raw);
+	if (Object.keys(source).length === 0) return undefined;
+	const sandbox: CapabilitySandbox = {
+		childProcess: source.child_process === true,
+		inputFsRoots: asStringList(source.input_fs_roots),
+		read: asStringList(source.read),
+		write: asStringList(source.write),
+	};
+	const empty =
+		!sandbox.childProcess &&
+		(sandbox.inputFsRoots?.length ?? 0) === 0 &&
+		(sandbox.read?.length ?? 0) === 0 &&
+		(sandbox.write?.length ?? 0) === 0;
+	return empty ? undefined : sandbox;
 }
 
 function asString(value: unknown): string | undefined {
@@ -107,5 +150,6 @@ export function normalizeContract(raw: unknown): CapabilityContract | undefined 
 		steps,
 		uses: uses.length > 0 ? uses : undefined,
 		limits,
+		sandbox: normalizeSandbox(source.sandbox),
 	};
 }

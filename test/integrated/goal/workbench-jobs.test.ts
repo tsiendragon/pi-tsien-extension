@@ -54,7 +54,57 @@ afterEach(async () => {
 });
 
 describe("goal recovery after a turn yields", () => {
-	it("retries an unavailable evaluator once when there is no job to wait for", async () => {
+	it.each([
+		'{"decision":"stop","reason":"PTC_BUDGET_EXCEEDED 33/32 in this turn"}',
+		'{"decision":"uncertain","reason":"No scheduling recommendation"}',
+	])("continues ready work despite an unverified stop or uncertainty: %s", async (reply) => {
+		const h = (active = harness(reply));
+		await h.engage();
+		await h.endTurn("GOAL_HANDOFF\nNext: run the frozen checkpoint in a fresh round.");
+		await h.on("agent_settled");
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledWith("继续目标", { deliverAs: "followUp" }));
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-evaluation", expect.objectContaining({ fallback: "default-resume" }));
+	});
+
+	it("re-engages from a natural language instruction after another request", async () => {
+		const h = (active = harness('{"decision":"continue","reason":"The user explicitly wants to proceed","action":"resume existing goal"}'));
+		await h.on("session_start");
+		const prompt = "好的，就这样，帮我更新goal了。 然后继续推进。";
+		await h.on("input", { text: prompt, source: "interactive" });
+		const started = await h.on("before_agent_start", { prompt, systemPrompt: "base" });
+		expect(started.systemPrompt).toContain("GOAL_HANDOFF");
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-input-intent", expect.objectContaining({ decision: "continue", model: "provider/model" }));
+	});
+
+	it.each([false, true])("evaluates an exhausted milestone unless a real blocker exists (blocked=%s)", async (blocked) => {
+		vi.useFakeTimers();
+		const h = (active = harness('{"decision":"continue","reason":"The milestone is not satisfied.","action":"Add a distinct screening action to m2"}'));
+		const base = { goalId: h.goal.goalId, acceptanceCriteriaIds: [], updatedAt: 2 };
+		const state: GoalState = {
+			...h.goal,
+			workItems: [
+				{ ...base, id: "m1", title: "Set baseline", horizon: "mid", state: "done", dependsOn: [] },
+				{ ...base, id: "m2", title: "Find a candidate", horizon: "mid", state: "in_progress", dependsOn: ["m1"] },
+				{ ...base, id: "m3", title: "Validate candidate", horizon: "mid", state: "todo", dependsOn: ["m2"] },
+				{ ...base, id: "s1", title: "First screening", horizon: "short", parentId: "m2", state: "done", dependsOn: [] },
+				{ ...base, id: "s2", title: "Second screening", horizon: "short", parentId: "m2", state: "done", dependsOn: [] },
+			],
+			blockers: blocked ? [{
+				id: "approval", goalId: h.goal.goalId, title: "Approval", reason: "Needs owner approval",
+				kind: "user_decision", disposition: "needs_user", state: "open", workItemIds: ["m2"],
+				owner: "user", createdAt: 2, updatedAt: 2,
+			}] : [],
+		};
+		h.branch.push({ type: "custom", id: "graph", customType: "goal-state", data: { action: "graph", state } });
+		await h.engage();
+		await h.endTurn("GOAL_HANDOFF\nAll screening actions finished; m2 is not satisfied.");
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(20);
+		expect(h.stream).toHaveBeenCalledTimes(blocked ? 0 : 1);
+		expect(h.sendUserMessage).toHaveBeenCalledTimes(blocked ? 0 : 1);
+	});
+
+	it("queues 继续目标 immediately and does not repeat that fallback without progress", async () => {
 		vi.useFakeTimers();
 		const h = (active = harness("invalid response"));
 		await h.engage();
@@ -62,10 +112,15 @@ describe("goal recovery after a turn yields", () => {
 		await h.on("agent_settled");
 		await vi.advanceTimersByTimeAsync(10);
 		expect(h.stream).toHaveBeenCalledOnce();
-		expect(h.appendEntry).toHaveBeenCalledWith("goal-scheduler", expect.objectContaining({ state: "evaluator-backoff" }));
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ source: "evaluator-fallback", action: "queued" }));
+		expect(h.sendUserMessage).toHaveBeenCalledWith("继续目标", expect.anything());
+		await h.on("input", { source: "extension", text: "继续目标" });
+		await h.on("before_agent_start", { prompt: "继续目标", systemPrompt: "base" });
+		await h.endTurn();
+		await h.on("agent_settled");
 		await vi.advanceTimersByTimeAsync(3 * GOAL_EVALUATOR_RETRY_MS);
-		expect(h.stream).toHaveBeenCalledTimes(2);
-		expect(h.sendUserMessage).not.toHaveBeenCalled();
+		expect(h.stream).toHaveBeenCalledTimes(3);
+		expect(h.sendUserMessage).toHaveBeenCalledOnce();
 		expect(h.appendEntry).toHaveBeenCalledWith("goal-scheduler", expect.objectContaining({ state: "evaluator-unavailable-no-retry", reason: "retry-exhausted" }));
 	});
 
@@ -76,10 +131,15 @@ describe("goal recovery after a turn yields", () => {
 		await h.engage();
 		await h.endTurn();
 		await h.on("agent_settled");
-		await vi.advanceTimersByTimeAsync(GOAL_EVALUATOR_RETRY_MS + 10);
+		await vi.advanceTimersByTimeAsync(10);
+		await h.on("input", { source: "extension", text: "继续目标" });
+		await h.on("before_agent_start", { prompt: "继续目标", systemPrompt: "base" });
+		await h.endTurn();
+		await h.on("agent_settled");
+		await vi.advanceTimersByTimeAsync(10);
 		expect(h.stream).toHaveBeenCalledTimes(2);
 		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ action: "queued", source: "evaluator" }));
-		expect(h.sendUserMessage).toHaveBeenCalledOnce();
+		expect(h.sendUserMessage).toHaveBeenCalledTimes(2);
 	});
 	it("wakes on proof completion after Pi successfully retries a provider error", async () => {
 		const h = (active = harness());
@@ -186,9 +246,9 @@ describe("goal start drafting chain", () => {
 		await expect(h.on("input", { text: start, source: "extension" })).resolves.toBeUndefined();
 		const started = await h.on("before_agent_start", { prompt: start, systemPrompt: "base" });
 		expect(started.systemPrompt).toContain("GOAL_HANDOFF");
+		await h.endTurn();
 		await h.on("agent_settled");
-		await h.settle();
-		expect(h.sendUserMessage).toHaveBeenCalledOnce();
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledTimes(2));
 	});
 
 	it("drops a deferred start when the drafting run is aborted and leaves idle starts alone", async () => {
@@ -262,7 +322,7 @@ describe("goal workbench job lifecycle", () => {
 		h.job({ id: "w1", state: "finished" });
 		await h.on("agent_settled");
 		await h.settle();
-		expect(h.sendUserMessage).not.toHaveBeenCalled();
+		expect(h.sendUserMessage).toHaveBeenCalledTimes(source === "interactive" ? 1 : 0);
 	});
 	it.each([
 		"继续", "好的，接着做吧！", "继续目标。沿 Werner 当前 PPT 网格推进，先收取后台任务。",
@@ -308,7 +368,7 @@ describe("goal workbench job lifecycle", () => {
 		await h.on("agent_settled");
 		await h.settle();
 		expect(h.sendUserMessage).not.toHaveBeenCalled();
-		expect(h.stream).not.toHaveBeenCalled();
+		expect(h.appendEntry).not.toHaveBeenCalledWith("goal-evaluation", expect.anything());
 	});
 	it("collects a terminal job after settling even when approval gates further work", async () => {
 		const h = (active = harness(undefined, true));
@@ -444,8 +504,8 @@ describe("goal workbench job lifecycle", () => {
 		expect(next.message.content).toContain("w2 (Review branch; finished)");
 		await h.endTurn("GOAL_HANDOFF\nEvidence: collected w1 and w2");
 		await h.on("agent_settled");
-		await vi.waitFor(() => expect(h.stream).toHaveBeenCalledOnce());
-		expect(h.sendUserMessage).toHaveBeenCalledOnce();
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledTimes(2));
+		expect(h.appendEntry.mock.calls.filter(([kind, data]) => kind === "goal-continuation" && data.source === "workbench-job" && data.action === "queued")).toHaveLength(1);
 	});
 
 	it("drops pending jobs when the user takes over with interactive input", async () => {
@@ -454,6 +514,44 @@ describe("goal workbench job lifecycle", () => {
 		h.job({ id: "w1", state: "pending" });
 		await h.on("input", { text: "stop and explain", source: "interactive" });
 		h.job({ id: "w1", state: "finished" });
+		await h.settle();
+		expect(h.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("rechecks an open hard blocker once per blocker set instead of stalling on uncertainty", async () => {
+		const h = (active = harness('{"decision":"uncertain","reason":"Blocked on a user decision and no ready action remains"}'));
+		const base = { goalId: h.goal.goalId, acceptanceCriteriaIds: [], updatedAt: 2 };
+		const blocker = {
+			id: "mem-budget", goalId: h.goal.goalId, title: "Raise the sandbox memory budget", reason: "Needs the user to approve a larger budget",
+			kind: "user_decision", disposition: "needs_user", state: "open", workItemIds: ["s2"],
+			owner: "user", createdAt: 2, updatedAt: 2,
+		};
+		h.branch.push({ type: "custom", id: "graph", customType: "goal-state", data: { action: "graph", state: {
+			...h.goal,
+			workItems: [
+				{ ...base, id: "m1", title: "Set baseline", horizon: "mid", state: "done", dependsOn: [] },
+				{ ...base, id: "m2", title: "Prove the theorem", horizon: "mid", state: "in_progress", dependsOn: ["m1"] },
+				{ ...base, id: "s1", title: "Existing certificates", horizon: "short", parentId: "m2", state: "done", dependsOn: [] },
+				{ ...base, id: "s2", title: "Replay under a larger budget", horizon: "short", parentId: "m2", state: "in_progress", dependsOn: [] },
+				{ ...base, id: "m3", title: "Write the paper", horizon: "mid", state: "todo", dependsOn: ["m2"] },
+				{ ...base, id: "s3", title: "Draft the manuscript", horizon: "short", parentId: "m3", state: "todo", dependsOn: [] },
+			],
+			blockers: [blocker],
+		} } });
+		await h.engage();
+		await h.endTurn("GOAL_HANDOFF\nBlocked: the memory budget needs a user decision.");
+		await h.on("agent_settled");
+		await vi.waitFor(() => expect(h.sendUserMessage).toHaveBeenCalledOnce());
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-evaluation", expect.objectContaining({ decision: "uncertain", fallback: "blocker-recheck" }));
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-scheduler", expect.objectContaining({ state: "blocker-recheck" }));
+		expect(h.appendEntry).toHaveBeenCalledWith("goal-continuation", expect.objectContaining({ source: "blocker-recheck", action: "queued" }));
+		h.sendUserMessage.mockClear();
+		h.appendEntry.mockClear();
+		await h.on("input", { text: "继续目标", source: "extension" });
+		await h.on("before_agent_start", { prompt: "继续目标", systemPrompt: "base" });
+		await h.endTurn("GOAL_HANDOFF\nStill waiting on the same user decision.");
+		await h.on("agent_settled");
+		await vi.waitFor(() => expect(h.appendEntry).toHaveBeenCalledWith("goal-evaluation", expect.objectContaining({ decision: "uncertain", fallback: undefined })));
 		await h.settle();
 		expect(h.sendUserMessage).not.toHaveBeenCalled();
 	});

@@ -190,6 +190,8 @@ export default function capabilityExtension(pi: ExtensionAPI): void {
 				...(limits.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
 				...(limits.maxOutputBytes !== undefined ? { maxOutputBytes: limits.maxOutputBytes } : {}),
 				...(limits.maxLlmCalls !== undefined ? { maxLlmCalls: limits.maxLlmCalls } : {}),
+				...(capability.sandbox !== undefined ? { sandbox: capability.sandbox } : {}),
+				baseDir: process.cwd(),
 			});
 
 			await appendLedger({

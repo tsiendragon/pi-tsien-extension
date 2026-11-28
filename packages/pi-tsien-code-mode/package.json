@@ -34,5 +34,8 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "amaro": "^1.3.0"
   }
 }

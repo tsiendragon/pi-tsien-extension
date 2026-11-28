@@ -57,12 +57,29 @@ export interface AgentResult {
   readonly model?: string;
   readonly isError: boolean;
   readonly errorMessage?: string;
+  /** Machine-readable reason when an outputSchema check failed. */
+  readonly structuredOutputError?: "invalid_json" | "unsupported_schema" | "schema_mismatch";
   /** Tool executions started during the run (used to decide whether a restart is safe). */
   readonly toolCalls?: number;
   /** Assistant messages completed during the run. */
   readonly modelCalls?: number;
+  /**
+   * Set when a role budget stopped the run (turns or tokens). The output and
+   * artifacts are still collected; the main agent must decide what is missing.
+   */
+  readonly budgetStop?: {
+    readonly kind: "maxTurns" | "maxTokens";
+    readonly used: number;
+    readonly limit: number;
+  };
   /** Model routing attempts recorded by the Workbench. */
   readonly routing?: AgentRouting;
+  /**
+   * Explicit startup diagnostics for this Run (for example a role prompt that
+   * was missing, empty or unreadable and which prompt was used instead). The
+   * provider never falls back silently, so anything here must be shown.
+   */
+  readonly warnings?: readonly string[];
 }
 
 export interface AgentRoutingAttempt {
@@ -102,9 +119,14 @@ export type ProviderEvent =
   | { readonly type: "heartbeat"; readonly at?: number }
   | {
       readonly type: "run-warning";
-      readonly warning: "idle" | "wall" | "soft-deadline";
+      readonly warning: "idle" | "wall" | "soft-deadline" | "budget";
       readonly deadlineAt?: number;
       readonly maxExtensionMs?: number;
+      readonly budget?: {
+        readonly kind: "maxTurns" | "maxTokens";
+        readonly used: number;
+        readonly limit: number;
+      };
       readonly message: string;
       readonly elapsedMs: number;
       readonly idleMs?: number;
@@ -183,12 +205,16 @@ export interface ProviderRunRequest {
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
   readonly allowedTools?: readonly string[];
+  /** Custom role name; the provider injects that role's prompt file. */
+  readonly role?: string;
   /** Per-run hard wall time; overrides the provider default when set. */
   readonly hardWallTimeMs?: number;
   readonly hardWallMaxMs?: number;
   readonly workExtensionMaxMs?: number;
   /** Stop the run after this many assistant messages. */
   readonly maxModelCalls?: number;
+  /** Stop the run once cumulative input+output tokens reach this limit. */
+  readonly maxTokens?: number;
   readonly signal: AbortSignal;
   readonly emit: (event: ProviderEvent) => void;
 }
@@ -214,6 +240,8 @@ export interface StartAgentRequest {
   readonly model?: string;
   readonly thinking?: AgentThinkingLevel;
   readonly allowedTools?: readonly string[];
+  /** Custom role name; the process provider injects that role's prompt file. */
+  readonly role?: string;
   readonly parentId?: string;
   readonly workflowId?: string;
   readonly foreground?: boolean;
@@ -224,6 +252,8 @@ export interface StartAgentRequest {
   readonly hardWallMaxMs?: number;
   readonly workExtensionMaxMs?: number;
   readonly maxModelCalls?: number;
+  /** Stop the run once cumulative input+output tokens reach this limit. */
+  readonly maxTokens?: number;
 }
 
 export interface ChildSessionSnapshot {
@@ -666,10 +696,12 @@ export class SubagentService {
         model: request.model,
         thinking: request.thinking,
         allowedTools: request.allowedTools,
+        ...(request.role ? { role: request.role } : {}),
         ...(request.hardWallTimeMs === undefined ? {} : { hardWallTimeMs: request.hardWallTimeMs }),
         ...(request.hardWallMaxMs === undefined ? {} : { hardWallMaxMs: request.hardWallMaxMs }),
         ...(request.workExtensionMaxMs === undefined ? {} : { workExtensionMaxMs: request.workExtensionMaxMs }),
         ...(request.maxModelCalls === undefined ? {} : { maxModelCalls: request.maxModelCalls }),
+        ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
         signal: abort.signal,
         emit: (event) =>
           this.onProviderEvent(session, run, event, request.workflowId),
@@ -839,6 +871,17 @@ export class SubagentService {
         "Provider returned an invalid AgentResult.",
       );
     }
+    if (
+      result.warnings !== undefined &&
+      (!Array.isArray(result.warnings) ||
+        result.warnings.some((warning) => typeof warning !== "string"))
+    ) {
+      throw new ProviderOutputError(
+        "invalid_output",
+        "Provider returned invalid warnings in AgentResult.",
+      );
+    }
+    if (result.warnings) Object.freeze(result.warnings);
     const outputBytes = Buffer.byteLength(result.output, "utf8");
     if (outputBytes > this.limits.maxOutputBytes) {
       throw new ProviderOutputError(

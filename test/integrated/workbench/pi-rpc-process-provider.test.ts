@@ -163,7 +163,7 @@ describe("PiRpcProcessProvider", () => {
     }
   });
 
-  it("loads tools, extensions, skills, templates, and context by default", async () => {
+  it("loads tools, extensions, skills, and templates by default", async () => {
     const test = harness();
     try {
       const result = await test.service.start({
@@ -177,7 +177,10 @@ describe("PiRpcProcessProvider", () => {
       expect(args).not.toContain("--no-extensions");
       expect(args).not.toContain("--no-skills");
       expect(args).not.toContain("--no-prompt-templates");
-      expect(args).not.toContain("--no-context-files");
+      // Children get the role/generic subagent prompt instead of the main
+      // agent's context files, so --no-context-files is expected here.
+      expect(args).toContain("--no-context-files");
+      expect(args).toContain("--append-system-prompt");
       expect(args).toContain("--thinking");
       expect(args).toContain("high");
       await expect(
@@ -863,4 +866,49 @@ describe("PiRpcProcessProvider", () => {
     });
     test.runtime.dispose();
   });
+});
+
+describe("PiRpcProcessProvider activity keys", () => {
+  it("keys a workflow task run by its taskId, not by the parent job", async () => {
+    const { jobActivityTracker } = await import(
+      "pi-tsien-subagent-workbench/src/job-activity.ts"
+    );
+    const test = harness();
+    const activityKey = "workflow_test:task:1:1";
+    const parentWorkId = "work_parent";
+    const started = test.service.start({
+      task: "progress-for:3:300",
+      isolation: "process",
+      cwd: process.cwd(),
+      traceContext: {
+        parentSessionId: "session_parent",
+        parentToolCallId: "call_parent",
+        workflowId: "workflow_test",
+        workId: parentWorkId,
+        taskId: activityKey,
+        taskKey: "first",
+        stageIndex: 0,
+      },
+    } as never);
+    try {
+      // Observed while the run is still emitting progress.
+      await vi.waitFor(
+        () => {
+          expect(jobActivityTracker().get(activityKey)?.eventCount).toBeGreaterThan(0);
+        },
+        { timeout: 15_000, interval: 20 },
+      );
+      // The parent job key saw nothing: a busy sibling can no longer mask this
+      // task's own idle time.
+      expect(jobActivityTracker().get(parentWorkId)).toBeUndefined();
+
+      const result = await started;
+      expect(result.isError).toBe(false);
+      // A settled run leaves nothing behind, so a restart cannot resurrect it.
+      expect(jobActivityTracker().get(activityKey)).toBeUndefined();
+    } finally {
+      await started.catch(() => undefined);
+      await test.dispose();
+    }
+  }, 30_000);
 });

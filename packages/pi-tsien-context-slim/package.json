@@ -1,0 +1,8 @@
+{
+  "name": "pi-tsien-context-slim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "工具输出外包（hash 全文+小模型摘要）、历史思考剥离、主会话执行约束 hook"
+}

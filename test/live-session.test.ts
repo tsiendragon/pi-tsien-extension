@@ -28,6 +28,7 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
 function extensionHarness() {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => any>>();
   const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
   const sent: Array<{ content: unknown; options: unknown }> = [];
   const pendingSends: Array<() => void> = [];
   const busHandlers = new Map<string, Array<(data: unknown) => void>>();
@@ -38,7 +39,7 @@ function extensionHarness() {
       handlers.set(name, list);
     },
     registerCommand(name: string, command: unknown) { commands.set(name, command); },
-    registerTool() {},
+    registerTool(tool: any) { tools.set(tool.name, tool); },
     sendUserMessage(content: unknown, options: unknown) {
       sent.push({ content, options });
       return new Promise<void>(resolve => { pendingSends.push(resolve); });
@@ -61,7 +62,7 @@ function extensionHarness() {
       },
     },
   } as unknown as ExtensionAPI;
-  return { pi, handlers, commands, sent, pendingSends, busHandlers };
+  return { pi, handlers, commands, tools, sent, pendingSends, busHandlers };
 }
 
 function context(state: { idle: boolean; aborted: boolean; shutdown?: boolean; compacted?: boolean; reloaded?: boolean; notifications: string[]; scopedModels?: unknown }): ExtensionContext {
@@ -859,7 +860,7 @@ test("Live Session advertises the session_tree capability and re-snapshots on tr
   });
   await harness.handlers.get("session_start")?.[0]({}, ctx);
 
-  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "session_shutdown"]);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "sudo_approval", "input_queue", "session_shutdown"]);
 
   // Terminal `/tree` (or our own command) must push a fresh snapshot: the
   // snapshot only carries the ACTIVE branch, so an event alone would leave the
@@ -883,7 +884,7 @@ test("Live Session advertises session_clear only while /clear is really register
   });
   const ctx = context({ idle: true, aborted: false, notifications: [] });
   await harness.handlers.get("session_start")?.[0]({}, ctx);
-  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "session_shutdown", "session_clear"]);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "sudo_approval", "input_queue", "session_shutdown", "session_clear"]);
 
   // The dashboard's 「清空」rides the input channel as `/clear`, and `/clear` comes from
   // the session-aliases EXTENSION, not from pi. pi skips an extension whose file is
@@ -891,7 +892,7 @@ test("Live Session advertises session_clear only while /clear is really register
   // click that burns a turn and clears nothing. So the flag is checked, not assumed.
   (harness.pi as unknown as { getCommands: () => unknown[] }).getCommands = () => [];
   await harness.handlers.get("session_start")?.[0]({}, ctx);
-  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "session_shutdown"]);
+  assert.deepEqual(options!.getSnapshot().summary.capabilities, ["session_tree", "context_view", "sudo_approval", "input_queue", "session_shutdown"]);
   await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
 });
 
@@ -1261,4 +1262,137 @@ test("every snapshot re-announces the feature state it does not carry", async ()
   assert.ok(features.includes("btw"), `re-announced btw, got ${JSON.stringify(features)}`);
   const btw = published.find(message => message.event.type === "live_feature_snapshot" && (message.event.data as { feature?: string }).feature === "btw");
   assert.deepEqual((btw!.event.data as { snapshot?: unknown }).snapshot, { status: "ready", conversation: [] });
+});
+
+test("sudo tool cancels on bridge disconnect and rejects late credentials", async () => {
+  const harness = extensionHarness(), published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "sudo-process", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, stop() {}, sendSnapshot() {}, isReady: () => true, publish: e => published.push(e) }; },
+  });
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const tool = harness.tools.get("sudo_exec");
+  assert.ok(tool);
+  const pending = tool.execute("t", { executable: "/usr/bin/id", args: ["-u"], cwd: "/tmp", reason: "检查管理员身份，打印 UID。" }, undefined, undefined, ctx);
+  const rejected = assert.rejects(pending, /cancelled/);
+  for (let i = 0; i < 100 && !published.some(e => e.event.type === "extension_ui"); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  const request = published.find(e => e.event.type === "extension_ui")!.event.data as any;
+  assert.equal(request.method, "sudo");
+  assert.equal(request.message, "检查管理员身份，打印 UID。");
+  const generic = await options!.executeCommand(envelope({ type: "answer_ui", id: request.id, value: "unsafe" }, "ordinary"));
+  assert.ok(!generic.ok || (generic as any).result.accepted === false);
+  options!.onDisconnected!();
+  await rejected;
+  const late = await options!.executeCommand(envelope({ type: "answer_sudo", id: request.id, password: "test-only" }, "late"));
+  assert.equal((late as any).result.accepted, false);
+  assert.equal(JSON.stringify(published).includes("test-only"), false);
+  assert.ok(published.find(e => e.event.type === "extension_ui_closed"));
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("sudo tool rejects invalid fields and nonexistent targets before publishing UI", async () => {
+  const harness = extensionHarness(), published: EventMessage[] = [];
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "invalid-sudo", startedAt: 1 },
+    createClient: () => ({ start() {}, stop() {}, sendSnapshot() {}, isReady: () => true, publish: e => published.push(e) }),
+  });
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const tool = harness.tools.get("sudo_exec")!;
+  assert.ok(tool.parameters.required.includes("reason"));
+  assert.equal(tool.parameters.additionalProperties, false);
+  const valid = { executable: "/usr/bin/id", args: [], cwd: "/tmp", reason: "检查 UID，不修改文件。" };
+  for (const [params, field] of [
+    [{ ...valid, reason: undefined }, "reason"],
+    [{ ...valid, args: "-u" }, "args"],
+    [{ ...valid, executable: "/nonexistent/pi-sudo-validation-target" }, "executable"],
+  ] as const) {
+    await assert.rejects(tool.execute("invalid", params, undefined, undefined, ctx), new RegExp(`invalid_sudo_parameters:.*${field}`));
+  }
+  assert.equal(published.filter(e => e.event.type === "extension_ui").length, 0);
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("sudo filesystem preflight cannot outlive a disconnect even if the bridge reconnects", async () => {
+  const harness = extensionHarness(), published: EventMessage[] = [];
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "sudo-preflight-lifecycle", startedAt: 1 },
+    createClient: value => { options = value; return { start() {}, stop() {}, sendSnapshot() {}, isReady: () => true, publish: e => published.push(e) }; },
+  });
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+  const pending = harness.tools.get("sudo_exec")!.execute("preflight", {
+    executable: "/usr/bin/id", args: [], cwd: "/tmp", reason: "检查 UID，不修改文件。",
+  }, undefined, undefined, ctx);
+  const rejected = assert.rejects(pending, /cancelled during validation/);
+  options!.onDisconnected!();
+  options!.onConnected!();
+  await rejected;
+  assert.equal(published.filter(e => e.event.type === "extension_ui").length, 0);
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("queued prompts can be listed and withdrawn before dispatch", async () => {
+  const harness = extensionHarness();
+  const ctx = context({ idle: false, aborted: false, notifications: [] });
+  let options: LiveSessionClientOptions | undefined;
+  registerLiveSessionExtension(harness.pi, {
+    identity: { processInstanceId: "queue-session", startedAt: 1 },
+    createClient: value => {
+      options = value;
+      return { start() {}, stop() {}, sendSnapshot() {}, publish() {}, isReady: () => true };
+    },
+  });
+  await harness.handlers.get("session_start")?.[0]({}, ctx);
+
+  // One prompt is in flight, so the next two stay in the bridge's own queue.
+  const input = harness.handlers.get("input");
+  await input?.[0]({ source: "interactive", text: "first" }, ctx);
+  assert.equal((await options!.executeCommand(envelope({ type: "input", text: "second", channel: "web" }))).ok, true);
+  assert.equal((await options!.executeCommand(envelope({ type: "input", text: "third", channel: "mobile", deliverAs: "steer" }))).ok, true);
+
+  const listed = await options!.executeCommand(envelope({ type: "get_queue" }));
+  assert.equal(listed.ok, true);
+  const queue = (listed as { result: any }).result;
+  assert.equal(queue.items.length, 2);
+  assert.deepEqual(queue.items.map((item: any) => item.text), ["second", "third"]);
+  assert.equal(queue.items[1].deliverAs, "steer");
+  assert.equal(queue.active.text, "first");
+  // The snapshot never carries the ids of anything already handed to pi as cancellable.
+  const activeId = queue.active.id;
+  const secondId = queue.items[0].id;
+
+  const cancelled = await options!.executeCommand(envelope({ type: "cancel_queue_item", id: secondId }));
+  assert.deepEqual(cancelled, { ok: true, result: { cancelled: true, remaining: 1 } });
+
+  const after = await options!.executeCommand(envelope({ type: "get_queue" }));
+  assert.deepEqual((after as { result: any }).result.items.map((item: any) => item.text), ["third"]);
+
+  // A dispatched prompt is out of reach; an unknown id is reported instead of silently ignored.
+  const activeCancel = await options!.executeCommand(envelope({ type: "cancel_queue_item", id: activeId }));
+  assert.equal(activeCancel.ok, false);
+  assert.equal((activeCancel as { error: { code: string } }).error.code, "queue_item_active");
+  const missing = await options!.executeCommand(envelope({ type: "cancel_queue_item", id: "nope" }));
+  assert.equal((missing as { error: { code: string } }).error.code, "queue_item_not_found");
+
+  await harness.handlers.get("session_shutdown")?.[0]({ reason: "quit" }, ctx);
+});
+
+test("Live Session broker protocol parses the queue commands", () => {
+  assert.deepEqual(
+    parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "get_queue" } }),
+    { type: "command", requestId: "r", processInstanceId: "p", command: { type: "get_queue" } },
+  );
+  assert.deepEqual(
+    parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "cancel_queue_item", id: "q-1" } }),
+    { type: "command", requestId: "r", processInstanceId: "p", command: { type: "cancel_queue_item", id: "q-1" } },
+  );
+  // Fail closed: no id, extra fields or an over-long id are not queue commands.
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "cancel_queue_item" } }), undefined);
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "cancel_queue_item", id: "q", leaseId: "x" } }), undefined);
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "cancel_queue_item", id: "x".repeat(129) } }), undefined);
+  assert.equal(parseBrokerMessage({ type: "command", requestId: "r", processInstanceId: "p", command: { type: "get_queue", all: true } }), undefined);
 });

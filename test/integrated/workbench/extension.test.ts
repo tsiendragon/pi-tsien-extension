@@ -288,6 +288,140 @@ describe("Pi extension", () => {
     }
   });
 
+  it("wakes an idle main Agent when a background job completes", async () => {
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const completedJob = {
+      workId: "work-completed",
+      kind: "agent",
+      label: "Finishing worker",
+      status: "completed",
+      background: true,
+      createdAt: Date.now(),
+      result: { output: "the audit found three issues" },
+    } as any;
+    vi.spyOn(WorkbenchController.prototype, "pendingJobCompletions").mockReturnValue([
+      completedJob,
+    ]);
+    const markDelivered = vi
+      .spyOn(WorkbenchController.prototype, "markJobCompletionDelivered")
+      .mockReturnValue(true);
+    vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
+      completed: [completedJob],
+      pending: [],
+      missing: [],
+    } as any);
+    const sendMessage = vi.fn();
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+      sendMessage,
+    };
+    subagentWorkbench(pi as any);
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: false,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    const signal = new AbortController().signal;
+
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    await tools
+      .get("subagent_results")
+      .execute("first-query", { mode: "status" }, signal, undefined, ctx);
+    await tools
+      .get("subagent_results")
+      .execute("second-query", { mode: "status" }, signal, undefined, ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "subagent-workbench-completion",
+        content: expect.stringContaining("Result is ready"),
+      }),
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+    expect(markDelivered).toHaveBeenCalledWith("work-completed");
+
+    for (const handler of handlers.get("session_shutdown") ?? []) {
+      await handler();
+    }
+  });
+
+  it("queues a completed background job when the main Agent is busy", async () => {
+    const handlers = new Map<string, Array<(...args: any[]) => any>>();
+    const tools = new Map<string, any>();
+    const completedJob = {
+      workId: "work-completed-busy",
+      kind: "agent",
+      label: "Finishing worker",
+      status: "completed",
+      background: true,
+      createdAt: Date.now(),
+      result: { output: "the audit found three issues" },
+    } as any;
+    vi.spyOn(WorkbenchController.prototype, "pendingJobCompletions").mockReturnValue([
+      completedJob,
+    ]);
+    vi.spyOn(
+      WorkbenchController.prototype,
+      "markJobCompletionDelivered",
+    ).mockReturnValue(true);
+    vi.spyOn(WorkbenchController.prototype, "getJobs").mockReturnValue({
+      completed: [completedJob],
+      pending: [],
+      missing: [],
+    } as any);
+    const sendMessage = vi.fn();
+    const pi = {
+      on: vi.fn((event: string, handler: (...args: any[]) => any) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      }),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
+      sendMessage,
+    };
+    subagentWorkbench(pi as any);
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: false,
+      isIdle: () => false,
+      ui: { notify: vi.fn() },
+    };
+    const signal = new AbortController().signal;
+
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    await tools
+      .get("subagent_results")
+      .execute("first-query", { mode: "status" }, signal, undefined, ctx);
+    await tools
+      .get("subagent_results")
+      .execute("second-query", { mode: "status" }, signal, undefined, ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "subagent-workbench-completion",
+        content: expect.stringContaining("Result is ready"),
+      }),
+      { triggerTurn: false, deliverAs: "nextTurn" },
+    );
+
+    for (const handler of handlers.get("session_shutdown") ?? []) {
+      await handler();
+    }
+  });
+
   it("wakes an idle main Agent for a soft long-running warning", async () => {
     const handlers = new Map<string, Array<(...args: any[]) => any>>();
     const tools = new Map<string, any>();

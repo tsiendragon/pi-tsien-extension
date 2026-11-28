@@ -91,9 +91,13 @@ describe("parseRouterConfig", () => {
   });
 
   it("rejects duplicates and automatic escalation to heavy", () => {
+    // 同一档内重复仍然报错；跨档使用同一模型（不同 thinking/用途）现在是允许的
+    expect(() =>
+      parseRouterConfig({ ...baseConfig, tiers: { light: { candidates: [{ model: "a/x" }, { model: "a/x" }] } } }),
+    ).toThrow(/more than once in tier light/);
     expect(() =>
       parseRouterConfig({ ...baseConfig, tiers: { light: { candidates: [{ model: "a/x" }] }, medium: { candidates: [{ model: "a/x" }] } } }),
-    ).toThrow(/more than one place/);
+    ).not.toThrow();
     expect(() =>
       parseRouterConfig({ version: 1, tiers: { medium: { candidates: [], onExhausted: { action: "escalate", escalateTo: "heavy" } } } }),
     ).toThrow(/never reached automatically/);
@@ -159,6 +163,19 @@ describe("ModelRouter", () => {
     });
     router.reportFailure("g/one", "quota_exhausted", "insufficient_quota");
     expect((await router.acquire(router.plan({}), new Set())).model).toBe("h/three");
+  });
+
+  it("keeps micro as an opt-in bottom tier that never escalates into heavier work", async () => {
+    const { router } = clockRouter({
+      version: 1,
+      tiers: { micro: { candidates: [{ model: "m/tiny" }] }, light: { candidates: [{ model: "a/light-1" }] } },
+    });
+    expect((await router.acquire(router.plan({ tier: "micro" }), new Set())).model).toBe("m/tiny");
+    expect(router.snapshot().filter(row => row.tier === "micro")).toHaveLength(1);
+    expect(formatRouterSnapshot(router)).toContain("极轻（micro）");
+    router.reportFailure("m/tiny", "quota_exhausted", "insufficient_quota");
+    await expect(router.acquire(router.plan({ tier: "micro" }), new Set())).rejects.toBeInstanceOf(RouterExhaustedError);
+    expect(() => parseRouterConfig({ version: 1, tiers: { micro: { onExhausted: { action: "escalate", escalateTo: "ultra" } } } })).toThrow(/micro, light, or medium/);
   });
 
   it("waits then escalates light to medium, and fails heavy immediately", async () => {
