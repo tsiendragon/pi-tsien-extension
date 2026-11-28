@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
@@ -6,11 +9,13 @@ import type { AssistantMessage, Context as LlmContext, Message, Model } from "@e
 import { clampOpenAIPromptCacheKey } from "@earendil-works/pi-ai/api/openai-prompt-cache";
 import {
 	createHeartbeatExtension,
+	DEFAULT_MAX_IDLE_SEC,
 	DEFAULT_TTL_SEC,
 	HEARTBEAT_PROMPT,
 	HEARTBEAT_TTL_FRACTION,
 	isSubagentProcess,
 	lookupTtlSec,
+	MAX_IDLE_CEILING_SEC,
 	resolveHeartbeatReasoning,
 	resolveTtlSec,
 	resolveTiming,
@@ -574,8 +579,10 @@ test("a missed cache is visible in the log (hit=false when cacheRead is 0)", asy
 });
 
 test("a failing heartbeat is swallowed and logged, and the main session keeps working", async () => {
+	// 本例只测“失败→退避→恢复”，空闲上限会提前切断（60s 间隔的盈亏平衡只有 4min），
+	// 所以显式放宽上限，避免测到别的策略。
 	const h = await primedIdleHarness({
-		env: { ...ENABLED_ENV },
+		env: { ...ENABLED_ENV, PI_HEARTBEAT_MAX_IDLE: "3600" },
 		complete: async () => {
 			throw new Error("network blew up");
 		},
@@ -596,6 +603,18 @@ test("a failing heartbeat is swallowed and logged, and the main session keeps wo
 	h.advance(240_000 * 2);
 	await h.handle.tick();
 	assert.equal(h.logs.length, 2, "recovers after backoff");
+});
+
+test("stops heartbeating once idle passes the break-even cap", async () => {
+	const h = await primedIdleHarness({
+		env: { ...ENABLED_ENV, PI_HEARTBEAT_MAX_IDLE: "300" },
+	});
+	await h.handle.tick();
+	assert.equal(h.logs.length, 1, "still within the cap → sends");
+
+	h.advance(301_000);
+	await h.handle.tick();
+	assert.equal(h.logs.length, 1, "past the cap → stops sending");
 });
 
 test("an error stopReason is reported as an error, not as a success", async () => {
@@ -659,7 +678,7 @@ const KIMI_MODEL = { ...DEEPSEEK_MODEL, id: "kimi-k3.1-pro" } as unknown as Mode
 /** 查表 miss → 保守默认。anthropic 也不在表里，内容类用例靠它避开 probabilistic 抑制。 */
 const UNKNOWN_MODEL = { ...DEEPSEEK_MODEL, provider: "somewhere", id: "mystery-1" } as unknown as Model<any>;
 
-test("TTL table: deepseek fixed-ttl 45min / kimi long-retention >2h / sol probabilistic", () => {
+test("TTL table: deepseek 45min / kimi 60min / sol probabilistic", () => {
 	assert.equal(lookupTtlSec(DEEPSEEK_MODEL)?.ttlSec, TTL_DEEPSEEK_SEC);
 	assert.equal(TTL_DEEPSEEK_SEC, 2700, "实测 TTL≈45min（等待 30min 99.7% / 60min 96% / 120min 30.7%）");
 	assert.equal(lookupTtlSec(DEEPSEEK_MODEL)?.cacheKind, "fixed-ttl");
@@ -670,8 +689,8 @@ test("TTL table: deepseek fixed-ttl 45min / kimi long-retention >2h / sol probab
 
 	
 	assert.equal(lookupTtlSec(KIMI_MODEL)?.ttlSec, TTL_KIMI_SEC);
-	assert.equal(TTL_KIMI_SEC, 7200, "实测 TTL>2h（120min 等待后仍 91.8%），表里取下界估计");
-	assert.equal(lookupTtlSec(KIMI_MODEL)?.cacheKind, "long-retention", "长保留：基本无需心跳");
+	assert.equal(TTL_KIMI_SEC, 2700, "2026-11-28 复测：小前缀 90min 仍活、120min 失效，大前缀 40–80min 塌陷 → 保守 45min");
+	assert.equal(lookupTtlSec(KIMI_MODEL)?.cacheKind, "fixed-ttl", "会失效，属于固定 TTL，可心跳");
 
 	
 	assert.equal(lookupTtlSec(SOL_MODEL)?.ttlSec, TTL_SOL_SEC);
@@ -748,6 +767,62 @@ test("PI_HEARTBEAT_TTL overrides the table, and PI_HEARTBEAT_INTERVAL overrides 
 	assert.equal(both.refreshAfterMs, 120_000);
 	assert.equal(both.cadenceMs, 120_000);
 	assert.equal(both.ttlSec, 600, "TTL 仍被解析出来（写日志用），但不再决定闸门");
+});
+
+test("machine-local override file beats every built-in table entry", () => {
+	// 同一模型走不同通道行为可能不同（例如代理把 60min 压成 5min）。
+	// 这类部署细节放进机器本地文件，不进仓库表。
+	const dir = mkdtempSync(join(tmpdir(), "hb-ttl-"));
+	const file = join(dir, "heartbeat-ttl.json");
+	writeFileSync(file, JSON.stringify({
+		version: 1,
+		models: { "somewhere/mystery-1": { ttlSec: 120, cacheKind: "fixed-ttl", note: "local" } },
+	}));
+	const saved = process.env.PI_HEARTBEAT_TTL_FILE;
+	process.env.PI_HEARTBEAT_TTL_FILE = file;
+	try {
+		const hit = lookupTtlSec(UNKNOWN_MODEL);
+		assert.equal(hit?.ttlSec, 120, "本地覆盖生效");
+		assert.equal(hit?.source, "override");
+		assert.equal(hit?.cacheKind, "fixed-ttl");
+	} finally {
+		if (saved === undefined) delete process.env.PI_HEARTBEAT_TTL_FILE;
+		else process.env.PI_HEARTBEAT_TTL_FILE = saved;
+	}
+});
+
+test("max idle cap: per-model break-even from price, env override, ceiling", () => {
+	// deepseek fixture 刊例 0.07 / 0.014 = 5× → 盈亏平衡 = 4 × 闸门
+	const d = resolveTiming(DEEPSEEK_MODEL, {});
+	assert.equal(d.maxIdleSource, "price");
+	assert.equal(d.maxIdleMs, d.refreshAfterMs * 4, "ratio 5× → (5-1) × gate");
+
+	// 价格比越大，上限越宽 —— 这就是「每个模型不一样」的来源
+	const claude = { ...DEEPSEEK_MODEL, cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 } };
+	const c = resolveTiming(claude as Model<any>, {});
+	assert.equal(c.maxIdleSource, "price");
+	assert.equal(c.maxIdleMs, Math.min(c.refreshAfterMs * 19, MAX_IDLE_CEILING_SEC * 1000), "ratio 20× → 19 × gate（受天花板约束）");
+
+	// 极端比值（qwen4 类）不无限延长，被天花板拦住
+	const huge = { ...DEEPSEEK_MODEL, cost: { input: 1.5, output: 4.5, cacheRead: 0.007, cacheWrite: 1.875 } };
+	assert.equal(resolveTiming(huge as Model<any>, {}).maxIdleMs, MAX_IDLE_CEILING_SEC * 1000);
+
+	// env 显式覆盖优先，且同样受天花板约束
+	assert.equal(resolveTiming(DEEPSEEK_MODEL, { PI_HEARTBEAT_MAX_IDLE: "600" }).maxIdleMs, 600_000);
+	assert.equal(resolveTiming(DEEPSEEK_MODEL, { PI_HEARTBEAT_MAX_IDLE: "600" }).maxIdleSource, "env");
+	assert.equal(
+		resolveTiming(DEEPSEEK_MODEL, { PI_HEARTBEAT_MAX_IDLE: "99999", PI_HEARTBEAT_MAX_IDLE_CEILING: "300" }).maxIdleMs,
+		300_000,
+	);
+
+	// 没有价格元数据 → 保守默认 1h
+	const noCost = { provider: "x", id: "y", api: "openai-completions" } as unknown as Model<any>;
+	assert.equal(resolveTiming(noCost, {}).maxIdleSource, "default");
+	assert.equal(resolveTiming(noCost, {}).maxIdleMs, DEFAULT_MAX_IDLE_SEC * 1000);
+
+	// cacheRead = 0（没给缓存定价）→ 走默认，不能算出无穷大
+	const zeroCache = { ...DEEPSEEK_MODEL, cost: { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 } };
+	assert.equal(resolveTiming(zeroCache as Model<any>, {}).maxIdleSource, "default");
 });
 
 test("deepseek heartbeat actually fires at 0.8×TTL, not before", async () => {
@@ -910,29 +985,28 @@ test("fixed-ttl (deepseek) heartbeats normally at 0.8×TTL", async () => {
 	assert.equal(h.calls.length, 1, "at 0.8 × 45min");
 });
 
-test("long-retention (kimi) is not muted but its gate is ~96min, so short idleness never fires", async () => {
+test("kimi (45min TTL) heartbeats at 0.8×TTL = 36min", async () => {
 	const h = makeHarness({ env: { ...ADAPTIVE_ENV, PI_HEARTBEAT_VERBOSE: "1" }, model: KIMI_MODEL });
 	await h.prime();
 	const timing = h.handle.timing();
-	assert.equal(timing.cacheKind, "long-retention");
+	assert.equal(timing.cacheKind, "fixed-ttl", "2026-11-28 复测：大前缀 40–80min 会失效 → 固定 TTL，可心跳");
 	assert.equal(timing.suppressed, false);
 	assert.equal(timing.ttlSec, TTL_KIMI_SEC);
-	assert.equal(timing.refreshAfterMs, 5760_000, "0.8 × 7200s = 96min");
+	assert.equal(timing.refreshAfterMs, 2160_000, "0.8 × 2700s = 36min");
 
-	
-	h.advance(60 * 60_000);
+	// 30 分钟还没到闸门 → 不发，避免白花一次全价读取。
+	h.advance(30 * 60_000);
 	await h.handle.tick();
-	assert.equal(h.calls.length, 0, "1h 空闲 < 96min 闸门 → 不发（长保留本来就不需要）");
+	assert.equal(h.calls.length, 0, "30min < 36min 闸门 → 不发");
 
-	
+	// 越过闸门后照常发一次。
+	h.advance(10 * 60_000);
+	await h.handle.tick();
+	assert.equal(h.calls.length, 1, "超过闸门后发一次");
+
+	// 不是概率性缓存，不该被静音。
 	const skips = h.logs.map((l) => JSON.parse(l)).filter((r) => r.event === "skip");
-	assert.ok(skips.every((r) => r.reason !== "probabilistic-cache"), "long-retention 不能被打成 probabilistic");
-	assert.ok(skips.some((r) => r.reason === "recent-activity"));
-
-	
-	h.advance(37 * 60_000);
-	await h.handle.tick();
-	assert.equal(h.calls.length, 1, "超过闸门后照常发一次");
+	assert.ok(skips.every((r) => r.reason !== "probabilistic-cache"));
 });
 
 test("switching from sol to deepseek turns heartbeats back on", async () => {

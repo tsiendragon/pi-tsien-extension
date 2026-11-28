@@ -12,7 +12,7 @@ import type {
 	Usage,
 } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -75,6 +75,11 @@ import { dirname, join, resolve } from "node:path";
  *                                 自适应间隔随之变成 0.8 × 该值
  *   PI_HEARTBEAT_MIN_IDLE=120     安全下限：距上次真实活动至少多少秒才允许发
  *                                 （自适应模式下远小于 0.8×TTL，实际不起作用）
+ *   PI_HEARTBEAT_MAX_IDLE=3600    空闲上限（秒）：距上次真实活动超过这么久就停心跳。
+ *                                 不设时按模型刊例价自动算盈亏平衡点
+ *                                 （= 心跳间隔 × (输入价/缓存读价 − 1)），
+ *                                 上限受 PI_HEARTBEAT_MAX_IDLE_CEILING 约束。
+ *   PI_HEARTBEAT_MAX_IDLE_CEILING=14400  自动算出的上限的天花板（秒，默认 4h）
  *   PI_HEARTBEAT_MAX_TOKENS=16    心跳回复上限
  *   PI_HEARTBEAT_TIMEOUT_MS=120000
  *   PI_HEARTBEAT_DRY_RUN=1        只写日志不发请求（联调零成本）
@@ -108,6 +113,18 @@ export type CacheKind = "fixed-ttl" | "long-retention" | "probabilistic";
  */
 export const DEFAULT_TTL_SEC = 1800;
 
+/**
+ * 空闲上限：距上次真实活动超过这么久就**停止**心跳（毫秒）。
+ *
+ * 为什么需要：心跳省下的钱来自「下次回来用的时候缓存还热着」。
+ * 盈亏平衡点 = 心跳间隔 × (输入价/缓存读价 − 1)：超过这个时长即使续着命，
+ * 也已经比一次冷启动更贵。没有上限时，被弃置的会话会一直按节奏发请求。
+ * 所以上限直接取盈亏平衡点（按模型自身刊例价算），不手工维护表。
+ */
+export const DEFAULT_MAX_IDLE_SEC = 3600;
+/** 盈亏平衡算出来再大，也不让它超过这个上限（防止价格元数据异常时永不停）。 */
+export const MAX_IDLE_CEILING_SEC = 24 * 3600;
+
 /** 检查定时器周期的下限/上限（秒）。cadence 不花钱，只影响发送时刻的精度。 */
 export const MIN_CADENCE_SEC = 60;
 export const MAX_CADENCE_SEC = 300;
@@ -136,7 +153,15 @@ export const TTL_DEEPSEEK_SEC = 2700;
  * 表里取 7200s 作为"下界估计"（真实值只会更长）；0.8×TTL = 5760s ≈ 96min 才发一次，
  * 会话里几乎等不到，所以缓存类型标 `long-retention`：基本无需心跳。
  */
-export const TTL_KIMI_SEC = 7200;
+export const TTL_KIMI_SEC = 2700;
+
+/**
+ * Claude 系实测（任意提供方走 Anthropic 语义）：**滑动 5 分钟窗口**。
+ * 2026-11-28 探测：间隔 5min 仍命中，间隔 10min 失效；
+ * 同一前缀在 2/5/10min 连续命中也说明每次命中都会顺延窗口。
+ * 0.8 × 5min = 4min 即有效心跳间隔。
+ */
+export const TTL_CLAUDE_SEC = 300;
 
 /**
  * sol（openai-codex/gpt-6.2-sol）实测：**不是固定 TTL**，是概率性/不稳定缓存
@@ -168,8 +193,14 @@ export const MODEL_TTL_SEC: Record<string, TtlTableEntry> = {
 	},
 	"dashscope/kimi-k3.1-pro": {
 		ttlSec: TTL_KIMI_SEC,
-		cacheKind: "long-retention",
-		note: "实测：TTL>120min（等待 120min 后仍 91.8% 未掉）→ 长保留，一般无需心跳",
+		cacheKind: "fixed-ttl",
+		note: "2026-11-28 复测：小前缀静置 90min 仍命中、120min 失效；但真实会话（20–40 万前缀）" +
+			"在间隔 40–80min 命中率塌到 5%（大前缀单元易被驱逐）→ 按大前缀取 45min，0.8×≈36min 心跳",
+	},
+	"dashscope/qwen4-max": {
+		ttlSec: 2700,
+		cacheKind: "fixed-ttl",
+		note: "2026-11-28 实测：独立前缀 60min 仍命中、75min 失效，另一组 45min 即失效（抖动）→ 保守取 45min（该模型缓存读极便宜，密集心跳成本可忽略）",
 	},
 	"openai-codex/gpt-6.2-sol": {
 		ttlSec: TTL_SOL_SEC,
@@ -193,8 +224,8 @@ export const PROVIDER_TTL_SEC: Array<{ match: string } & TtlTableEntry> = [
 	{
 		match: "kimi",
 		ttlSec: TTL_KIMI_SEC,
-		cacheKind: "long-retention",
-		note: "按 kimi-k3.1-pro 实测：TTL>2h",
+		cacheKind: "fixed-ttl",
+		note: "按 kimi-k3.1-pro 2026-11-28 复测：小前缀可活 90min，大前缀 40–80min 即被驱逐 → 取 60min",
 	},
 	{
 		match: "openai-codex",
@@ -214,7 +245,9 @@ export const PROVIDER_TTL_SEC: Array<{ match: string } & TtlTableEntry> = [
 /** 模型 id 前缀命中（跨 provider 的模型系列，例如同一模型走代理）。 */
 export const MODEL_TTL_PREFIX_SEC: Array<{ prefix: string } & TtlTableEntry> = [
 	{ prefix: "deepseek", ttlSec: TTL_DEEPSEEK_SEC, cacheKind: "fixed-ttl" },
-	{ prefix: "kimi", ttlSec: TTL_KIMI_SEC, cacheKind: "long-retention" },
+	{ prefix: "kimi", ttlSec: TTL_KIMI_SEC, cacheKind: "fixed-ttl", note: "2026-11-28 复测：小前缀 90min 仍活，大前缀 40–80min 被驱逐 → 保守 45min" },
+	{ prefix: "claude", ttlSec: TTL_CLAUDE_SEC, cacheKind: "fixed-ttl", note: "Anthropic 语义：5min 滑动窗口" },
+	{ prefix: "qwen4", ttlSec: 2700, cacheKind: "fixed-ttl", note: "2026-11-28 实测：两组数据在 45–60min 间矛盾（抖动）→ 保守取 45min；该模型缓存读取极便宜，密集心跳成本可忽略" },
 	{
 		prefix: "gpt-6.2-sol",
 		ttlSec: TTL_SOL_SEC,
@@ -224,7 +257,7 @@ export const MODEL_TTL_PREFIX_SEC: Array<{ prefix: string } & TtlTableEntry> = [
 	{ prefix: "gpt-6.2", ttlSec: TTL_SOL_SEC, cacheKind: "probabilistic" },
 ];
 
-export type TtlSource = "env" | "table" | "provider" | "prefix" | "default";
+export type TtlSource = "env" | "override" | "table" | "provider" | "prefix" | "default";
 
 export interface TtlResolution {
 	ttlSec: number;
@@ -249,6 +282,41 @@ function readPositiveSec(env: EnvLike, name: string): number | undefined {
 }
 
 /** 查表（不含 env 覆盖）：精确 provider/model → provider 子串 → model id 前缀。 */
+/**
+ * 机器本地 TTL 覆盖表（**不进仓库**）。
+ *
+ * 同一模型走不同通道时缓存行为可能不同（例如某代理把 60 分钟寿命压成 5 分钟），
+ * 这类差异属于部署细节，不适合写进开源表里。所以允许在
+ * `PI_HEARTBEAT_TTL_FILE`（默认 `<agent dir>/heartbeat-ttl.json`）里按
+ * `"<provider>/<model>"` 覆盖，优先级最高：
+ *
+ * ```json
+ * { "version": 1, "models": { "<provider>/<model>": { "ttlSec": 300, "cacheKind": "fixed-ttl", "note": "..." } } }
+ * ```
+ */
+let overrideCache: { path: string; mtimeMs: number; models: Record<string, TtlTableEntry> } | undefined;
+
+function overrideTable(): Record<string, TtlTableEntry> {
+	const file = process.env.PI_HEARTBEAT_TTL_FILE?.trim() || join(homedir(), ".pi", "agent", "heartbeat-ttl.json");
+	try {
+		const stat = statSync(file);
+		if (overrideCache && overrideCache.path === file && overrideCache.mtimeMs === stat.mtimeMs) return overrideCache.models;
+		const parsed = JSON.parse(readFileSync(file, "utf8")) as { models?: Record<string, Partial<TtlTableEntry>> };
+		const models: Record<string, TtlTableEntry> = {};
+		for (const [key, value] of Object.entries(parsed.models ?? {})) {
+			if (!value || typeof value.ttlSec !== "number" || !(value.ttlSec > 0)) continue;
+			const kind: CacheKind =
+				value.cacheKind === "long-retention" || value.cacheKind === "probabilistic" ? value.cacheKind : "fixed-ttl";
+			models[key.toLowerCase()] = { ttlSec: value.ttlSec, cacheKind: kind, ...(value.note ? { note: value.note } : {}) };
+		}
+		overrideCache = { path: file, mtimeMs: stat.mtimeMs, models };
+		return models;
+	} catch {
+		overrideCache = undefined;
+		return {};
+	}
+}
+
 export function lookupTtlSec(
 	model: Model<any> | undefined,
 ): { ttlSec: number; cacheKind: CacheKind; source: TtlSource; matched: string; note?: string } | undefined {
@@ -258,6 +326,8 @@ export function lookupTtlSec(
 	if (!id && !provider) return undefined;
 
 	const key = `${provider}/${id}`;
+	const override = overrideTable()[key];
+	if (override) return { ...override, source: "override", matched: key };
 	const exact = MODEL_TTL_SEC[key];
 	if (exact) return { ttlSec: exact.ttlSec, cacheKind: exact.cacheKind, source: "table", matched: key, note: exact.note };
 
@@ -339,6 +409,10 @@ export interface HeartbeatTiming {
 	suppressedReason?: string;
 	/** 用户用哪个 env 强制开了心跳（probabilistic 模型才有意义）。 */
 	forcedBy?: string;
+	/** 空闲超过这么久就停止心跳（毫秒）；0 = 不设上限。 */
+	maxIdleMs: number;
+	/** 上限来源：env / price（按刊例价算盈亏平衡）/ default。 */
+	maxIdleSource: "env" | "price" | "default";
 }
 
 /**
@@ -353,6 +427,39 @@ export interface HeartbeatTiming {
  *   吃掉的那部分 TTL 余量仍有余。取 cadence = clamp(0.1×TTL, ≤300s, ≥60s)，
  *   于是最晚在 0.9×TTL 发出，仍留 10% 余量。cadence 只是本地计时，不发请求。
  */
+/**
+ * 盈亏平衡点（毫秒）：心跳间隔 × (输入价/缓存读价 − 1)。
+ *
+ * 推导：冷轮花一次输入价；心跳花「心跳间隔内每 T 一次读价」。
+ * 两种花法相等时 (1 + 空隔/T) × 读价 = 输入价 → 空隔 = T × (输入价/读价 − 1)。
+ * 超过这个空隔，续命已经比直接冷启动贵，所以用它做停止心跳的阀值。
+ */
+function priceBreakEvenMs(model: Model<any> | undefined, refreshAfterMs: number): number | undefined {
+	const cost = (model as { cost?: { input?: number; cacheRead?: number } } | undefined)?.cost;
+	const input = cost?.input;
+	const cacheRead = cost?.cacheRead;
+	if (typeof input !== "number" || typeof cacheRead !== "number") return undefined;
+	if (!(input > 0) || !(cacheRead > 0)) return undefined;
+	const ratio = input / cacheRead;
+	if (!(ratio > 1)) return undefined;
+	return refreshAfterMs * (ratio - 1);
+}
+
+/** 空闲上限：env 显式指定 > 按模型刊例价算盈亏平衡 > 保守默认；三者都受天花板约束。 */
+function resolveMaxIdle(
+	model: Model<any> | undefined,
+	env: EnvLike,
+	refreshAfterMs: number,
+): Pick<HeartbeatTiming, "maxIdleMs" | "maxIdleSource"> {
+	const ceilingSec = readPositiveSec(env, "PI_HEARTBEAT_MAX_IDLE_CEILING") ?? MAX_IDLE_CEILING_SEC;
+	const ceilingMs = ceilingSec * 1000;
+	const explicit = readPositiveSec(env, "PI_HEARTBEAT_MAX_IDLE");
+	if (explicit !== undefined) return { maxIdleMs: Math.min(explicit * 1000, ceilingMs), maxIdleSource: "env" };
+	const breakEven = priceBreakEvenMs(model, refreshAfterMs);
+	if (breakEven !== undefined) return { maxIdleMs: Math.min(breakEven, ceilingMs), maxIdleSource: "price" };
+	return { maxIdleMs: Math.min(DEFAULT_MAX_IDLE_SEC * 1000, ceilingMs), maxIdleSource: "default" };
+}
+
 export function resolveTiming(model: Model<any> | undefined, env: EnvLike): HeartbeatTiming {
 	const ttl = resolveTtlSec(model, env);
 	const policy = {
@@ -371,6 +478,7 @@ export function resolveTiming(model: Model<any> | undefined, env: EnvLike): Hear
 			ttlMatched: ttl.matched,
 			refreshAfterMs: ms,
 			cadenceMs: ms,
+			...resolveMaxIdle(model, env, ms),
 			...policy,
 		};
 	}
@@ -394,6 +502,7 @@ export function resolveTiming(model: Model<any> | undefined, env: EnvLike): Hear
 		ttlMatched: ttl.matched,
 		refreshAfterMs,
 		cadenceMs: cadenceSec * 1000,
+		...resolveMaxIdle(model, env, refreshAfterMs),
 		...policy,
 	};
 }
@@ -753,6 +862,11 @@ export function createHeartbeatExtension(options: HeartbeatExtensionOptions = {}
 			 */
 			if (timing.suppressed) return timing.suppressedReason ?? "probabilistic-cache";
 			const ts = now();
+			/**
+			 * 空闲上限：超过盈亏平衡点就停。此后续命已经比下次冷启动贵，
+			 * 继续发只是给“已经不会再回来用”的会话白烧钱。
+			 */
+			if (timing.maxIdleMs > 0 && ts - observed.lastActivityAt >= timing.maxIdleMs) return "max-idle";
 			if (ts - observed.lastActivityAt < refreshThresholdMs(timing)) return "recent-activity";
 			if (ts < nextAllowedAt) return "backoff";
 			return undefined;
