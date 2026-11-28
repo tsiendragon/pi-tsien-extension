@@ -1280,7 +1280,30 @@ export function registerLiveSessionExtension(
   pi.on("session_compact", (_event, ctx) => finishCompaction(ctx));
   pi.on("session_compact_failed", (_event, ctx) => finishCompaction(ctx));
   pi.on("turn_start", (event, ctx) => publish("turn_start", event, ctx));
-  pi.on("turn_end", (event, ctx) => publish("turn_end", event, ctx));
+  pi.on("turn_end", (event, ctx) => {
+    // Keep an explicit allowlist so future pi event fields cannot silently add large payloads.
+    // In particular, `context` duplicates the full context prefix on every turn; the dashboard
+    // reads its read-only context view on demand through get_context instead.
+    // The workspace's pinned pi types predate the newer boundary fields, so read
+    // those through a narrow compatibility type while keeping the same allowlist.
+    const boundaryEvent = event as typeof event & {
+      messageEntryId?: string;
+      toolResultEntryIds?: string[];
+      entries?: unknown[];
+      outcome?: unknown;
+      continue?: boolean;
+    };
+    publish("turn_end", {
+      turnIndex: event.turnIndex,
+      message: event.message,
+      toolResults: event.toolResults,
+      messageEntryId: boundaryEvent.messageEntryId,
+      toolResultEntryIds: boundaryEvent.toolResultEntryIds,
+      entries: boundaryEvent.entries,
+      outcome: boundaryEvent.outcome,
+      continue: boundaryEvent.continue,
+    }, ctx);
+  });
   pi.on("message_start", (event, ctx) => {
     if (isVisibleMessage(event.message)) publish("message_start", { message: event.message }, ctx);
   });
