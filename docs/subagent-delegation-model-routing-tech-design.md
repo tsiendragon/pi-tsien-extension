@@ -264,7 +264,7 @@ select(tier, task):
 **等待外部任务模式**（新增）：
 
 1. 主模型通过受控入口提交训练，拿到任务编号（正式提交仍由主模型负责）；然后派子任务负责监控和分析。子任务也可以接管已在运行的外部任务。
-2. 子模型调用新工具 `wait_external`，参数为状态检查器名称、外部任务编号和等待上限。状态检查器是预先登记的固定程序，例如 TaskGrid 状态查询，不接受任意命令。
+2. 子模型调用新工具 `wait_external`，参数为状态检查器名称、外部任务编号和等待上限。状态检查器是预先登记的固定程序，例如 集群平台 状态查询，不接受任意命令。
 3. 工作台把等待记录写到磁盘（`~/.pi/agent/subagent-workbench/waits/<id>.json`），结束当前这轮对话。子进程退出后不再占用内存，也不再花 token。长期任务子进程改用 `--session-dir` 将对话落盘，不再使用 `--no-session`。
 4. 由程序按间隔检查状态，全程不调用模型。外部任务结束、失败或等待超时后，重新打开落盘的对话（`pi --mode rpc --session <file>`），由模型路由器重新选择当前可用模型，并发送“外部任务已结束，状态和日志位置如下，请继续”，让子模型分析结果。
 5. 运行中的间隔检查只更新状态和指标摘要，在 Dashboard 和 `/subagent-models`（或子任务列表）中可见；只有异常或结束时才通知主模型。
@@ -344,7 +344,7 @@ Dashboard 子任务面板（第四期）：显示实际模型、切换记录、�
 | `/home/user/repos/pi-dashboard/backend/routes/subagent-models.ts`（新增）、`/home/user/repos/pi-dashboard/backend/routes/index.ts` | 配置读写接口、校验、冲突检测、备份与原子写入 |
 | `/home/user/repos/pi-dashboard/frontend/src/pages/SettingsPage.tsx` | 新标签页入口；页面组件放在 `/home/user/repos/pi-dashboard/frontend/src/features/subagent-models/`（新增） |
 | `/home/user/repos/pi-dashboard/guide/config.md`、`/home/user/repos/pi-dashboard/guide/extensions.md`、`/home/user/repos/pi-dashboard/guide/dashboard.md` | 新配置文件、环境变量和设置页说明（按 Dashboard 仓库规则，在同一次提交中更新） |
-| `example-ai-dev` 中 `delegate-work` 技能源文件 | 模型表改为“选档位”，删除“省略即继承”的错误说法；改源后走同步安装 |
+| `ai-dev-marketplace` 中 `delegate-work` 技能源文件 | 模型表改为“选档位”，删除“省略即继承”的错误说法；改源后走同步安装 |
 
 ## 12. 测试与验收
 

@@ -126,9 +126,9 @@ describe("PiRpcProcessProvider", () => {
     expect(
       defaultSubagentSessionDir({
         PI_CODING_AGENT_DIR: "/tmp/agent",
-        PI_SUBAGENT_SESSION_DIR: "/mnt/workspace/subs",
+        PI_SUBAGENT_SESSION_DIR: "/mnt/data/subs",
       }),
-    ).toBe("/mnt/workspace/subs");
+    ).toBe("/mnt/data/subs");
   });
 
   it("passes --session-dir so child tool calls stay readable", async () => {
