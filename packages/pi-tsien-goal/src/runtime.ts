@@ -536,6 +536,7 @@ export function registerGoalRuntime(pi: ExtensionAPI): void {
 		continuationState.queuedGoalId = undefined;
 		updateContinuationStatus(ctx, continuationState);
 		syncLedger(ledger, ctx);
+		ledger?.compact();
 		ledger?.close();
 		ledger = undefined;
 	});

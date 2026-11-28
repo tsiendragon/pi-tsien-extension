@@ -947,7 +947,33 @@ describe("goal tool execution", () => {
 			objective: "Complete me",
 			acceptanceCriteria: ["criterion"],
 			status: "complete",
+			completionNote: "all criteria passed",
 		});
+	});
+
+	it("update_goal_graph replaces a model-written attempt timestamp that is off by a year", () => {
+		const { pi, ctx, branch } = createHarness();
+		executeCreateGoal({ objective: "Timestamp guard", explicit_request: true }, ctx, pi);
+		const goalId = latestGoalEntry(branch).state?.goalId as string;
+
+		executeUpdateGoalGraph(
+			{
+				attempt: {
+					id: "attempt-1",
+					goalId,
+					blockerId: "blocker-1",
+					hypothesis: "h",
+					action: "recheck",
+					result: "still blocked",
+					createdAt: Date.parse("2025-11-13T18:50:00Z"),
+				},
+			},
+			ctx,
+			pi,
+		);
+
+		const attempt = latestGoalEntry(branch).state?.blockerAttempts?.at(-1);
+		expect(attempt?.createdAt).toBeGreaterThan(Date.now() - 60_000);
 	});
 
 	it("update_goal edits the objective and criteria in place with an audit reason", () => {

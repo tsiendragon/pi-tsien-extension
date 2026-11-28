@@ -764,6 +764,7 @@ export function executeCompleteGoal(
 			goalId: current.goalId,
 			now: Date.now(),
 			reason: evidence ? `Completed with evidence: ${evidence}` : "Completed by complete_goal.",
+			...(evidence ? { note: evidence } : {}),
 		},
 		current,
 	);
@@ -794,6 +795,17 @@ export function executePauseGoal(
 		content: [{ type: "text", text: `Goal paused. Reason: ${reason}` }],
 		details: { goal: next, reason },
 	};
+}
+
+/**
+ * Attempts are always "now". A model-written timestamp that is off by more than
+ * a day is a bug in the call (wrong unit, wrong year), so the server wins.
+ */
+const ATTEMPT_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
+
+export function normalizeAttemptTimestamp(value: number | undefined, now = Date.now()): number {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return now;
+	return Math.abs(value - now) > ATTEMPT_TIMESTAMP_SKEW_MS ? now : value;
 }
 
 export function executeUpdateGoalGraph(
@@ -836,7 +848,12 @@ export function executeUpdateGoalGraph(
 			now,
 			workItems,
 			blockers: params.blockers as GoalBlocker[] | undefined,
-			attempt: params.attempt as GoalBlockerAttempt | undefined,
+			attempt: params.attempt
+				? {
+						...(params.attempt as GoalBlockerAttempt),
+						createdAt: normalizeAttemptTimestamp(params.attempt.createdAt),
+					}
+				: undefined,
 			reason: "Updated by update_goal_graph.",
 		},
 		current,

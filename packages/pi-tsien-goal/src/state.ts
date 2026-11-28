@@ -116,7 +116,13 @@ export function reduceGoalState(current: GoalState | null, event: GoalStateEvent
 			return isCurrentGoal(current, event.goalId) ? null : current;
 		case "complete": {
 			if (!isCurrentGoal(current, event.goalId) || current.status !== "active") return current;
-			return { ...current, status: "complete", updatedAt: event.now, completedAt: event.now };
+			return {
+				...current,
+				status: "complete",
+				updatedAt: event.now,
+				completedAt: event.now,
+				...(event.note?.trim() ? { completionNote: event.note.trim() } : {}),
+			};
 		}
 		case "progress": {
 			if (!isCurrentGoal(current, event.goalId) || current.status !== "active") return current;

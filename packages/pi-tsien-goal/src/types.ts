@@ -118,6 +118,8 @@ export interface GoalState {
 	updatedAt: number;
 	completedAt?: number;
 	pausedReason?: string;
+	/** Evidence text recorded when the goal was completed; kept for audit. */
+	completionNote?: string;
 	owner: GoalOwner;
 }
 
@@ -173,6 +175,7 @@ export interface GoalCompleteEvent {
 	goalId: string;
 	now: number;
 	reason?: string;
+	note?: string;
 }
 export interface GoalProgressEvent {
 	action: "progress";

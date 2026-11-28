@@ -7,12 +7,27 @@ import type { GoalState } from "./types.ts";
 
 export const DEFAULT_GOAL_LEDGER_PATH = join(homedir(), ".pi", "agent", "pi-goal.sqlite");
 
+/**
+ * Resolved at call time so tests (and alternate agent homes) can point the
+ * ledger somewhere else with PI_GOAL_LEDGER_PATH.
+ */
+export function resolveGoalLedgerPath(): string {
+	const configured = process.env.PI_GOAL_LEDGER_PATH?.trim();
+	return configured ? configured : DEFAULT_GOAL_LEDGER_PATH;
+}
+
 export interface GoalLedger {
 	syncGoal(sessionId: string, branchKey: string, goal: GoalState): void;
+	compact(): void;
 	close(): void;
 }
 
-export function openGoalLedger(path = DEFAULT_GOAL_LEDGER_PATH): GoalLedger {
+/** Keep at most this many days between one-time database compactions. */
+const COMPACT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Only bother compacting when at least this many pages are free. */
+const COMPACT_MIN_FREE_PAGES = 500;
+
+export function openGoalLedger(path = resolveGoalLedgerPath()): GoalLedger {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const database = new DatabaseSync(path);
 	try {
@@ -29,6 +44,7 @@ export function openGoalLedger(path = DEFAULT_GOAL_LEDGER_PATH): GoalLedger {
 		CREATE TABLE IF NOT EXISTS blocker_attempts (goal_id TEXT NOT NULL, attempt_id TEXT NOT NULL, state_json TEXT NOT NULL, PRIMARY KEY (goal_id, attempt_id));
 		CREATE TABLE IF NOT EXISTS continuation_state (goal_id TEXT NOT NULL, branch_key TEXT NOT NULL, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (goal_id, branch_key));
 		CREATE TABLE IF NOT EXISTS blocker_reports (goal_id TEXT NOT NULL, revision INTEGER NOT NULL, checksum TEXT NOT NULL, markdown TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (goal_id, revision));
+		CREATE TABLE IF NOT EXISTS ledger_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 	`);
 	const replaceGoal = database.prepare("INSERT OR REPLACE INTO goal_runs VALUES (?, ?, ?, ?, ?)");
 	const replaceItem = database.prepare("INSERT OR REPLACE INTO work_items VALUES (?, ?, ?)");
@@ -42,6 +58,17 @@ export function openGoalLedger(path = DEFAULT_GOAL_LEDGER_PATH): GoalLedger {
 		"INSERT OR REPLACE INTO continuation_state VALUES (?, ?, ?, ?)",
 	);
 	const replaceReport = database.prepare("INSERT OR REPLACE INTO blocker_reports VALUES (?, ?, ?, ?, ?)");
+	// The transcript already keeps the full history, so the ledger only needs the
+	// newest snapshot per (session, goal). Without this every state write grew the
+	// table by one full copy of the goal.
+	const pruneGoalRuns = database.prepare(
+		"DELETE FROM goal_runs WHERE session_id = ? AND goal_id = ? AND branch_key <> ? AND updated_at <= ?",
+	);
+	const pruneContinuation = database.prepare(
+		"DELETE FROM continuation_state WHERE goal_id = ? AND branch_key <> ? AND updated_at <= ?",
+	);
+	const readMeta = database.prepare("SELECT value FROM ledger_meta WHERE key = ?");
+	const writeMeta = database.prepare("INSERT OR REPLACE INTO ledger_meta VALUES (?, ?)");
 	return {
 		syncGoal(sessionId, branchKey, goal) {
 			const stateJson = JSON.stringify(goal);
@@ -66,10 +93,29 @@ export function openGoalLedger(path = DEFAULT_GOAL_LEDGER_PATH): GoalLedger {
 					replaceAttempt.run(goal.goalId, attempt.id, JSON.stringify(attempt));
 				for (const report of goal.reports ?? [])
 					replaceReport.run(goal.goalId, report.revision, report.checksum, report.markdown, report.createdAt);
+				pruneGoalRuns.run(sessionId, goal.goalId, branchKey, goal.updatedAt);
+				pruneContinuation.run(goal.goalId, branchKey, goal.updatedAt);
 				database.exec("COMMIT");
 			} catch (error) {
 				database.exec("ROLLBACK");
 				throw error;
+			}
+		},
+		compact() {
+			try {
+				const lastVacuum = Number(readMeta.get("last_vacuum_at")?.value ?? 0);
+				if (Number.isFinite(lastVacuum) && lastVacuum > 0 && Date.now() - lastVacuum < COMPACT_INTERVAL_MS) return;
+				const stats = database
+					.prepare(
+						"SELECT (SELECT * FROM pragma_freelist_count()) AS freelist, (SELECT * FROM pragma_page_count()) AS total",
+					)
+					.get() as { freelist?: number; total?: number } | undefined;
+				const freelist = Number(stats?.freelist ?? 0);
+				if (!Number.isFinite(freelist) || freelist < COMPACT_MIN_FREE_PAGES) return;
+				database.exec("VACUUM");
+				writeMeta.run("last_vacuum_at", String(Date.now()));
+			} catch {
+				/* Compaction is best effort; a busy database keeps its pages and retries later. */
 			}
 		},
 		close() {
