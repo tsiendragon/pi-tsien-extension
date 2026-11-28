@@ -4,20 +4,34 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_SYSTEM_PROMPT_FILE = join(homedir(), ".pi", "agent", "DefaultSystemPrompt.md");
+/** Legacy (Pi < 1.6) marker; kept for backward compatibility. */
 export const TOOLS_SECTION_MARKER = "\n\nAvailable tools:\n";
+/** Candidate tools-section markers, highest priority first: Pi >= 1.6 XML `<tools>`, then legacy. */
+export const TOOLS_SECTION_MARKERS = ["\n\n<tools>\n", TOOLS_SECTION_MARKER] as const;
+
+function findFirstMarker(text: string, markers: readonly string[]): { index: number; marker: string } | undefined {
+  for (const marker of markers) {
+    const index = text.indexOf(marker);
+    if (index !== -1) return { index, marker };
+  }
+  return undefined;
+}
 
 export async function readDefaultSystemPrompt(): Promise<string> {
   return readFile(DEFAULT_SYSTEM_PROMPT_FILE, "utf8");
 }
 
 export function replaceSystemPromptIntro(systemPrompt: string, customIntro: string): string | undefined {
-  const markerIndex = systemPrompt.indexOf(TOOLS_SECTION_MARKER);
-  if (markerIndex === -1) return undefined;
+  const found = findFirstMarker(systemPrompt, TOOLS_SECTION_MARKERS);
+  if (!found) return undefined;
 
-  return `${customIntro.trimEnd()}${systemPrompt.slice(markerIndex)}`;
+  return `${customIntro.trimEnd()}${systemPrompt.slice(found.index)}`;
 }
 
+/** Legacy (Pi < 1.6) marker; kept for backward compatibility. */
 export const GUIDELINES_MARKER = "\nGuidelines:\n";
+/** Candidate rules-section markers, highest priority first: Pi >= 1.6 XML `<rules>`, then legacy. */
+export const GUIDELINES_SECTION_MARKERS = ["\n\n<rules>\n", GUIDELINES_MARKER] as const;
 
 export const ACTION_GUIDELINES = [
   "- State a concrete plan to the user before implementing, then execute to completion.",
@@ -30,9 +44,9 @@ export function adjustGuidelinesSection(systemPrompt: string): string {
   let out = systemPrompt;
   out = out.replace(/- Be concise in your responses\n?/g, "");
   out = out.replace(/- Show file paths clearly when working with files\n?/g, "");
-  const markerIndex = out.indexOf(GUIDELINES_MARKER);
-  if (markerIndex === -1) return out;
-  const insertAt = markerIndex + GUIDELINES_MARKER.length;
+  const found = findFirstMarker(out, GUIDELINES_SECTION_MARKERS);
+  if (!found) return out;
+  const insertAt = found.index + found.marker.length;
   return out.slice(0, insertAt) + ACTION_GUIDELINES.join("\n") + "\n" + out.slice(insertAt);
 }
 
@@ -57,9 +71,14 @@ export default function defaultSystemPromptExtension(pi: ExtensionAPI): void {
 
     const introReplaced = replaceSystemPromptIntro(event.systemPrompt, customIntro);
     if (introReplaced === undefined) {
+      // Newer Pi reads DefaultSystemPrompt.md itself: prompt already starts with the custom intro.
+      const head = customIntro.trim().slice(0, 60);
+      if (event.systemPrompt.trimStart().startsWith(head)) {
+        return { systemPrompt: adjustGuidelinesSection(event.systemPrompt) };
+      }
       if (!notifiedMissingToolsSection && ctx.hasUI) {
         notifiedMissingToolsSection = true;
-        ctx.ui.notify("未找到 Available tools 段，保留 Pi 原系统提示。", "warning");
+        ctx.ui.notify("未找到 <tools>/Available tools 段，保留 Pi 原系统提示。", "warning");
       }
       return;
     }
